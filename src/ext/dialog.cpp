@@ -18,6 +18,8 @@
 
 #include "dialog.h"
 #include "theme.h"
+#include "logo.h"
+#include "logo.h"
 #include "../core/util.h"
 
 #ifndef _WIN32
@@ -157,7 +159,7 @@ struct State {
   bool merge = true;
   bool accepted = false;
   HFONT fTheme = nullptr, fCheck = nullptr, fClip = nullptr, fTitle = nullptr, fTitleThin = nullptr, fTag = nullptr,
-        fBody = nullptr, fBold = nullptr, fSmall = nullptr, fSec = nullptr;
+        fBody = nullptr, fBold = nullptr, fSmall = nullptr, fSec = nullptr, fLogo = nullptr;
 };
 
 HFONT makeFont(double px, bool bold, double scale) {
@@ -184,6 +186,7 @@ void makeFonts(State *st) {
   st->fBold = makeFont(13, true, s);
   st->fSmall = makeFont(11.5, false, s);
   st->fSec = makeFont(10.5, true, s);
+  st->fLogo = makeFont(11, false, s);
 }
 
 struct Gfx {
@@ -700,7 +703,8 @@ void paint(State *st, HDC dc) {
   g.text(st->fSmall, kMute, st->tip ? st->tip : "Pick the tracks and events to import, check the options, then Import.",
          16, ch - 46, cw - 16, ch - 28, DT_LEFT);
   g.fill(16, ch - 26, cw - 16, ch - 25, kLine);
-  g.text(st->fTag, kMute, "V 0.4 beta developed with AI assistance by dmajorsound", 16, ch - 22, cw - 16, ch - 6, DT_LEFT);
+  g.text(st->fTag, kMute, "V 0.4 beta developed with AI assistance by dmajorsound", 16, ch - 22, cw - 200, ch - 6, DT_LEFT);
+  drawDmajorLogo(dc, g.S(cw - 16), g.S(ch - 14), g.S(15), kInk, st->fLogo);
 }
 
 // ------------------------------------------------------------------ input
@@ -1051,7 +1055,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return 0;
   case WM_DESTROY:
     if (st) {
-      HFONT fs[] = {st->fTheme, st->fCheck, st->fClip, st->fTitle, st->fTitleThin, st->fTag, st->fBody, st->fBold, st->fSmall, st->fSec};
+      HFONT fs[] = {st->fTheme, st->fCheck, st->fClip, st->fTitle, st->fTitleThin, st->fTag, st->fBody, st->fBold, st->fSmall, st->fSec, st->fLogo};
       for (HFONT f : fs)
         if (f) DeleteObject(f);
     }

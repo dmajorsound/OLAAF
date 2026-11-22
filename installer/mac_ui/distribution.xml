@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>olAAF – AAF Import for Reaper</title>
+    <organization>com.dmajorsound</organization>
+    <background file="background.tiff" alignment="bottomleft" scaling="none"/>
+    <background-darkAqua file="background-darkAqua.tiff" alignment="bottomleft" scaling="none"/>
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <license file="LICENSE.txt"/>
+    <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <domains enable_currentUserHome="true" enable_localSystem="true"/>
+    <choices-outline>
+        <line choice="default"/>
+    </choices-outline>
+    <choice id="default" title="olAAF">
+        <pkg-ref id="com.dmajorsound.olaaf"/>
+    </choice>
+    <pkg-ref id="com.dmajorsound.olaaf" version="0.4.0" onConclusion="none">olaaf-component.pkg</pkg-ref>
+</installer-gui-script>

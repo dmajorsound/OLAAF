@@ -15,6 +15,8 @@
 
 #include "progress.h"
 #include "theme.h"
+#include "logo.h"
+#include "logo.h"
 
 #ifndef _WIN32
 #include "../../third_party/reaper-sdk/WDL/swell/swell-dlggen.h"
@@ -74,7 +76,7 @@ struct Ui {
   std::chrono::steady_clock::time_point t0;
   RECT cancelRc{};
   double scale = 1.0;
-  HFONT fTitle = nullptr, fTag = nullptr, fLine = nullptr, fSmall = nullptr, fBtn = nullptr;
+  HFONT fTitle = nullptr, fTag = nullptr, fLine = nullptr, fSmall = nullptr, fBtn = nullptr, fLogo = nullptr;
 };
 
 // fun lines, picked by what the worker is doing right now
@@ -211,7 +213,8 @@ void paint(HWND hwnd, HDC dc, Ui *ui) {
 
   // footer
   fill(dc, pl, S(302), pr, S(303), kLine);
-  text(dc, ui->fTag, kMute, "V 0.4 beta developed with AI assistance by dmajorsound", pl, S(306), pr, S(324), DT_LEFT);
+  text(dc, ui->fTag, kMute, "V 0.4 beta developed with AI assistance by dmajorsound", pl, S(306), pr - S(150), S(324), DT_LEFT);
+  drawDmajorLogo(dc, pr, S(315), S(13), kInk, ui->fLogo);
 }
 
 INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -240,6 +243,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     SetWindowText(hwnd, "olAAF");
     ui->fTitle = makeFont(16, true, ui->scale);
     ui->fTag = makeFont(10, false, ui->scale);
+    ui->fLogo = makeFont(10, false, ui->scale);
     ui->fLine = makeFont(13, true, ui->scale);
     ui->fSmall = makeFont(11.5, false, ui->scale);
     ui->fBtn = makeFont(12.5, false, ui->scale);
@@ -296,7 +300,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return 0;
   case WM_DESTROY:
     if (ui) {
-      DeleteObject(ui->fTitle); DeleteObject(ui->fTag); DeleteObject(ui->fLine);
+      DeleteObject(ui->fTitle); DeleteObject(ui->fTag); DeleteObject(ui->fLogo); DeleteObject(ui->fLine);
       DeleteObject(ui->fSmall); DeleteObject(ui->fBtn);
     }
     return 0;
