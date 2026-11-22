@@ -1,5 +1,6 @@
 // Renders the olAAF import dialog to SVG without REAPER (layout check).
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -32,7 +33,7 @@ static void mLine(HDC, int x, int y) { char t[256]; snprintf(t, 256, "<line x1='
 static void mTextColor(HDC, int c) { curText = c; }
 static void mBk(HDC, int) {}
 static int mDraw(HDC, const char *buf, int, RECT *r, int align) {
-  if (align & DT_CALCRECT) { r->right = r->left + (int)(strlen(buf) * curFont.h * 0.6); r->bottom = r->top + curFont.h; return curFont.h; }
+  if (align & DT_CALCRECT) { r->right = r->left + (int)(strlen(buf) * curFont.h * 0.53); r->bottom = r->top + curFont.h; return curFont.h; }
   char t[1024]; const char *anchor = (align & DT_CENTER) ? "middle" : (align & DT_RIGHT) ? "end" : "start";
   int x = (align & DT_CENTER) ? (r->left + r->right) / 2 : (align & DT_RIGHT) ? r->right : r->left;
   clipN++;
@@ -52,6 +53,10 @@ int main(int argc, char **argv) {
   if (!imp.load(argv[1], opt, &err)) { printf("%s\n", err.c_str()); return 1; }
   opt.destDir = "/Users/dmajor/Documents/REAPER Media";
   imp.locateMedia(opt); imp.setMergeStereo(true);
+  if (getenv("OLAAF_SHOWCASE")) { // pictures for posts: media found, a tidy file name
+    for (auto &m : imp.session().media) m.foundPath = argv[1];
+    imp.session().aafPath = std::string("/Projects/") + getenv("OLAAF_SHOWCASE");
+  }
   if (imp.session().tracks.size() > 2) imp.session().tracks[2].color = 0xD9822B;
   if (imp.session().tracks.size() > 4) imp.session().tracks[4].import = false;
   int pal = argc > 3 ? atoi(argv[3]) : -1;
