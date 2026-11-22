@@ -838,7 +838,7 @@ void paintMediaBar(State *st, const Gfx &g) {
     g.text(st->fBody, kRed, txt, x, t, x + w, b, DT_LEFT);
     x += w + 4;
     button(st, g, x, mid - 15, x + 78, mid + 15, "Locate\xe2\x80\xa6", H_LOCATE, 0,
-           "Choose the folder that holds the media; subfolders are searched too. Missing files import as offline items.");
+           "Choose the folder that holds the media. All its subfolders are searched, and olAAF remembers it for the next import.");
     x += 86;
   }
   // copy / leave
@@ -1309,7 +1309,7 @@ void click(State *st, int x, int y, bool shift) {
   case H_LOCATE: {
     std::string p;
     if (pickFolder(st->hwnd, "olAAF: choose the folder that holds the media", dirName(s.aafPath), &p)) {
-      opt.searchFolders.push_back(p);
+      opt.searchFolders.insert(opt.searchFolders.begin(), p); // searched first, remembered for next time
       st->imp->locateMedia(opt);
     }
     break;

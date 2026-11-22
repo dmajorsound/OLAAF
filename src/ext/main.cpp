@@ -6,6 +6,7 @@
 //  * Action "olAAF: Import AAF into current project..." -> adds the AAF tracks to the open project
 
 // C++ headers first: SWELL (mac/linux) and windows.h define min/max macros
+#include <algorithm>
 #include "../core/importer.h"
 #include "../core/util.h"
 #include "progress.h"
@@ -95,6 +96,31 @@ static bool getFlag(const char *key, bool def) {
 }
 static void setFlag(const char *key, bool v) { SetExtState("olAAF", key, v ? "1" : "0", true); }
 
+// media folders the user located before (newest first); searched again on the next import
+static std::vector<std::string> loadMediaFolders() {
+  std::vector<std::string> out;
+  const char *v = GetExtState("olAAF", "mediaFolders");
+  std::string cur;
+  for (const char *p = v ? v : ""; ; p++) {
+    if (*p == '\n' || !*p) {
+      if (!cur.empty()) out.push_back(cur);
+      cur.clear();
+      if (!*p) break;
+    } else
+      cur += *p;
+  }
+  return out;
+}
+
+static void saveMediaFolders(const std::vector<std::string> &folders) {
+  std::vector<std::string> keep;
+  for (auto &f : folders)
+    if (keep.size() < 6 && std::find(keep.begin(), keep.end(), f) == keep.end()) keep.push_back(f);
+  std::string v;
+  for (auto &f : keep) v += (v.empty() ? "" : "\n") + f;
+  SetExtState("olAAF", "mediaFolders", v.c_str(), true);
+}
+
 static void loadSettings(ImportOptions &o) {
   o.copyToSubdir = getFlag("copy", true);
   o.mergeStereo = getFlag("merge", true);
@@ -155,6 +181,11 @@ static DialogHost makeHost() {
 static bool runImport(const std::string &aaf, ImportOptions &opt, Importer &imp, MediaReport &rep, int &merged,
                       std::string &err) {
   bool cancelled = false;
+  {
+    // newest first: the first folder that has a file wins
+    auto remembered = loadMediaFolders();
+    opt.searchFolders.insert(opt.searchFolders.end(), remembered.begin(), remembered.end());
+  }
   bool ok = runWithProgress(GetMainHwnd(), [&](const Progress &progress) {
     progress(0.0, "Reading " + baseName(aaf));
     if (!imp.load(aaf, opt, &err)) return false;
@@ -173,6 +204,7 @@ static bool runImport(const std::string &aaf, ImportOptions &opt, Importer &imp,
   imp.setMergeStereo(opt.mergeStereo);
   bool accepted = showImportDialog(GetMainHwnd(), imp, opt, makeHost());
   saveSettings(opt, defaultDest);
+  saveMediaFolders(opt.searchFolders); // Locate puts its folder first
   if (!accepted) {
     err.clear(); // closed without importing
     return false;

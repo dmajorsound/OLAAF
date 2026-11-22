@@ -1,6 +1,7 @@
 // olAAF - AAF import for REAPER
 // Copyright (C) 2026 dmajorsound. Licensed under the GNU GPL v2 or later.
 
+#include <cstdlib>
 #include "importer.h"
 #include "audiofile.h"
 #include "util.h"
@@ -113,9 +114,24 @@ bool Importer::load(const std::string &aafPath, const ImportOptions &opt, std::s
 
 void Importer::locateMedia(const ImportOptions &opt) {
   std::vector<std::pair<std::string, std::string>> index;
-  std::vector<std::string> folders = opt.searchFolders;
-  folders.push_back(dirName(s_.aafPath));
-  for (auto &f : folders) indexFolder(f, 4, &index);
+  // where to look, in this order (the first match of a name wins):
+  // the folders the user pointed to, the AAF's folder, then the folder around it (an AAF often sits
+  // in its own subfolder next to "Audio Files" or "Media"), each with all their subfolders
+  for (auto &f : opt.searchFolders) indexFolder(f, 12, &index);
+  std::string aafDir = dirName(s_.aafPath);
+  indexFolder(aafDir, 8, &index);
+  std::string parent = dirName(aafDir);
+  auto broad = [](const std::string &d) { // too wide to walk: a disk, /Users, a home folder
+    if (d.empty() || d == "/" || d == "/Volumes" || d == "/Users" || d == "/home") return true;
+    if (d.size() <= 3 && d.size() >= 2 && d[1] == ':') return true; // C:\ ...
+    const char *home = getenv("HOME");
+    if (!home) home = getenv("USERPROFILE");
+    if (home && d == home) return true;
+    int depth = 0;
+    for (char c : d) depth += c == '/' || c == '\\';
+    return depth < 2;
+  };
+  if (!broad(parent) && parent != aafDir) indexFolder(parent, 6, &index, 150000);
   // exact (case-insensitive) name, then a loose name where spaces, _ and - count as equal
   // (files copied through some tools or uploads lose their spaces)
   auto loose = [](const std::string &n) {

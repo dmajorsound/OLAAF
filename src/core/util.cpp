@@ -142,11 +142,14 @@ std::string uriToPath(const std::string &uri) {
   return o;
 }
 
-void indexFolder(const std::string &dir, int maxDepth, std::vector<std::pair<std::string, std::string>> *out) {
+void indexFolder(const std::string &dir, int maxDepth, std::vector<std::pair<std::string, std::string>> *out,
+                 size_t maxFiles) {
   std::error_code ec;
   if (dir.empty() || !fs::is_directory(P(dir), ec)) return;
   fs::recursive_directory_iterator it(P(dir), fs::directory_options::skip_permission_denied, ec), end;
+  size_t seen = 0;
   for (; it != end && !ec; it.increment(ec)) {
+    if (++seen > maxFiles) break; // a whole disk is not a media folder
     if (it.depth() > maxDepth) {
       it.disable_recursion_pending();
       continue;

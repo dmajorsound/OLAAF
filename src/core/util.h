@@ -24,7 +24,7 @@ std::string uriToPath(const std::string &uri);
 
 // all files below `dir` (depth-limited), lowercase basename -> full path
 void indexFolder(const std::string &dir, int maxDepth,
-                 std::vector<std::pair<std::string, std::string>> *out);
+                 std::vector<std::pair<std::string, std::string>> *out, size_t maxFiles = 400000);
 
 std::string strprintf(const char *fmt, ...);
 
