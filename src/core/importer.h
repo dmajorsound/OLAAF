@@ -71,6 +71,8 @@ public:
   Clip *findClip(int id, int *track = nullptr);
   // Appends an empty track (same channel count and folder as `like`) and returns its index.
   int addTrack(int like);
+  // Puts the tracks in a new order: newOrder lists every track index once (new position -> old index).
+  void reorderTracks(const std::vector<int> &newOrder);
   // Track color as imported: its own color, otherwise the color of its folder (when folders are on)
   uint32_t trackColor(const Track &t, const ImportOptions &opt) const;
 

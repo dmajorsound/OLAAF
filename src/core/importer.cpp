@@ -318,6 +318,14 @@ int Importer::addTrack(int like) {
   return (int)s_.tracks.size() - 1;
 }
 
+void Importer::reorderTracks(const std::vector<int> &newOrder) {
+  if (newOrder.size() != s_.tracks.size()) return;
+  std::vector<Track> t;
+  t.reserve(newOrder.size());
+  for (int i : newOrder) t.push_back(std::move(s_.tracks[(size_t)i]));
+  s_.tracks = std::move(t);
+}
+
 uint32_t Importer::trackColor(const Track &t, const ImportOptions &opt) const {
   if (t.color) return t.color;
   if (opt.folders && !t.group.empty())
