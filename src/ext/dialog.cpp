@@ -87,7 +87,7 @@ struct State {
   int palTrack = -1;  // track whose color palette is open
   bool merge = true;
   bool accepted = false;
-  HFONT fTitle = nullptr, fTag = nullptr, fBody = nullptr, fBold = nullptr, fSmall = nullptr, fSec = nullptr;
+  HFONT fTitle = nullptr, fTitleThin = nullptr, fTag = nullptr, fBody = nullptr, fBold = nullptr, fSmall = nullptr, fSec = nullptr;
 };
 
 HFONT makeFont(double px, bool bold, double scale) {
@@ -126,6 +126,13 @@ struct Gfx {
     RECT rc = {S(l), S(t), S(r), S(b)};
     DrawText(dc, str.c_str(), -1, &rc, align | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
     SelectObject(dc, old);
+  }
+  double width(HFONT f, const std::string &str) const {
+    HGDIOBJ old = SelectObject(dc, f);
+    RECT rc = {0, 0, 4000, 100};
+    DrawText(dc, str.c_str(), -1, &rc, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+    SelectObject(dc, old);
+    return (rc.right - rc.left) / s;
   }
   void line(double x1, double y1, double x2, double y2, COLORREF c) const {
     HPEN p = CreatePen(PS_SOLID, 1, c);
@@ -226,6 +233,9 @@ void paint(State *st, HDC dc) {
   g.fill(27, 31, 39, 34.5, kPanel);
   g.fill(23, 37, 30, 40.5, kPanel);
   g.text(st->fTitle, kInk, "olAAF", 56, 10, 400, 36, DT_LEFT);
+  double tw = g.width(st->fTitle, "olAAF");
+  if (tw < 20 || tw > 200) tw = 55; // measuring not available
+  g.text(st->fTitleThin, kMute, "\xe2\x80\x93 AAF Import for Reaper", 56 + tw + 6, 10, 600, 36, DT_LEFT);
   g.text(st->fTag, kMute, "Do you wanna build a Reaper Session?", 56, 34, 400, 50, DT_LEFT);
 
   // ---- file bar
@@ -564,6 +574,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 #endif
     SetWindowText(hwnd, "olAAF - Import AAF");
     st->fTitle = makeFont(19, true, st->scale);
+    st->fTitleThin = makeFont(19, false, st->scale);
     st->fTag = makeFont(10.5, false, st->scale);
     st->fBody = makeFont(13, false, st->scale);
     st->fBold = makeFont(13, true, st->scale);
@@ -627,7 +638,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return 0;
   case WM_DESTROY:
     if (st) {
-      DeleteObject(st->fTitle); DeleteObject(st->fTag); DeleteObject(st->fBody);
+      DeleteObject(st->fTitle); DeleteObject(st->fTitleThin); DeleteObject(st->fTag); DeleteObject(st->fBody);
       DeleteObject(st->fBold); DeleteObject(st->fSmall); DeleteObject(st->fSec);
     }
     return 0;
@@ -657,7 +668,7 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   st.merge = opt.mergeStereo;
   st.palTrack = palTrack;
   st.tip = tip;
-  st.fTitle = makeFont(19, true, 1); st.fTag = makeFont(10.5, false, 1); st.fBody = makeFont(13, false, 1);
+  st.fTitle = makeFont(19, true, 1); st.fTitleThin = makeFont(19, false, 1); st.fTag = makeFont(10.5, false, 1); st.fBody = makeFont(13, false, 1);
   st.fBold = makeFont(13, true, 1); st.fSmall = makeFont(11.5, false, 1); st.fSec = makeFont(10.5, true, 1);
   double a, b;
   sessionRange(imp.session(), &a, &b);

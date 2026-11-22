@@ -150,6 +150,15 @@ void paint(HWND hwnd, HDC dc, Ui *ui) {
   fill(dc, S(26), S(29), S(37), S(32), kPanel);
   fill(dc, S(22), S(34), S(29), S(37), kPanel);
   text(dc, ui->fTitle, kInk, "olAAF", S(52), S(16), S(400), S(34), DT_LEFT);
+  {
+    HGDIOBJ old = SelectObject(dc, ui->fTitle);
+    RECT m = {0, 0, 4000, 100};
+    DrawText(dc, "olAAF", -1, &m, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+    SelectObject(dc, old);
+    int tw = m.right - m.left;
+    if (tw < S(20) || tw > S(200)) tw = S(46);
+    text(dc, ui->fLine, kMute, "\xe2\x80\x93 AAF Import for Reaper", S(52) + tw + S(6), S(16), S(520), S(34), DT_LEFT);
+  }
   text(dc, ui->fTag, kMute, "Do you wanna build a Reaper Session?", S(52), S(33), S(400), S(46), DT_LEFT);
 
   // panel
