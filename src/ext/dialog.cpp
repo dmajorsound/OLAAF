@@ -123,7 +123,7 @@ enum HitId {
   H_CANCEL, H_IMPORT, H_TC_PLUS, H_TC_MINUS, H_TC_VALUE, H_TC_CURSOR, H_PAL, H_PAL_CUSTOM, H_PAL_NONE,
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
-  H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE
+  H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU
 };
 
 struct Hit {
@@ -171,6 +171,9 @@ struct State {
   int dragRows = 0;        // tracks the events are being dragged by (in shown order)
   int dragFromPos = 0;     // shown position of the track the drag started on
   int pressedClip = 0;
+  std::set<int> selTracks; // tracks selected by their names (to drag them into a folder)
+  int pressedTrack = -1;
+  int dropRow = -1;        // row the selected tracks would be dropped on
   std::set<int> sel;       // selected clip ids
   bool moveAutomation = true;
   bool edited = false;
@@ -391,7 +394,16 @@ std::string shortPath(std::string p, size_t maxLen) {
   }
 #endif
   if (p.size() <= maxLen) return p;
-  return "\xe2\x80\xa6" + p.substr(p.size() - (maxLen - 1));
+  size_t cut = p.size() - (maxLen - 1);
+  while (cut < p.size() && ((unsigned char)p[cut] & 0xC0) == 0x80) cut++; // keep UTF-8 characters whole
+  return "\xe2\x80\xa6" + p.substr(cut);
+}
+
+// the first n bytes of s, not splitting a UTF-8 character
+std::string utf8Head(const std::string &s, size_t n) {
+  if (n >= s.size()) return s;
+  while (n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80) n--;
+  return s.substr(0, n);
 }
 
 // ------------------------------------------------------------------ rows
@@ -453,6 +465,23 @@ int folderIndex(const Session &s, const std::string &key) {
   for (size_t i = 0; i < s.folders.size(); i++)
     if (s.folders[i].key == key) return (int)i;
   return -1;
+}
+
+// the folder a track dropped on row ri goes into ("" = outside any folder)
+std::string folderOfRow(const State *st, int ri) {
+  if (ri < 0) return std::string();
+  if (ri >= (int)st->rows.size()) return std::string();
+  const Row &r = st->rows[(size_t)ri];
+  if (r.kind == 1) return r.folder;
+  if (r.kind == 0) return st->imp->session().tracks[(size_t)r.track].group;
+  return std::string();
+}
+
+int rowAtY(const State *st, int y) {
+  double ly = (y - st->oy) / st->scale;
+  if (ly < kLT || ly >= kLB) return -1;
+  int ri = st->scrollRow + (int)std::floor((ly - kLT) / kRowH);
+  return std::min(ri, (int)st->rows.size() - 1);
 }
 
 // ------------------------------------------------------------------ painting
@@ -559,7 +588,10 @@ void paintArrange(State *st, const Gfx &g) {
   int real = 0;
   for (auto &t : s.tracks) real += !t.created;
   g.fill(kL + kHdr, ry, kL + kHdr + 1, kAB - 1, kLine);
-  g.text(st->fSmall, kMute, strprintf("%d of %d tracks", nsel, real), kL + 10, ry, kL + 120, ry + kRuler, DT_LEFT);
+  g.text(st->fSmall, kMute, strprintf("%d / %d", nsel, real), kL + 8, ry, kL + 60, ry + kRuler, DT_LEFT);
+  addHit(st, kL + 4, ry, kL + 60, ry + kRuler, H_NONE, 0, "Tracks that will be imported / tracks in the AAF.");
+  button(st, g, kL + 62, ry + 5, kL + 136, ry + 25, "+ Folder", H_NEW_FOLDER, 0,
+         "Add a folder (with the selected tracks in it). Drag track names onto a folder to put them in.");
   double bx = kL + kHdr - 8;
   button(st, g, bx - 22, ry + 5, bx, ry + 25, "+", H_ZOOM_IN, 0, "Zoom in. Shift + mouse wheel moves through time.");
   button(st, g, bx - 46, ry + 5, bx - 24, ry + 25, "\xe2\x88\x92", H_ZOOM_OUT, 0, "Zoom out.");
@@ -617,6 +649,8 @@ void paintArrange(State *st, const Gfx &g) {
       for (auto &t : s.tracks) n += t.group == f.key;
       g.fill(kL + 1, y, kR - 1, y + kRowH, theme().track);
       g.fill(kL + 1, y + kRowH - 1, kR - 1, y + kRowH, kLine);
+      if (st->drag == 4 && st->dragMoved && st->dropRow >= 0 && folderOfRow(st, st->dropRow) == f.key)
+        g.box(kL + 1, y, kL + kHdr, y + kRowH, kBlue, kBlueSoft);
       g.fill(kL + 1, y, kL + 7, y + kRowH - 1, f.color ? rgbToRef(f.color) : kMute);
       addHit(st, kL + 1, y, kL + 14, y + kRowH, H_FROW_COLOR, fi, "Set the folder color.");
       g.text(st->fSmall, kMute, "\xe2\x96\xbe", kL + 14, y, kL + 26, y + kRowH, DT_LEFT);
@@ -633,7 +667,10 @@ void paintArrange(State *st, const Gfx &g) {
     if (row.kind == 2) { // drop line for new tracks
       bool hot = dragging && posAtRow(st, ri) <= posAtRow(st, st->scrollRow + kRows) &&
                  st->dragFromPos + st->dragRows >= (int)st->order.size();
-      g.text(st->fBody, hot ? kBlue : kMute, "+ Drop here for a new track", kL + 30, y, kL + kHdr - 6, y + kRowH, DT_LEFT);
+      bool trackDrop = st->drag == 4 && st->dragMoved && st->dropRow == ri;
+      if (trackDrop) g.box(kL + 1, y, kL + kHdr, y + kRowH, kBlue, kBlueSoft);
+      g.text(st->fBody, hot || trackDrop ? kBlue : kMute, trackDrop ? "Outside any folder" : "+ Drop here for a new track",
+             kL + 30, y, kL + kHdr - 6, y + kRowH, DT_LEFT);
       continue;
     }
     Track &tr = s.tracks[(size_t)row.track];
@@ -641,6 +678,10 @@ void paintArrange(State *st, const Gfx &g) {
     uint32_t eff = st->imp->trackColor(tr, opt);
     COLORREF tc = eff ? rgbToRef(eff) : RGB(0x7f, 0x9c, 0xd8);
     if (!on) g.fill(kL + 1, y, kR - 1, y + kRowH - 1, theme().track);
+    bool trSel = st->selTracks.count(row.track) > 0;
+    bool inTarget = st->drag == 4 && st->dragMoved && st->dropRow >= 0 && !tr.group.empty() &&
+                    folderOfRow(st, st->dropRow) == tr.group && st->rows[(size_t)st->dropRow].kind != 2;
+    if (trSel || inTarget) g.fill(kL + 7, y, kL + kHdr, y + kRowH - 1, kBlueSoft);
     g.fill(kL + 1, y, kL + 7, y + kRowH - 1, on ? tc : theme().off);
     addHit(st, kL + 1, y, kL + 14, y + kRowH, H_TRACK_COLOR, row.track,
            "Set the track color. Without one, a track takes the color of its folder.");
@@ -652,6 +693,11 @@ void paintArrange(State *st, const Gfx &g) {
       g.box(kL + 20, cy, kL + 38, cy + 18, theme().empty, kPanel);
     addHit(st, kL + 16, y + 2, kL + 42, y + kRowH - 2, H_TRACK_CHECK, row.track, "Import this track or leave it out.");
     double nameR = kL + kHdr - 34;
+    if (opt.folders) {
+      g.text(st->fSmall, kMute, "\xe2\x96\xbe", nameR - 16, y, nameR - 2, y + kRowH, DT_CENTER);
+      addHit(st, nameR - 18, y + 4, nameR, y + kRowH - 4, H_TRACK_FOLDERMENU, row.track, "Choose the folder for this track.");
+      nameR -= 18;
+    }
     if (tr.channels >= 2) {
       const char *badge = tr.channels == 2 ? (tr.mergedFrom.empty() ? "ST" : "L+R") : "MC";
       g.box(nameR - 30, y + 9, nameR - 2, y + 23, theme().blueLine, kBlueSoft);
@@ -666,7 +712,7 @@ void paintArrange(State *st, const Gfx &g) {
       g.text(st->fBody, nameC, tr.name, kL + 48, y, nameR, y + kRowH, DT_LEFT);
     if (!on) g.fill(kL + 48, y + kRowH / 2, std::min(nameR, kL + 48 + g.width(st->fBody, tr.name)), y + kRowH / 2 + 1, kMute);
     addHit(st, kL + 44, y + 2, nameR, y + kRowH - 2, H_TRACK_NAME, row.track,
-           "Click to choose the folder this track goes into.");
+           "Click selects a track, Shift or Cmd / Ctrl-click selects more. Drag the names onto a folder to put them in.");
     int active = 0;
     for (auto &c : tr.clips) active += !c.excluded;
     g.text(st->fSmall, tr.created ? kBlue : kMute, tr.created ? "NEW" : std::to_string(active), kL + kHdr - 34, y,
@@ -866,7 +912,7 @@ void paintMediaBar(State *st, const Gfx &g) {
   g.text(st->fSec, kMute, opt.copyToSubdir ? "AUDIO GOES TO" : "CONVERTED AUDIO GOES TO", x + 8, mid - 16, pr - 8, mid - 2, DT_LEFT);
   // the folder it goes into, shortened from the left so the subfolder name always shows
   size_t maxc = (size_t)std::max(24.0, (pr - x - 16) / 6.2);
-  std::string subShown = sub.size() > maxc / 2 ? sub.substr(0, maxc / 2 - 1) + "\xe2\x80\xa6" : sub;
+  std::string subShown = sub.size() > maxc / 2 ? utf8Head(sub, maxc / 2 - 1) + "\xe2\x80\xa6" : sub;
   std::string shown = shortPath(dest, std::max<size_t>(12, maxc - subShown.size())) + subShown;
   if (st->editKind != 3) g.text(st->fSmall, kInk, shown, x + 8, mid - 2, pr - 8, mid + 15, DT_LEFT);
   st->subRc = devRect(st, x + 6, mid - 2, pr - 6, mid + 15);
@@ -897,7 +943,7 @@ void paintFooter(State *st, const Gfx &g) {
   addHit(st, kR - 22, t + 2, kR, b - 2, H_THEME, 0, "Light or dark interface.");
   g.text(st->fTag, kMute, v, kR - 30 - vw, t, kR - 30, b, DT_RIGHT);
   g.text(st->fTag, kMute,
-         st->tip ? st->tip : "The square in front of a track leaves it out. Drag events or use the arrow keys to move them to another track.",
+         st->tip ? st->tip : "The square leaves a track out. Drag track names onto a folder, drag events (or use the arrow keys) to move them to another track.",
          kL, t, kR - 40 - vw, b, DT_LEFT);
 }
 
@@ -1155,6 +1201,9 @@ void endEdit(State *st, bool apply) {
   InvalidateRect(st->hwnd, NULL, FALSE);
 }
 
+bool shiftDown() { return (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0; }
+bool ctrlDown() { return (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0; } // Cmd on macOS
+
 void click(State *st, int x, int y, bool shift) {
   Session &s = st->imp->session();
   ImportOptions &opt = *st->opt;
@@ -1171,7 +1220,7 @@ void click(State *st, int x, int y, bool shift) {
     InvalidateRect(st->hwnd, NULL, FALSE);
     if (id == H_LANES || id == H_NONE || id == H_FOLD_POP) return;
   }
-  if (st->folderTrack >= 0 && !inFolderPop && !inPal && id != H_TRACK_NAME) {
+  if (st->folderTrack >= 0 && !inFolderPop && !inPal && id != H_TRACK_FOLDERMENU) {
     st->folderTrack = -1;
     InvalidateRect(st->hwnd, NULL, FALSE);
     if (id == H_LANES || id == H_NONE) return;
@@ -1192,18 +1241,40 @@ void click(State *st, int x, int y, bool shift) {
   }
   case H_TRACK_CHECK: s.tracks[(size_t)h->idx].import = !s.tracks[(size_t)h->idx].import; break;
   case H_TRACK_NAME: {
-    if (!opt.folders) {
-      st->tip = "Switch on Folders to put tracks into folders.";
-      break;
+    int t = h->idx;
+    if (shift || ctrlDown()) {
+      if (st->selTracks.count(t)) st->selTracks.erase(t);
+      else st->selTracks.insert(t);
+    } else {
+      st->selTracks.clear();
+      st->selTracks.insert(t);
     }
+    break;
+  }
+  case H_TRACK_FOLDERMENU: {
     bool same = st->folderTrack == h->idx;
     st->folderTrack = same ? -1 : h->idx;
     st->palTrack = -1;
     st->palFolder.clear();
-    st->fpX = (h->r.left - st->ox) / st->scale;
+    st->fpX = std::min((h->r.left - st->ox) / st->scale, (double)kL + 20);
     st->fpY = (h->r.bottom - st->oy) / st->scale + 2;
     st->fpY0 = (h->r.top - st->oy) / st->scale - 2;
     break;
+  }
+  case H_NEW_FOLDER: {
+    // a new folder, with the selected tracks in it; then type its name
+    std::string key = st->imp->addFolder("New folder");
+    for (int t : st->selTracks) s.tracks[(size_t)t].group = key;
+    opt.folders = true;
+    st->selTracks.clear();
+    buildRows(st);
+    int ri = 0;
+    for (size_t i = 0; i < st->rows.size(); i++)
+      if (st->rows[i].kind == 1 && st->rows[i].folder == key) ri = (int)i;
+    if (ri < st->scrollRow || ri >= st->scrollRow + kRows) st->scrollRow = std::max(0, ri - 2);
+    double y = kLT + (ri - st->scrollRow) * kRowH;
+    startEdit(st, 2, devRect(st, kL + 26, y + 4, kL + kHdr - 32, y + kRowH - 4), "New folder", key);
+    return;
   }
   case H_TRACK_COLOR: {
     bool same = st->palTrack == h->idx;
@@ -1349,7 +1420,6 @@ void click(State *st, int x, int y, bool shift) {
   InvalidateRect(st->hwnd, NULL, FALSE);
 }
 
-bool shiftDown() { return (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0; }
 
 // shown track position under device y (rows above / below the window clamp)
 int posAtY(State *st, int y) {
@@ -1466,6 +1536,19 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       } else
         st->viewStart += p.x < st->hThumb.left ? -st->viewLen * 0.9 : st->viewLen * 0.9;
       SetCapture(hwnd);
+    } else if (!popOpen && hitAt(st, p.x, p.y) && hitAt(st, p.x, p.y)->id == H_TRACK_NAME) {
+      // track names: select now (or on release with a modifier) and maybe drag into a folder
+      int t = hitAt(st, p.x, p.y)->idx;
+      st->pressedTrack = -1;
+      if (shiftDown() || ctrlDown() || st->selTracks.count(t)) st->pressedTrack = t;
+      else {
+        st->selTracks.clear();
+        st->selTracks.insert(t);
+      }
+      st->drag = 4;
+      st->dragFromY = p.y;
+      st->dropRow = -1;
+      SetCapture(hwnd);
     } else if (!popOpen) {
       if (const ClipHit *c = clipAt(st, p.x, p.y)) {
         // pressing an unselected event selects it, so it can be dragged right away
@@ -1493,6 +1576,27 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (GetCapture() == hwnd) ReleaseCapture();
     st->drag = 0;
     st->dragMoved = false;
+    if (drag == 4) {
+      Session &s = st->imp->session();
+      if (moved && st->dropRow >= 0) {
+        std::string key = folderOfRow(st, st->dropRow);
+        for (int t : st->selTracks) s.tracks[(size_t)t].group = key;
+      } else if (st->pressedTrack >= 0) {
+        int t = st->pressedTrack;
+        if (shiftDown() || ctrlDown()) {
+          if (st->selTracks.count(t)) st->selTracks.erase(t);
+          else st->selTracks.insert(t);
+        } else {
+          st->selTracks.clear();
+          st->selTracks.insert(t);
+        }
+      }
+      st->dropRow = -1;
+      st->pressedTrack = -1;
+      st->tip = nullptr;
+      InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
+    }
     if (drag == 3) {
       if (moved && st->dragRows) moveSelectionBy(st, st->dragRows);
       else if (st->pressedClip) click(st, p.x, p.y, shiftDown());
@@ -1520,6 +1624,22 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       double range = (st->rangeB - st->rangeA) - st->viewLen;
       if (span > 0 && range > 0) st->viewStart = st->dragValue + (mx - st->dragFromX) * range / span;
       InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
+    }
+    if (st->drag == 4) {
+      if (std::abs(my - st->dragFromY) > (int)std::lround(5 * st->scale)) st->dragMoved = true;
+      if (st->dragMoved) {
+        st->dropRow = rowAtY(st, my);
+        double ly = (my - st->oy) / st->scale;
+        if (ly < kLT + 4 && st->scrollRow > 0) st->scrollRow--;                       // scroll while dragging
+        if (ly > kLB - 4 && st->scrollRow + kRows < (int)st->rows.size()) st->scrollRow++;
+        std::string key = folderOfRow(st, st->dropRow);
+        Folder *f = key.empty() ? nullptr : st->imp->session().folder(key);
+        static std::string tipBuf;
+        tipBuf = f ? "Release to put the selected tracks into " + f->name + "." : std::string("Release to take the selected tracks out of their folder.");
+        st->tip = tipBuf.c_str();
+        InvalidateRect(hwnd, NULL, FALSE);
+      }
       return 0;
     }
     if (st->drag == 3) {
@@ -1637,6 +1757,12 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
     st.palX = 32;
     st.palY = 300;
     st.palY0 = 270;
+  } else if (palTrack == -9) { // dragging two track names onto the first folder
+    st.selTracks = {2, 3};
+    st.drag = 4;
+    st.dragMoved = true;
+    buildRows(&st);
+    st.dropRow = 0;
   } else if (palTrack <= -2) {
     st.folderTrack = -2 - palTrack;
     st.fpX = 60;
