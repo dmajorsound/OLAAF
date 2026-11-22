@@ -615,8 +615,8 @@ void paintArrange(State *st, const Gfx &g) {
   button(st, g, kL + 62, ry + 5, kL + 136, ry + 25, "+ Folder", H_NEW_FOLDER, 0,
          "Add a folder (with the selected tracks in it). Drag track names onto a folder to put them in.");
   double bx = kL + kHdr - 8;
-  button(st, g, bx - 22, ry + 5, bx, ry + 25, "+", H_ZOOM_IN, 0, "Zoom in. Shift + mouse wheel moves through time.");
-  button(st, g, bx - 46, ry + 5, bx - 24, ry + 25, "\xe2\x88\x92", H_ZOOM_OUT, 0, "Zoom out.");
+  button(st, g, bx - 22, ry + 5, bx, ry + 25, "+", H_ZOOM_IN, 0, "Zoom in (+ key, or Alt / Option + mouse wheel). Shift + mouse wheel moves through time.");
+  button(st, g, bx - 46, ry + 5, bx - 24, ry + 25, "\xe2\x88\x92", H_ZOOM_OUT, 0, "Zoom out (- key, or Alt / Option + mouse wheel).");
   button(st, g, bx - 82, ry + 5, bx - 48, ry + 25, "Fit", H_ZOOM_FIT, 0, "Show the whole AAF.");
 
   // ruler
@@ -1270,7 +1270,19 @@ void endEdit(State *st, bool apply) {
   InvalidateRect(st->hwnd, NULL, FALSE);
 }
 
+// horizontal zoom by `factor` (< 1 zooms in), keeping the time under layout x `ax` in place
+void zoomBy(State *st, double factor, double ax) {
+  double tlw = kTlr - kTlx;
+  double rel = std::max(0.0, std::min(1.0, (ax - kTlx) / tlw));
+  double t = st->viewStart + rel * st->viewLen;
+  double total = std::max(1.0, st->rangeB - st->rangeA);
+  double len = std::max(0.5, std::min(st->viewLen * factor, total * 1.5));
+  st->viewStart = t - rel * len;
+  st->viewLen = len;
+}
+
 bool shiftDown() { return (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0; }
+bool altDown() { return (GetAsyncKeyState(VK_MENU) & 0x8000) != 0; } // Option on macOS
 bool ctrlDown() { return (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0; } // Cmd on macOS
 
 void click(State *st, int x, int y, bool shift) {
@@ -1422,8 +1434,8 @@ void click(State *st, int x, int y, bool shift) {
     st->viewLen = (b - a) * 1.04;
     break;
   }
-  case H_ZOOM_IN: st->viewStart += st->viewLen * 0.25; st->viewLen *= 0.5; break;
-  case H_ZOOM_OUT: st->viewStart -= st->viewLen * 0.5; st->viewLen *= 2.0; break;
+  case H_ZOOM_IN: zoomBy(st, 0.5, (kTlx + kTlr) / 2); break;
+  case H_ZOOM_OUT: zoomBy(st, 2.0, (kTlx + kTlr) / 2); break;
   case H_MERGE: {
     st->merge = !st->merge;
     keepTrackChoices(st, [&]() { st->imp->setMergeStereo(st->merge); });
@@ -1548,6 +1560,19 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return TRUE;
 #endif
   case WM_KEYDOWN:
+    if (st && !st->editKind) { // + and - zoom the timeline
+      bool in = wp == VK_ADD || wp == 0xBB /* VK_OEM_PLUS */;
+      bool out = wp == VK_SUBTRACT || wp == 0xBD /* VK_OEM_MINUS */;
+#ifndef _WIN32
+      in = in || wp == '+' || wp == '=';
+      out = out || wp == '-';
+#endif
+      if (in || out) {
+        zoomBy(st, in ? 0.5 : 2.0, (kTlx + kTlr) / 2);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 1;
+      }
+    }
     if (st && !st->editKind && !st->sel.empty()) {
       bool done = true;
       if (wp == VK_UP) moveSelectionBy(st, -1);
@@ -1755,6 +1780,13 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   }
   case WM_MOUSEWHEEL: {
     int delta = (short)HIWORD(wp);
+    if (altDown()) { // Alt / Option + wheel: zoom around the mouse
+      POINT mp = {(short)LOWORD(lp), (short)HIWORD(lp)};
+      ScreenToClient(hwnd, &mp);
+      zoomBy(st, delta > 0 ? 0.8 : 1.25, (mp.x - st->ox) / st->scale);
+      InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
+    }
     if (shiftDown()) st->viewStart -= st->viewLen * 0.1 * (delta > 0 ? 1 : -1);
     else st->scrollRow += delta > 0 ? -1 : 1;
     if (st->scrollRow < 0) st->scrollRow = 0;
