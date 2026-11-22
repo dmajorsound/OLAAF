@@ -52,6 +52,46 @@ uint32_t groupColor(const std::string &g) {
   return 0x6B7480;
 }
 
+Folder *Session::folder(const std::string &key) {
+  for (auto &f : folders)
+    if (f.key == key) return &f;
+  return nullptr;
+}
+
+static const char *kDefaultFolders[] = {"DIALOG", "FOLEY", "FX", "ATMO", "MUSIC", "OTHER"};
+
+void Importer::assignDefaultFolders() {
+  std::set<std::string> present;
+  for (auto &t : s_.tracks) present.insert(trackGroup(t.name));
+  s_.folders.clear();
+  if (present.size() < 2) { // one folder for everything does not help
+    for (auto &t : s_.tracks) t.group.clear();
+    return;
+  }
+  for (const char *g : kDefaultFolders)
+    if (present.count(g)) s_.folders.push_back({g, g, groupColor(g)});
+  for (auto &t : s_.tracks) t.group = trackGroup(t.name);
+}
+
+std::string Importer::addFolder(const std::string &name) {
+  static const uint32_t pal[] = {0x5580d4, 0x1F9A8A, 0x4E8F3A, 0xB8962E, 0xD9822B, 0xC8423B, 0xB0457E, 0x7A5AC8};
+  int n = 1;
+  while (s_.folder("F" + std::to_string(n))) n++;
+  std::string key = "F" + std::to_string(n);
+  s_.folders.push_back({key, name, pal[(s_.folders.size()) % 8]});
+  return key;
+}
+
+void Importer::removeFolder(const std::string &key) {
+  for (size_t i = 0; i < s_.folders.size(); i++)
+    if (s_.folders[i].key == key) {
+      s_.folders.erase(s_.folders.begin() + (long)i);
+      break;
+    }
+  for (auto &t : s_.tracks)
+    if (t.group == key) t.group.clear();
+}
+
 std::string defaultSubdir(const Session &s) {
   return safeFileName((s.name.empty() ? stemName(s.aafPath) : s.name) + "_Audio");
 }
@@ -65,6 +105,7 @@ bool Importer::load(const std::string &aafPath, const ImportOptions &opt, std::s
   int id = 1;
   for (auto &t : s_.tracks)
     for (auto &c : t.clips) c.id = id++;
+  assignDefaultFolders();
   return true;
 }
 
@@ -252,7 +293,10 @@ int Importer::setMergeStereo(bool on) {
     haveUnmerged_ = true;
   }
   s_.tracks = unmerged_;
-  return on ? mergeStereoTracks() : 0;
+  int n = on ? mergeStereoTracks() : 0;
+  // keep the folders as the user set them up; tracks go back to their folder by name
+  for (auto &t : s_.tracks) t.group = s_.folder(trackGroup(t.name)) ? trackGroup(t.name) : std::string();
+  return n;
 }
 
 int Importer::mergeStereoTracks() {
@@ -537,33 +581,30 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
     out.push_back(v);
   }
 
-  // the order tracks are written in: grouped by folder, or as in the AAF
+  // the order tracks are written in: folder by folder (as listed), then the tracks outside any folder
   std::vector<std::pair<std::string, const Track *>> order;
-  static const char *groups[] = {"DIALOG", "FOLEY", "FX", "ATMO", "MUSIC", "OTHER"};
-  // folders only help when the tracks fall into at least two groups
-  std::set<std::string> present;
-  for (auto &t : s_.tracks)
-    if (t.import) present.insert(trackGroup(t.name));
-  bool useFolders = opt.folders && present.size() >= 2;
-  if (useFolders) {
-    for (const char *g : groups)
+  if (opt.folders && !s_.folders.empty()) {
+    for (auto &f : s_.folders)
       for (auto &t : s_.tracks)
-        if (t.import && trackGroup(t.name) == g) order.push_back({g, &t});
+        if (t.import && t.group == f.key) order.push_back({f.key, &t});
+    for (auto &t : s_.tracks)
+      if (t.import && (t.group.empty() || !const_cast<Session &>(s_).folder(t.group))) order.push_back({"", &t});
   } else
     for (auto &t : s_.tracks)
       if (t.import) order.push_back({"", &t});
-
   for (size_t oi = 0; oi < order.size(); oi++) {
     const Track &t = *order[oi].second;
     const std::string &grp = order[oi].first;
-    bool firstInGroup = useFolders && (oi == 0 || order[oi - 1].first != grp);
-    bool lastInGroup = useFolders && (oi + 1 == order.size() || order[oi + 1].first != grp);
+    bool inFolder = !grp.empty();
+    bool firstInGroup = inFolder && (oi == 0 || order[oi - 1].first != grp);
+    bool lastInGroup = inFolder && (oi + 1 == order.size() || order[oi + 1].first != grp);
     if (firstInGroup) {
+      const Folder *fd = const_cast<Session &>(s_).folder(grp);
       TrackChunk f;
-      f.text = "<TRACK\nNAME " + q(grp) + "\n" + strprintf("PEAKCOL %u\n", nativeColor(groupColor(grp))) +
+      f.text = "<TRACK\nNAME " + q(fd->name) + "\n" + (fd->color ? strprintf("PEAKCOL %u\n", nativeColor(fd->color)) : std::string()) +
                "ISBUS 1 1\nNCHAN 2\n>\n";
       f.folderDepth = 1;
-      f.color = groupColor(grp);
+      f.color = fd->color;
       out.push_back(f);
     }
     std::string c;

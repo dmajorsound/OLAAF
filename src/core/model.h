@@ -87,7 +87,14 @@ struct Track {
   std::vector<GainPoint> volEnv; // track volume automation (absolute time, linear gain)
   std::vector<GainPoint> panEnv; // track pan automation (absolute time, -1..+1)
   std::string mergedFrom; // "SFX 1.L + SFX 1.R" when merged
-  std::string group;      // folder it goes into: DIALOG, FOLEY, FX, ATMO, MUSIC, OTHER
+  std::string group;      // key of the folder it goes into (Session::folders), "" = no folder
+};
+
+// A folder track the import creates. The key stays the same when the user renames the folder.
+struct Folder {
+  std::string key;   // DIALOG, FOLEY, FX, ATMO, MUSIC, OTHER or F1, F2 ... for folders the user added
+  std::string name;  // shown and written as the folder track's name
+  uint32_t color = 0;
 };
 
 struct Session {
@@ -104,7 +111,10 @@ struct Session {
   std::vector<Media> media;
   std::vector<VideoClip> video;
   std::vector<Marker> markers;
+  std::vector<Folder> folders;       // in the order they are written
   std::vector<std::string> warnings;
+
+  Folder *folder(const std::string &key);
 
   double firstClip() const;
 };

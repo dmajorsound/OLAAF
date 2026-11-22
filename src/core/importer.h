@@ -20,7 +20,7 @@ struct ImportOptions {
   bool clipGain = true;         // import clip gain as take volume
   bool video = true;            // video reference from the AAF on its own track
   bool markers = true;          // AAF markers as REAPER markers
-  bool folders = true;          // group tracks into folder tracks (DIALOG, FOLEY, FX, ATMO, MUSIC)
+  bool folders = true;          // create the folder tracks in Session::folders
   bool copyToSubdir = true;     // copy WAVs into <dest>/<subdir>; no = reference in place
   std::string destDir;          // usually the REAPER project folder
   std::string subdir;           // default: AAF name + "_Audio"
@@ -69,6 +69,12 @@ public:
   // clip goes along (it replaces the target's automation over the clip's time range).
   void moveClips(const std::vector<int> &clipIds, int targetTrack, bool withAutomation);
   Clip *findClip(int id, int *track = nullptr);
+
+  // Folder tracks. Tracks are sorted into DIALOG, FOLEY, FX, ATMO, MUSIC and OTHER by their names
+  // (only when that gives at least two folders); the dialog can rename, add and remove folders.
+  void assignDefaultFolders();
+  std::string addFolder(const std::string &name); // returns the new key
+  void removeFolder(const std::string &key);      // its tracks end up outside any folder
 
   // Copies / converts / extracts media into the destination and assigns each clip its file.
   bool prepareMedia(const ImportOptions &opt, MediaReport *rep, const Progress &progress);

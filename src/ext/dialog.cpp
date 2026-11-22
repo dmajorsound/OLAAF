@@ -28,7 +28,7 @@
 #define SWELL_DLG_WS_DEFAULT_SCALING 0
 #endif
 #define IDD_OLAAF_IMPORT 4712
-SWELL_DEFINE_DIALOG_RESOURCE_BEGIN(IDD_OLAAF_IMPORT, SWELL_DLG_WS_FLIPPED | SWELL_DLG_WS_NOAUTOSIZE | SWELL_DLG_WS_OPAQUE,
+SWELL_DEFINE_DIALOG_RESOURCE_BEGIN(IDD_OLAAF_IMPORT, SWELL_DLG_WS_FLIPPED | SWELL_DLG_WS_NOAUTOSIZE | SWELL_DLG_WS_OPAQUE | SWELL_DLG_WS_RESIZABLE,
                                    "olAAF", 1180, 800, 1.0)
 BEGIN
 END
@@ -114,7 +114,7 @@ enum HitId {
   H_NONE, H_THEME, H_VIDEO, H_MARKERS, H_FOLDERS, H_ZOOM_FIT, H_TRACK_CHECK, H_TRACK_COLOR, H_SEL_ALL, H_SEL_NONE,
   H_ZOOM_IN, H_ZOOM_OUT, H_MERGE, H_FADES, H_GAIN, H_COPY_YES, H_COPY_NO, H_SUBDIR, H_DEST, H_DEST_CHOOSE, H_LOCATE,
   H_CANCEL, H_IMPORT, H_TC_ON, H_TC_PLUS, H_TC_MINUS, H_TC_VALUE, H_TC_CURSOR, H_PAL, H_PAL_CUSTOM, H_PAL_NONE,
-  H_LIST, H_TIMELINE, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN, H_EV_AUTOMATION, H_EV_RESET
+  H_LIST, H_TIMELINE, H_FOLDER_CELL, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN, H_EV_AUTOMATION, H_EV_RESET
 };
 
 struct Hit {
@@ -135,7 +135,9 @@ struct State {
   ImportOptions *opt = nullptr;
   const DialogHost *host = nullptr;
   HWND hwnd = nullptr;
-  double scale = 1.0;
+  double scale = 1.0;      // device pixels per layout pixel (DPI x window zoom)
+  double base = 1.0;       // DPI scale (Windows), 1 on macOS
+  double ox = 0, oy = 0;   // layout origin in the window (centered)
   std::vector<Hit> hits;
   std::vector<ClipHit> clipHits;
   const char *tip = nullptr;
@@ -158,6 +160,13 @@ struct State {
   bool edited = false;
   bool merge = true;
   bool accepted = false;
+  HWND tcEdit = nullptr;   // in-place text editor (timecode offset, folder names)
+  int editKind = 0;        // 0 none, 1 timecode offset, 2 folder name
+  std::string editKey;     // folder being renamed
+  RECT tcRc{};             // the offset field (device pixels)
+  RECT editRc{};           // where the editor sits (device pixels)
+  int folderTrack = -1;    // track whose folder popover is open
+  HBRUSH editBrush = nullptr;
   HFONT fTheme = nullptr, fCheck = nullptr, fClip = nullptr, fTitle = nullptr, fTitleThin = nullptr, fTag = nullptr,
         fBody = nullptr, fBold = nullptr, fSmall = nullptr, fSec = nullptr, fLogo = nullptr;
 };
@@ -189,19 +198,49 @@ void makeFonts(State *st) {
   st->fLogo = makeFont(11, false, s);
 }
 
+void freeFonts(State *st) {
+  HFONT *fs[] = {&st->fTheme, &st->fCheck, &st->fClip, &st->fTitle, &st->fTitleThin, &st->fTag,
+                 &st->fBody, &st->fBold, &st->fSmall, &st->fSec, &st->fLogo};
+  for (HFONT *f : fs) {
+    if (*f) DeleteObject(*f);
+    *f = nullptr;
+  }
+}
+
+// The layout is drawn at a fixed size (W x H) and zoomed to the window: everything, type included,
+// grows with the window. The zoomed layout is centered in the window.
+void relayout(State *st) {
+  RECT cr;
+  GetClientRect(st->hwnd, &cr);
+  double zx = cr.right / (W * st->base), zy = cr.bottom / (H * st->base);
+  double zoom = std::max(0.5, std::min(zx, zy));
+  double scale = st->base * zoom;
+  st->ox = std::max(0.0, std::floor((cr.right - W * scale) / 2));
+  st->oy = std::max(0.0, std::floor((cr.bottom - H * scale) / 2));
+  if (std::fabs(scale - st->scale) > 1e-6 || !st->fBody) {
+    st->scale = scale;
+    freeFonts(st);
+    makeFonts(st);
+    if (st->tcEdit) SendMessage(st->tcEdit, WM_SETFONT, (WPARAM)st->fBody, 0);
+  }
+}
+
 struct Gfx {
   HDC dc;
   double s;
-  int S(double v) const { return (int)std::lround(v * s); }
+  double ox = 0, oy = 0; // where the scaled layout starts in the window (it is centered)
+  int S(double v) const { return (int)std::lround(v * s); }  // a length
+  int X(double v) const { return (int)std::lround(v * s + ox); }
+  int Y(double v) const { return (int)std::lround(v * s + oy); }
   void fill(double l, double t, double r, double b, COLORREF c) const {
-    RECT rc = {S(l), S(t), S(r), S(b)};
+    RECT rc = {X(l), Y(t), X(r), Y(b)};
     HBRUSH br = CreateSolidBrush(c);
     FillRect(dc, &rc, br);
     DeleteObject(br);
   }
   void box(double l, double t, double r, double b, COLORREF line, COLORREF in) const {
     fill(l, t, r, b, line);
-    RECT rc = {S(l) + 1, S(t) + 1, S(r) - 1, S(b) - 1};
+    RECT rc = {X(l) + 1, Y(t) + 1, X(r) - 1, Y(b) - 1};
     HBRUSH br = CreateSolidBrush(in);
     FillRect(dc, &rc, br);
     DeleteObject(br);
@@ -210,7 +249,7 @@ struct Gfx {
     HGDIOBJ old = SelectObject(dc, f);
     SetTextColor(dc, c);
     SetBkMode(dc, TRANSPARENT);
-    RECT rc = {S(l), S(t), S(r), S(b)};
+    RECT rc = {X(l), Y(t), X(r), Y(b)};
     DrawText(dc, str.c_str(), -1, &rc, align | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
     SelectObject(dc, old);
   }
@@ -224,8 +263,8 @@ struct Gfx {
   void line(double x1, double y1, double x2, double y2, COLORREF c) const {
     HPEN p = CreatePen(PS_SOLID, 1, c);
     HGDIOBJ old = SelectObject(dc, p);
-    MoveToEx(dc, S(x1), S(y1), NULL);
-    LineTo(dc, S(x2), S(y2));
+    MoveToEx(dc, X(x1), Y(y1), NULL);
+    LineTo(dc, X(x2), Y(y2));
     SelectObject(dc, old);
     DeleteObject(p);
   }
@@ -233,8 +272,8 @@ struct Gfx {
 
 void addHit(State *st, double l, double t, double r, double b, int id, int idx, const char *tip) {
   Hit h;
-  h.r = {(LONG)std::lround(l * st->scale), (LONG)std::lround(t * st->scale), (LONG)std::lround(r * st->scale),
-         (LONG)std::lround(b * st->scale)};
+  h.r = {(LONG)std::lround(l * st->scale + st->ox), (LONG)std::lround(t * st->scale + st->oy),
+         (LONG)std::lround(r * st->scale + st->ox), (LONG)std::lround(b * st->scale + st->oy)};
   h.id = id;
   h.idx = idx;
   h.tip = tip;
@@ -326,7 +365,7 @@ void paintHeader(State *st, const Gfx &g, double cw) {
   if (tw < 20 || tw > 200) tw = 55;
   g.text(st->fTitleThin, kMute, "\xe2\x80\x93 AAF Import for Reaper", 56 + tw + 6, 10, 600, 36, DT_LEFT);
   g.text(st->fTag, kMute, "Do you wanna build a Reaper Session?", 56, 34, 400, 50, DT_LEFT);
-  drawDmajorLogo(g.dc, g.S(cw - 16), g.S(33), g.S(30), kInk, kMute, st->fSmall);
+  drawDmajorLogo(g.dc, g.X(cw - 16), g.Y(33), g.S(30), kInk, kMute, st->fSmall);
 
   // file bar with the timecode offset
   double fy = 60, fb = 104;
@@ -341,9 +380,11 @@ void paintHeader(State *st, const Gfx &g, double cw) {
   g.text(st->fBody, kInk, "Timecode offset", x + 24, fy + 8, x + 140, fy + 36, DT_LEFT);
   segmented(st, g, x + 140, fy + 8, 56, 28, "+", "\xe2\x88\x92", !st->tcMinus, H_TC_PLUS, H_TC_MINUS,
             "Add or subtract the offset. The ruler shows the shifted timecode.");
-  g.box(x + 204, fy + 8, x + 304, fy + 36, kLine, kPanel);
-  g.text(st->fBody, kInk, formatTC(st->tcAbs, s.fps), x + 204, fy + 8, x + 304, fy + 36, DT_CENTER);
-  addHit(st, x + 204, fy + 8, x + 304, fy + 36, H_TC_VALUE, 0, "Click to type the offset as HH:MM:SS:FF.");
+  g.box(x + 204, fy + 8, x + 304, fy + 36, st->editKind == 1 ? kBlue : kLine, kPanel);
+  if (st->editKind != 1) g.text(st->fBody, kInk, formatTC(st->tcAbs, s.fps), x + 204, fy + 8, x + 304, fy + 36, DT_CENTER);
+  st->tcRc = {(LONG)g.X(x + 206), (LONG)g.Y(fy + 12), (LONG)g.X(x + 302), (LONG)g.Y(fy + 32)};
+  addHit(st, x + 204, fy + 8, x + 304, fy + 36, H_TC_VALUE, 0,
+         "Type the offset: HH:MM:SS:FF or just the digits (1000 = 10 seconds). Return applies, Esc cancels.");
   g.text(st->fSmall, kMute, "\xe2\x86\x92 Starts at", x + 312, fy + 8, x + 380, fy + 36, DT_LEFT);
   g.text(st->fBold, kInk, formatTC(s.firstClip() + tcOffset(st), s.fps), x + 380, fy + 8, x + 476, fy + 36, DT_LEFT);
   button(st, g, x + 484, fy + 8, x + 594, fy + 36, "Edit cursor", H_TC_CURSOR, 0,
@@ -401,7 +442,7 @@ void paintTimeline(State *st, const Gfx &g) {
   int ntr = (int)s.tracks.size();
   st->rowsTotal = ntr;
   st->scrollRow = std::max(0, std::min(st->scrollRow, std::max(0, ntr - kRows)));
-  st->rowsRc = {(LONG)g.S(tlx), (LONG)g.S(kRowsTop), (LONG)g.S(tlr), (LONG)g.S(kRowsBot)};
+  st->rowsRc = {(LONG)g.X(tlx), (LONG)g.Y(kRowsTop), (LONG)g.X(tlr), (LONG)g.Y(kRowsBot)};
   st->clipHits.clear();
   addHit(st, tlx, kRowsTop, tlr, kRowsBot, H_TIMELINE, 0,
          "Click selects, Shift-click adds, drag up or down moves events to another track.");
@@ -442,7 +483,7 @@ void paintTimeline(State *st, const Gfx &g) {
       if (x1 - x0 > 40 && !c.name.empty())
         g.text(st->fClip, c.excluded ? kMute : (tr.import ? kWhite : kMute), c.name, x0 + 4, y0 + 1, x1 - 3, y1 - 1, DT_LEFT);
       ClipHit h;
-      h.r = {(LONG)g.S(x0), (LONG)g.S(y0), (LONG)g.S(x1), (LONG)g.S(y1)};
+      h.r = {(LONG)g.X(x0), (LONG)g.Y(y0), (LONG)g.X(x1), (LONG)g.Y(y1)};
       h.id = c.id;
       h.row = row;
       st->clipHits.push_back(h);
@@ -460,8 +501,8 @@ void paintTimeline(State *st, const Gfx &g) {
   pos = std::max(0.0, std::min(1.0, pos));
   double tx = hl + (hr - hl - tw) * pos;
   g.fill(tx + 2, ht + 3, tx + tw - 2, hb - 2, frac < 1.0 ? theme().thumb : kSoft);
-  st->hTrack = {(LONG)g.S(hl), (LONG)g.S(ht), (LONG)g.S(hr), (LONG)g.S(hb)};
-  st->hThumb = {(LONG)g.S(tx), (LONG)g.S(ht), (LONG)g.S(tx + tw), (LONG)g.S(hb)};
+  st->hTrack = {(LONG)g.X(hl), (LONG)g.Y(ht), (LONG)g.X(hr), (LONG)g.Y(hb)};
+  st->hThumb = {(LONG)g.X(tx), (LONG)g.Y(ht), (LONG)g.X(tx + tw), (LONG)g.Y(hb)};
   addHit(st, hl, ht, hr, hb, H_NONE, 0, "Drag to move through time, or use + and \xe2\x88\x92 to zoom.");
 }
 
@@ -514,8 +555,16 @@ void paintTrackList(State *st, const Gfx &g) {
     } else
       g.text(st->fBody, nameC, tr.name, l + 60, y, nameR, y + kRowH, DT_LEFT);
     if (opt.folders) {
-      std::string grp = trackGroup(tr.name);
-      g.text(st->fClip, rgbToRef(groupColor(grp)), grp, l + 230, y, l + 300, y + kRowH, DT_LEFT);
+      const Folder *fd = tr.group.empty() ? nullptr : s.folder(tr.group);
+      bool open = st->folderTrack == ti;
+      if (open) g.box(l + 226, y + 5, l + 300, y + kRowH - 5, kBlue, kPanel);
+      if (fd) {
+        g.fill(l + 230, y + 11, l + 238, y + 19, fd->color ? rgbToRef(fd->color) : kMute);
+        g.text(st->fClip, kInk, fd->name, l + 242, y, l + 290, y + kRowH, DT_LEFT);
+      } else
+        g.text(st->fClip, kMute, "\xe2\x80\x93", l + 232, y, l + 290, y + kRowH, DT_LEFT);
+      g.text(st->fClip, kMute, "\xe2\x96\xbe", l + 286, y, l + 298, y + kRowH, DT_LEFT);
+      addHit(st, l + 226, y + 4, l + 300, y + kRowH - 4, H_FOLDER_CELL, ti, "Choose, rename, add or remove the folder this track goes into.");
     }
     int active = 0;
     for (auto &c : tr.clips) active += !c.excluded;
@@ -529,8 +578,8 @@ void paintTrackList(State *st, const Gfx &g) {
   double th = ntr > kRows ? std::max(24.0, (vb - vt) * kRows / ntr) : (vb - vt);
   double tp = ntr > kRows ? vt + (vb - vt - th) * st->scrollRow / (ntr - kRows) : vt;
   g.fill(vl + 3, tp + 2, vr - 2, tp + th - 2, ntr > kRows ? theme().thumb : kSoft);
-  st->vTrack = {(LONG)g.S(vl), (LONG)g.S(vt), (LONG)g.S(vr), (LONG)g.S(vb)};
-  st->vThumb = {(LONG)g.S(vl), (LONG)g.S(tp), (LONG)g.S(vr), (LONG)g.S(tp + th)};
+  st->vTrack = {(LONG)g.X(vl), (LONG)g.Y(vt), (LONG)g.X(vr), (LONG)g.Y(vb)};
+  st->vThumb = {(LONG)g.X(vl), (LONG)g.Y(tp), (LONG)g.X(vr), (LONG)g.Y(tp + th)};
   addHit(st, vl, vt, vr, vb, H_NONE, 0, "Drag to scroll through the tracks.");
 }
 
@@ -635,7 +684,7 @@ void paintOptions(State *st, const Gfx &g, double ch) {
       {"Clip gain", opt.clipGain, H_GAIN, "Clip gain becomes item volume, clip gain automation a take volume envelope.", true},
       {vLabel, opt.video && !s.video.empty(), H_VIDEO, "The picture the AAF points to, on a VIDEO track at the top.", !s.video.empty()},
       {mLabel, opt.markers && !s.markers.empty(), H_MARKERS, "Markers from the edit become REAPER markers.", !s.markers.empty()},
-      {"Folder tracks", opt.folders, H_FOLDERS, "Groups the tracks into DIALOG, FOLEY, FX, ATMO, MUSIC and OTHER folders.", true}};
+      {"Folder tracks", opt.folders, H_FOLDERS, "Creates folder tracks. Choose, rename or add the folders in the track list (Folder column).", true}};
   double colW = (r - l) / 2;
   for (int i = 0; i < 6; i++) {
     double x = l + 14 + (i / 3) * colW, y = t + 28 + (i % 3) * 27;
@@ -666,6 +715,67 @@ void paintOptions(State *st, const Gfx &g, double ch) {
          "Import the selected tracks into REAPER.", true, ntr > 0);
 }
 
+const double kFpRowH = 26, kFpW = 250;
+
+// where the folder popover sits (layout pixels)
+void folderPopoverRect(State *st, double *px, double *py, double *ph) {
+  int n = (int)st->imp->session().folders.size();
+  *ph = 30 + (n + 1) * kFpRowH + 42;
+  *px = kColR + 100;
+  *py = kRowsTop + (st->folderTrack - st->scrollRow + 1) * kRowH;
+  if (*py + *ph > H - 30) *py = kRowsTop + (st->folderTrack - st->scrollRow) * kRowH - *ph;
+  *py = std::max(*py, 60.0);
+}
+
+// the name cell of folder row i, in device pixels (for the in-place editor)
+RECT folderNameRect(State *st, int i) {
+  double px, py, ph;
+  folderPopoverRect(st, &px, &py, &ph);
+  double y = py + 30 + i * kFpRowH;
+  auto X = [&](double v) { return (LONG)std::lround(v * st->scale + st->ox); };
+  auto Y = [&](double v) { return (LONG)std::lround(v * st->scale + st->oy); };
+  return {X(px + 28), Y(y + 3), X(px + kFpW - 64), Y(y + kFpRowH - 3)};
+}
+
+void paintFolderPopover(State *st, const Gfx &g) {
+  Session &s = st->imp->session();
+  if (st->folderTrack < st->scrollRow || st->folderTrack >= st->scrollRow + kRows) return;
+  Track &tr = s.tracks[(size_t)st->folderTrack];
+  const double rowH = kFpRowH, pw = kFpW;
+  int n = (int)s.folders.size();
+  double px, py, ph;
+  folderPopoverRect(st, &px, &py, &ph);
+  g.box(px, py, px + pw, py + ph, kLine, kPanel);
+  addHit(st, px, py, px + pw, py + ph, H_FOLD_POP, 0, nullptr);
+  g.text(st->fSec, kMute, "FOLDER \xc2\xb7 " + tr.name, px + 10, py + 4, px + pw - 10, py + 26, DT_LEFT);
+  double y = py + 30;
+  for (int i = 0; i < n; i++, y += rowH) {
+    const Folder &f = s.folders[(size_t)i];
+    bool cur = tr.group == f.key;
+    if (cur) g.fill(px + 1, y, px + pw - 1, y + rowH, kBlueSoft);
+    g.fill(px + 12, y + 8, px + 22, y + 18, f.color ? rgbToRef(f.color) : kMute);
+    bool renaming = st->editKind == 2 && st->editKey == f.key;
+    if (!renaming) g.text(cur ? st->fBold : st->fBody, kInk, f.name, px + 30, y, px + pw - 64, y + rowH, DT_LEFT);
+    int nTr = 0;
+    for (auto &t : s.tracks) nTr += t.group == f.key;
+    g.text(st->fClip, kMute, std::to_string(nTr), px + pw - 84, y, px + pw - 62, y + rowH, DT_RIGHT);
+    addHit(st, px + 1, y, px + pw - 60, y + rowH, H_FOLD_ASSIGN, i, "Put the track into this folder.");
+    g.box(px + pw - 56, y + 3, px + pw - 34, y + rowH - 3, kLine, kPanel);
+    g.text(st->fBody, kInk, "\xe2\x9c\x8e", px + pw - 56, y + 3, px + pw - 34, y + rowH - 3, DT_CENTER);
+    addHit(st, px + pw - 56, y + 3, px + pw - 34, y + rowH - 3, H_FOLD_RENAME, i, "Rename this folder.");
+    g.box(px + pw - 30, y + 3, px + pw - 8, y + rowH - 3, kLine, kPanel);
+    g.text(st->fBody, kInk, "\xc3\x97", px + pw - 30, y + 3, px + pw - 8, y + rowH - 3, DT_CENTER);
+    addHit(st, px + pw - 30, y + 3, px + pw - 8, y + rowH - 3, H_FOLD_DELETE, i,
+           "Don't create this folder. Its tracks are imported outside any folder.");
+  }
+  bool none = tr.group.empty() || !s.folder(tr.group);
+  if (none) g.fill(px + 1, y, px + pw - 1, y + rowH, kBlueSoft);
+  g.text(none ? st->fBold : st->fBody, kMute, "No folder", px + 30, y, px + pw - 10, y + rowH, DT_LEFT);
+  addHit(st, px + 1, y, px + pw - 1, y + rowH, H_FOLD_NONE, 0, "Import this track outside any folder.");
+  y += rowH + 8;
+  button(st, g, px + 10, y, px + 130, y + 26, "+ New folder", H_FOLD_NEW, 0, "Add a folder and put this track into it.");
+}
+
 void paintPalette(State *st, const Gfx &g) {
   Session &s = st->imp->session();
   if (st->palTrack < st->scrollRow || st->palTrack >= st->scrollRow + kRows) return;
@@ -685,12 +795,16 @@ void paintPalette(State *st, const Gfx &g) {
 }
 
 void paint(State *st, HDC dc) {
-  Gfx g{dc, st->scale};
+  Gfx g{dc, st->scale, st->ox, st->oy};
   st->hits.clear();
   RECT cr;
   GetClientRect(st->hwnd, &cr);
-  double cw = cr.right / st->scale, ch = cr.bottom / st->scale;
-  g.fill(0, 0, cw, ch, kFace);
+  {
+    HBRUSH br = CreateSolidBrush(kFace);
+    FillRect(dc, &cr, br);
+    DeleteObject(br);
+  }
+  const double cw = W, ch = H; // the layout always has this size; the window zooms it
   paintHeader(st, g, cw);
   paintTimeline(st, g);
   paintTrackList(st, g);
@@ -698,6 +812,7 @@ void paint(State *st, HDC dc) {
   paintStatus(st, g, ch);
   paintOptions(st, g, ch);
   if (st->palTrack >= 0) paintPalette(st, g);
+  if (st->folderTrack >= 0 && st->opt->folders) paintFolderPopover(st, g);
   g.text(st->fSmall, kMute, st->tip ? st->tip : "Pick the tracks and events to import, check the options, then Import.",
          16, ch - 46, cw - 16, ch - 28, DT_LEFT);
   g.fill(16, ch - 26, cw - 16, ch - 25, kLine);
@@ -753,22 +868,90 @@ void moveSelectionBy(State *st, int delta) {
 
 void keepTrackChoices(State *st, const std::function<void()> &rebuild) {
   Session &s = st->imp->session();
-  std::vector<std::pair<std::string, std::pair<bool, uint32_t>>> keep;
-  for (auto &t : s.tracks) keep.push_back({t.name, {t.import, t.color}});
+  struct Keep { std::string name, group; bool import; uint32_t color; };
+  std::vector<Keep> keep;
+  for (auto &t : s.tracks) keep.push_back({t.name, t.group, t.import, t.color});
   rebuild();
   for (auto &t : s.tracks)
     for (auto &k : keep)
-      if (k.first == t.name) {
-        t.import = k.second.first;
-        t.color = k.second.second;
+      if (k.name == t.name) {
+        t.import = k.import;
+        t.color = k.color;
+        if (k.group.empty() || s.folder(k.group)) t.group = k.group;
       }
 }
+
+const int IDC_TCEDIT = 1001;
+
+void startEdit(State *st, int kind, RECT r, const std::string &text, const std::string &key = std::string()) {
+  if (!st->tcEdit) {
+#ifdef _WIN32
+    st->tcEdit = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL, 0, 0, 10, 10, st->hwnd,
+                                 (HMENU)(INT_PTR)IDC_TCEDIT, NULL, NULL);
+#else
+    SWELL_MakeSetCurParms(1.0f, 1.0f, 0, 0, st->hwnd, false, false);
+    st->tcEdit = SWELL_MakeEditField(IDC_TCEDIT, 0, 0, 10, 10, ES_AUTOHSCROLL);
+    SWELL_MakeSetCurParms(1.0f, 1.0f, 0, 0, NULL, false, false);
+#endif
+    if (!st->tcEdit) return;
+    SendMessage(st->tcEdit, WM_SETFONT, (WPARAM)st->fBody, 0);
+  }
+  st->editRc = r;
+  st->editKind = kind;
+  st->editKey = key;
+  SetWindowPos(st->tcEdit, NULL, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
+  SetWindowText(st->tcEdit, text.c_str());
+  ShowWindow(st->tcEdit, SW_SHOW);
+  SetFocus(st->tcEdit);
+  SendMessage(st->tcEdit, EM_SETSEL, 0, -1);
+  InvalidateRect(st->hwnd, NULL, FALSE);
+}
+
+void startTcEdit(State *st) { startEdit(st, 1, st->tcRc, formatTC(st->tcAbs, st->imp->session().fps)); }
+
+void endEdit(State *st, bool apply) {
+  if (!st->editKind || !st->tcEdit) return;
+  int kind = st->editKind;
+  st->editKind = 0; // first, so the focus change below does not come back here
+  char buf[256] = {0};
+  GetWindowText(st->tcEdit, buf, sizeof(buf));
+  std::string v = buf;
+  if (apply && kind == 1) {
+    double sec;
+    if (parseTC(v, st->imp->session().fps, &sec)) {
+      bool signGiven = v.find('-') != std::string::npos || v.find('+') != std::string::npos;
+      st->tcAbs = std::fabs(sec);
+      if (signGiven) st->tcMinus = v.find('-') != std::string::npos;
+      st->tcOn = true;
+      st->tip = nullptr;
+    } else
+      st->tip = "That is not a timecode. Use HH:MM:SS:FF or just the digits.";
+  }
+  if (apply && kind == 2) {
+    while (!v.empty() && (v.back() == ' ' || v.back() == '\t')) v.pop_back();
+    while (!v.empty() && (v[0] == ' ' || v[0] == '\t')) v.erase(0, 1);
+    if (Folder *f = st->imp->session().folder(st->editKey))
+      if (!v.empty()) f->name = v;
+  }
+  ShowWindow(st->tcEdit, SW_HIDE);
+  SetFocus(st->hwnd);
+  InvalidateRect(st->hwnd, NULL, FALSE);
+}
+
+void endTcEdit(State *st, bool apply) { endEdit(st, apply); }
 
 void click(State *st, int x, int y, bool shift) {
   Session &s = st->imp->session();
   ImportOptions &opt = *st->opt;
   const Hit *h = hitAt(st, x, y);
   int id = h ? h->id : H_NONE;
+  bool inFolderPop = id == H_FOLD_ASSIGN || id == H_FOLD_NONE || id == H_FOLD_RENAME || id == H_FOLD_DELETE ||
+                     id == H_FOLD_NEW || id == H_FOLD_POP;
+  if (st->folderTrack >= 0 && !inFolderPop && id != H_FOLDER_CELL) {
+    st->folderTrack = -1;
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    if (id == H_LIST || id == H_TIMELINE || id == H_NONE) return;
+  }
   if (st->palTrack >= 0 && id != H_PAL && id != H_PAL_CUSTOM && id != H_PAL_NONE && id != H_TRACK_COLOR) {
     st->palTrack = -1;
     InvalidateRect(st->hwnd, NULL, FALSE);
@@ -789,6 +972,31 @@ void click(State *st, int x, int y, bool shift) {
     break;
   }
   case H_TRACK_CHECK: s.tracks[(size_t)h->idx].import = !s.tracks[(size_t)h->idx].import; break;
+  case H_FOLDER_CELL:
+    st->folderTrack = st->folderTrack == h->idx ? -1 : h->idx;
+    st->palTrack = -1;
+    break;
+  case H_FOLD_ASSIGN:
+    s.tracks[(size_t)st->folderTrack].group = s.folders[(size_t)h->idx].key;
+    st->folderTrack = -1;
+    break;
+  case H_FOLD_NONE:
+    s.tracks[(size_t)st->folderTrack].group.clear();
+    st->folderTrack = -1;
+    break;
+  case H_FOLD_DELETE: st->imp->removeFolder(s.folders[(size_t)h->idx].key); break;
+  case H_FOLD_RENAME: {
+    const Folder &f = s.folders[(size_t)h->idx];
+    startEdit(st, 2, folderNameRect(st, h->idx), f.name, f.key);
+    return;
+  }
+  case H_FOLD_NEW: {
+    std::string key = st->imp->addFolder("New folder");
+    s.tracks[(size_t)st->folderTrack].group = key;
+    startEdit(st, 2, folderNameRect(st, (int)s.folders.size() - 1), "New folder", key);
+    return;
+  }
+  case H_FOLD_POP: return;
   case H_TRACK_COLOR: st->palTrack = st->palTrack == h->idx ? -1 : h->idx; break;
   case H_PAL: s.tracks[(size_t)st->palTrack].color = kPalette[h->idx]; st->palTrack = -1; break;
   case H_PAL_NONE: s.tracks[(size_t)st->palTrack].color = 0; st->palTrack = -1; break;
@@ -852,16 +1060,7 @@ void click(State *st, int x, int y, bool shift) {
   case H_TC_ON: st->tcOn = !st->tcOn; break;
   case H_TC_PLUS: st->tcMinus = false; st->tcOn = true; break;
   case H_TC_MINUS: st->tcMinus = true; st->tcOn = true; break;
-  case H_TC_VALUE: {
-    std::string v = formatTC(st->tcAbs, s.fps);
-    double sec;
-    if (st->host->askText && st->host->askText("olAAF", "Timecode offset (HH:MM:SS:FF)", &v) && parseTC(v, s.fps, &sec)) {
-      st->tcAbs = std::fabs(sec);
-      if (sec < 0) st->tcMinus = true;
-      st->tcOn = true;
-    }
-    break;
-  }
+  case H_TC_VALUE: startTcEdit(st); return;
   case H_TC_CURSOR: {
     if (st->host->editCursor) {
       double d = st->host->editCursor() - s.firstClip();
@@ -903,9 +1102,9 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     st->hwnd = hwnd;
 #ifdef _WIN32
     HDC dc = GetDC(hwnd);
-    st->scale = GetDeviceCaps(dc, LOGPIXELSX) / 96.0;
+    st->base = st->scale = GetDeviceCaps(dc, LOGPIXELSX) / 96.0;
     ReleaseDC(hwnd, dc);
-    RECT want = {0, 0, (LONG)std::lround(W * st->scale), (LONG)std::lround(H * st->scale)};
+    RECT want = {0, 0, (LONG)std::lround(W * st->base), (LONG)std::lround(H * st->base)};
     AdjustWindowRectEx(&want, (DWORD)GetWindowLongPtr(hwnd, GWL_STYLE), FALSE, (DWORD)GetWindowLongPtr(hwnd, GWL_EXSTYLE));
     int w = want.right - want.left, h = want.bottom - want.top;
     RECT pr;
@@ -915,7 +1114,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                    std::max((int)pr.top, (int)(pr.top + pr.bottom - h) / 2), w, h, SWP_NOZORDER);
 #endif
     SetWindowText(hwnd, "olAAF - AAF Import for Reaper");
-    makeFonts(st);
+    relayout(st);
     double a, b;
     sessionRange(st->imp->session(), &a, &b);
     st->viewStart = a - (b - a) * 0.02;
@@ -924,6 +1123,20 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return 0;
   }
   case WM_ERASEBKGND: return 1;
+  case WM_SIZE:
+    if (st) {
+      if (st->editKind) endEdit(st, true);
+      relayout(st);
+      InvalidateRect(hwnd, NULL, FALSE);
+    }
+    return 0;
+  case WM_GETMINMAXINFO: {
+    MINMAXINFO *mm = (MINMAXINFO *)lp;
+    double b = st ? st->base : 1.0;
+    mm->ptMinTrackSize.x = (LONG)(W * b * 0.6);
+    mm->ptMinTrackSize.y = (LONG)(H * b * 0.6);
+    return 0;
+  }
   case WM_PAINT: {
     PAINTSTRUCT ps;
     HDC dc = BeginPaint(hwnd, &ps);
@@ -946,6 +1159,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   }
   case WM_LBUTTONDOWN: {
     POINT p = {(short)LOWORD(lp), (short)HIWORD(lp)};
+    if (st->editKind && !PtInRect(&st->editRc, p)) endEdit(st, true); // clicking elsewhere applies what was typed
     st->dragMoved = false;
     st->pressedClip = 0;
     if (PtInRect(&st->vTrack, p) && st->rowsTotal > kRows) {
@@ -1050,16 +1264,38 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return 0;
   }
   case WM_COMMAND:
-    if (LOWORD(wp) == IDCANCEL) EndDialog(hwnd, 0);
+    if (LOWORD(wp) == IDC_TCEDIT) {
+      if (HIWORD(wp) == EN_KILLFOCUS) endEdit(st, true);
+      return 0;
+    }
+    if (LOWORD(wp) == IDOK) {
+      if (st->editKind) endEdit(st, true); // Return applies what was typed
+      return 0;
+    }
+    if (LOWORD(wp) == IDCANCEL) {
+      if (st->editKind) endEdit(st, false); // Esc leaves the field, not the dialog
+      else if (st->folderTrack >= 0 || st->palTrack >= 0) {
+        st->folderTrack = st->palTrack = -1;
+        InvalidateRect(hwnd, NULL, FALSE);
+      } else EndDialog(hwnd, 0);
+    }
     return 0;
+#ifdef _WIN32
+  case WM_CTLCOLOREDIT: {
+    if (st->editBrush) DeleteObject(st->editBrush);
+    st->editBrush = CreateSolidBrush(kPanel);
+    SetTextColor((HDC)wp, kInk);
+    SetBkColor((HDC)wp, kPanel);
+    return (INT_PTR)st->editBrush;
+  }
+#endif
   case WM_CLOSE:
     EndDialog(hwnd, 0);
     return 0;
   case WM_DESTROY:
     if (st) {
-      HFONT fs[] = {st->fTheme, st->fCheck, st->fClip, st->fTitle, st->fTitleThin, st->fTag, st->fBody, st->fBold, st->fSmall, st->fSec, st->fLogo};
-      for (HFONT f : fs)
-        if (f) DeleteObject(f);
+      freeFonts(st);
+      if (st->editBrush) DeleteObject(st->editBrush);
     }
     return 0;
   }
@@ -1087,6 +1323,10 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   st.hwnd = (HWND)1;
   st.merge = opt.mergeStereo;
   st.palTrack = palTrack;
+  if (palTrack <= -2) { // -2 - n: folder popover of track n
+    st.palTrack = -1;
+    st.folderTrack = -2 - palTrack;
+  }
   st.tip = tip;
   makeFonts(&st);
   double a, b;
@@ -1115,7 +1355,7 @@ bool showImportDialog(HWND parent, Importer &imp, ImportOptions &opt, const Dial
 #ifdef _WIN32
   DlgTemplate dt;
   memset(&dt, 0, sizeof(dt));
-  dt.t.style = WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME;
+  dt.t.style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX;
   dt.t.cx = 600;
   dt.t.cy = 400;
   wcscpy(dt.title, L"olAAF");

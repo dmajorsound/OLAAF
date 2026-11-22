@@ -1,6 +1,8 @@
 // olAAF - AAF import for REAPER
 // Copyright (C) 2026 dmajorsound. Licensed under the GNU GPL v2 or later.
 
+#include <cstdlib>
+#include <vector>
 #include "util.h"
 #include "model.h"
 
@@ -187,13 +189,37 @@ std::string formatTC(double seconds, double fps) {
 }
 
 bool parseTC(const std::string &s, double fps, double *seconds) {
-  int h = 0, m = 0, sec = 0, f = 0;
-  bool neg = !s.empty() && s[0] == '-';
-  const char *p = s.c_str() + (neg || (!s.empty() && s[0] == '+') ? 1 : 0);
-  if (sscanf(p, "%d:%d:%d:%d", &h, &m, &sec, &f) != 4 && sscanf(p, "%d:%d:%d;%d", &h, &m, &sec, &f) != 4)
-    return false;
-  double v = h * 3600.0 + m * 60.0 + sec + f / fps;
-  *seconds = neg ? -v : v;
+  // accepts "10:00:00:00", "10;00;00;00", "10.00.00.00" and plain digits ("10000000", "1000" = 00:00:10:00);
+  // fields are filled from the right (frames, seconds, minutes, hours) like a timecode keypad
+  std::string t;
+  for (char c : s)
+    if (c != ' ' && c != '\t') t += c;
+  bool neg = !t.empty() && t[0] == '-';
+  if (!t.empty() && (t[0] == '-' || t[0] == '+')) t.erase(0, 1);
+  if (t.empty()) return false;
+  std::vector<std::string> groups(1);
+  for (char c : t) {
+    if (c >= '0' && c <= '9') groups.back() += c;
+    else if (c == ':' || c == ';' || c == '.') groups.emplace_back();
+    else return false;
+  }
+  int v[4] = {0, 0, 0, 0}; // frames, seconds, minutes, hours
+  if (groups.size() == 1) {
+    std::string d = groups[0];
+    if (d.size() > 8) return false;
+    d = std::string(8 - d.size(), '0') + d;
+    for (int i = 0; i < 4; i++) v[3 - i] = atoi(d.substr((size_t)i * 2, 2).c_str());
+  } else {
+    if (groups.size() > 4) return false;
+    for (size_t i = 0; i < groups.size(); i++) {
+      const std::string &g = groups[groups.size() - 1 - i];
+      if (g.size() > 3) return false;
+      v[i] = g.empty() ? 0 : atoi(g.c_str());
+    }
+  }
+  if (v[1] > 59 || v[2] > 59 || v[0] >= (int)std::ceil(fps)) return false;
+  double sec = v[3] * 3600.0 + v[2] * 60.0 + v[1] + v[0] / fps;
+  *seconds = neg ? -sec : sec;
   return true;
 }
 
