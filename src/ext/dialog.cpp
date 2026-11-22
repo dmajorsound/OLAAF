@@ -176,6 +176,9 @@ struct State {
   int dropRow = -1;        // slot (line above that row) the selected tracks would be dropped at
   int dragMouseY = 0;
   int rangeFromRow = -1;   // dragging over names selects from this row
+  unsigned lastNameClick = 0; // double-click on a track name renames it
+  int lastNameTrack = -1;
+  RECT nameRc{};
   std::set<int> sel;       // selected clip ids
   bool moveAutomation = true;
   bool edited = false;
@@ -189,7 +192,8 @@ struct State {
   double fpX = 0, fpY = 0, fpY0 = 0;
   // in-place text editor
   HWND tcEdit = nullptr;
-  int editKind = 0;        // 0 none, 1 timecode offset, 2 folder name, 3 audio subfolder
+  int editKind = 0;        // 0 none, 1 timecode offset, 2 folder name, 3 audio subfolder, 4 track name
+  int editTrack = -1;
   std::string editKey;
   RECT tcRc{}, subRc{}, editRc{};
   HBRUSH editBrush = nullptr;
@@ -730,6 +734,7 @@ void paintArrange(State *st, const Gfx &g) {
       nameR -= 34;
     }
     COLORREF nameC = (on && !grabbed) ? kInk : kMute;
+    if (st->editKind == 4 && st->editTrack == row.track) nameC = trSel ? kBlueSoft : kPanel; // the editor sits on top
     double nx = hx + 48;
     if (!tr.mergedFrom.empty()) {
       g.text(st->fBody, nameC, tr.name, nx, y + 1, nameR, y + 18, DT_LEFT);
@@ -739,7 +744,7 @@ void paintArrange(State *st, const Gfx &g) {
     if (!on) g.fill(nx, y + kRowH / 2, std::min(nameR, nx + g.width(st->fBody, tr.name)), y + kRowH / 2 + 1, kMute);
     if (grabbed) g.fill(kL + kHdr - 3, y, kL + kHdr, y + kRowH - 1, kBlue); // picked up
     addHit(st, hx + 44, y + 2, nameR, y + kRowH - 2, H_TRACK_NAME, row.track,
-           "Click selects, Shift or Cmd / Ctrl-click adds. Drag over names to select several, drag selected names to move them.");
+           "Click selects, Shift or Cmd / Ctrl-click adds, double-click renames. Drag over names to select several, drag selected names to move them.");
     int active = 0;
     for (auto &c : tr.clips) active += !c.excluded;
     g.text(st->fSmall, tr.created ? kBlue : kMute, tr.created ? "NEW" : std::to_string(active), kL + kHdr - 34, y,
@@ -1263,6 +1268,8 @@ void endEdit(State *st, bool apply) {
     if (Folder *f = st->imp->session().folder(st->editKey))
       if (!v.empty()) f->name = v;
   if (apply && kind == 3 && !v.empty()) st->opt->subdir = safeFileName(v);
+  if (apply && kind == 4 && !v.empty() && st->editTrack >= 0 && st->editTrack < (int)st->imp->session().tracks.size())
+    st->imp->session().tracks[(size_t)st->editTrack].name = v;
   ShowWindow(st->tcEdit, SW_HIDE);
   SetFocus(st->hwnd);
   InvalidateRect(st->hwnd, NULL, FALSE);
@@ -1632,6 +1639,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       // track names: select now (or on release with a modifier) and maybe drag into a folder
       // selected name: drag moves the selection; unselected name: drag selects a range
       int t = hitAt(st, p.x, p.y)->idx;
+      st->nameRc = hitAt(st, p.x, p.y)->r;
       st->pressedTrack = -1;
       if (shiftDown() || ctrlDown() || st->selTracks.count(t)) {
         st->pressedTrack = t;
@@ -1675,6 +1683,25 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     st->drag = 0;
     st->dragMoved = false;
     if (drag == 4 || drag == 5 || drag == 6) {
+      // a double-click on a name (without moving) renames the track
+      int hitTrack = -1;
+      if (const Hit *hh = hitAt(st, p.x, p.y))
+        if (hh->id == H_TRACK_NAME) hitTrack = hh->idx;
+      unsigned now = GetTickCount();
+      if (!moved && hitTrack >= 0 && hitTrack == st->lastNameTrack && now - st->lastNameClick < 450 && !shiftDown() &&
+          !ctrlDown()) {
+        st->lastNameTrack = -1;
+        st->selTracks.clear();
+        st->selTracks.insert(hitTrack);
+        st->editTrack = hitTrack;
+        startEdit(st, 4, st->nameRc, st->imp->session().tracks[(size_t)hitTrack].name);
+        st->pressedTrack = -1;
+        return 0;
+      }
+      if (!moved) {
+        st->lastNameClick = now;
+        st->lastNameTrack = hitTrack;
+      }
       if (drag == 4 && moved && st->dropRow >= 0) dropTracks(st, st->dropRow);
       else if (drag != 5 && st->pressedTrack >= 0) {
         int t = st->pressedTrack;
