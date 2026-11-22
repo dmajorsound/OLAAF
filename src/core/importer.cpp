@@ -107,6 +107,7 @@ bool Importer::load(const std::string &aafPath, const ImportOptions &opt, std::s
   for (auto &t : s_.tracks)
     for (auto &c : t.clips) c.id = id++;
   assignDefaultFolders();
+  assignUids();
   return true;
 }
 
@@ -303,6 +304,33 @@ void Importer::moveClips(const std::vector<int> &ids, int target, bool withAutom
   }
 }
 
+void Importer::assignUids() {
+  int u = 1;
+  for (auto &t : s_.tracks) {
+    t.uid = u++;
+    for (auto &c : t.clips) c.home = t.uid;
+  }
+}
+
+bool Importer::removeCreatedTrack(int track, bool withAutomation) {
+  if (track < 0 || track >= (int)s_.tracks.size() || !s_.tracks[(size_t)track].created) return false;
+  std::vector<int> ids;
+  for (auto &c : s_.tracks[(size_t)track].clips) ids.push_back(c.id);
+  for (int id : ids) {
+    Clip *c = findClip(id);
+    if (!c) continue;
+    int home = -1;
+    for (size_t i = 0; i < s_.tracks.size(); i++)
+      if (s_.tracks[i].uid == c->home && !s_.tracks[i].created) home = (int)i;
+    if (home < 0) // its AAF track is gone (should not happen): leave it out instead of losing it silently
+      for (size_t i = 0; i < s_.tracks.size(); i++)
+        if (!s_.tracks[i].created) { home = (int)i; c->excluded = true; break; }
+    if (home >= 0) moveClips({id}, home, withAutomation);
+  }
+  s_.tracks.erase(s_.tracks.begin() + track);
+  return true;
+}
+
 int Importer::addTrack(int like) {
   Track t;
   int n = 1;
@@ -310,6 +338,9 @@ int Importer::addTrack(int like) {
     if (x.created) n++;
   t.name = strprintf("New track %d", n);
   t.created = true;
+  int maxUid = 0;
+  for (auto &x : s_.tracks) maxUid = std::max(maxUid, x.uid);
+  t.uid = maxUid + 1;
   if (like >= 0 && like < (int)s_.tracks.size()) {
     t.channels = s_.tracks[(size_t)like].channels;
     t.group = s_.tracks[(size_t)like].group;
@@ -341,6 +372,7 @@ int Importer::setMergeStereo(bool on) {
   }
   s_.tracks = unmerged_;
   int n = on ? mergeStereoTracks() : 0;
+  assignUids();
   // keep the folders as the user set them up; tracks go back to their folder by name
   for (auto &t : s_.tracks) t.group = s_.folder(trackGroup(t.name)) ? trackGroup(t.name) : std::string();
   return n;

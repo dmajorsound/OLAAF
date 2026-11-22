@@ -60,6 +60,7 @@ struct Clip {
   std::string outPath;     // file used by REAPER for this clip (set by media stage)
   int chanMode = 0;        // REAPER take channel mode (0 normal, 3 left, 4 right)
   int id = 0;              // unique within the session (selection in the dialog)
+  int home = 0;            // uid of the AAF track it came from (to send it back from a deleted new track)
   bool excluded = false;   // removed from the import in the dialog
 };
 
@@ -82,6 +83,7 @@ struct Track {
   std::vector<Clip> clips;
   bool import = true;
   bool created = false;   // added in the dialog to move events onto; skipped when it stays empty
+  int uid = 0;            // stable id (tracks can be reordered)
   uint32_t color = 0;     // 0xRRGGBB, 0 = no color
   double volume = 1.0;    // constant track fader gain from the AAF
   double pan = 0.0;       // -1 left .. +1 right

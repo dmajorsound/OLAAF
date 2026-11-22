@@ -71,6 +71,9 @@ public:
   Clip *findClip(int id, int *track = nullptr);
   // Appends an empty track (same channel count and folder as `like`) and returns its index.
   int addTrack(int like);
+  // Deletes a track added in the dialog; its events go back to the AAF tracks they came from.
+  // AAF tracks cannot be deleted (returns false).
+  bool removeCreatedTrack(int track, bool withAutomation);
   // Puts the tracks in a new order: newOrder lists every track index once (new position -> old index).
   void reorderTracks(const std::vector<int> &newOrder);
   // Track color as imported: its own color, otherwise the color of its folder (when folders are on)
@@ -92,6 +95,7 @@ public:
   std::string projectRpp(const ImportOptions &opt) const;
 
 private:
+  void assignUids();
   Session s_;
   std::unique_ptr<AafFile> aaf_;
   std::vector<Track> unmerged_;

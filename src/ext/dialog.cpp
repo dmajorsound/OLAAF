@@ -123,7 +123,7 @@ enum HitId {
   H_CANCEL, H_IMPORT, H_TC_PLUS, H_TC_MINUS, H_TC_VALUE, H_TC_CURSOR, H_PAL, H_PAL_CUSTOM, H_PAL_NONE,
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
-  H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU
+  H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE
 };
 
 struct Hit {
@@ -747,8 +747,11 @@ void paintArrange(State *st, const Gfx &g) {
            "Click selects, Shift or Cmd / Ctrl-click adds, double-click renames. Drag over names to select several, drag selected names to move them.");
     int active = 0;
     for (auto &c : tr.clips) active += !c.excluded;
-    g.text(st->fSmall, tr.created ? kBlue : kMute, tr.created ? "NEW" : std::to_string(active), kL + kHdr - 34, y,
-           kL + kHdr - 8, y + kRowH, DT_RIGHT);
+    if (tr.created) { // a track added here can be deleted again; AAF tracks cannot
+      button(st, g, kL + kHdr - 26, y + 7, kL + kHdr - 8, y + kRowH - 7, "\xc3\x97", H_TRACK_DELETE, row.track,
+             "Delete this new track. Its events go back to the AAF tracks they came from.");
+    } else
+      g.text(st->fSmall, kMute, std::to_string(active), kL + kHdr - 34, y, kL + kHdr - 8, y + kRowH, DT_RIGHT);
 
     // events
     for (auto &c : tr.clips) {
@@ -1347,6 +1350,13 @@ void click(State *st, int x, int y, bool shift) {
     st->fpY0 = (h->r.top - st->oy) / st->scale - 2;
     break;
   }
+  case H_TRACK_DELETE:
+    if (st->imp->removeCreatedTrack(h->idx, st->moveAutomation)) {
+      st->selTracks.clear();
+      st->folderTrack = st->palTrack = -1;
+      st->palFolder.clear();
+    }
+    break;
   case H_NEW_FOLDER: {
     // a new folder, with the selected tracks in it; then type its name
     std::string key = st->imp->addFolder("New folder");
