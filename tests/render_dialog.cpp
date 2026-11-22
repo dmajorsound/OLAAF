@@ -36,17 +36,18 @@ static int mDraw(HDC, const char *buf, int, RECT *r, int align) {
   char t[1024]; const char *anchor = (align & DT_CENTER) ? "middle" : (align & DT_RIGHT) ? "end" : "start";
   int x = (align & DT_CENTER) ? (r->left + r->right) / 2 : (align & DT_RIGHT) ? r->right : r->left;
   clipN++;
-  snprintf(t, 1024, "<clipPath id='c%d'><rect x='%ld' y='%ld' width='%ld' height='%ld'/></clipPath><text clip-path='url(#c%d)' x='%d' y='%ld' font-family='Helvetica, Arial, sans-serif' font-size='%d' font-weight='%s' fill='%s' text-anchor='%s' dominant-baseline='central'>",
-           clipN, r->left, r->top, r->right - r->left, r->bottom - r->top, clipN, x, (r->top + r->bottom) / 2, curFont.h, curFont.bold ? "bold" : "normal", hex(curText).c_str(), anchor);
+  snprintf(t, 1024, "<clipPath id='c%d'><rect x='%ld' y='%ld' width='%ld' height='%ld'/></clipPath><text clip-path='url(#c%d)' x='%d' y='%ld' font-family='Helvetica, Arial, sans-serif' font-size='%d' font-weight='%s' fill='%s' text-anchor='%s' dominant-baseline='%s'>",
+           clipN, r->left, r->top, r->right - r->left, r->bottom - r->top, clipN, x, (align & DT_VCENTER) ? (r->top + r->bottom) / 2 : r->top + (long)(curFont.h * 0.95), curFont.h, curFont.bold ? "bold" : "normal", hex(curText).c_str(), anchor, (align & DT_VCENTER) ? "central" : "alphabetic");
   svg += t; svg += esc(buf); svg += "</text>\n"; return 0; }
 static void mPoly(HDC, POINT *p, int n) { svg += "<polygon points='"; char t[32]; for (int i = 0; i < n; i++) { snprintf(t, 32, "%ld,%ld ", p[i].x, p[i].y); svg += t; } svg += "' fill='" + hex(curBrush) + "'/>\n"; }
+static BOOL mTm(HDC, TEXTMETRIC *tm) { tm->tmHeight = (int)(curFont.h * 1.2); tm->tmInternalLeading = tm->tmHeight - curFont.h; tm->tmAscent = (int)(curFont.h * 0.95); tm->tmDescent = tm->tmHeight - tm->tmAscent; return 1; }
 static void mClient(HWND, RECT *r) { r->left = r->top = 0; r->right = 1180; r->bottom = 800; }
 static BOOL mPt(const RECT *r, POINT p) { return p.x >= r->left && p.x < r->right && p.y >= r->top && p.y < r->bottom; }
 
 int main(int argc, char **argv) {
   CreateSolidBrush = mBrush; CreatePen = mPen; CreateFont = mFont; SelectObject = mSelect; DeleteObject = mDelete;
   SWELL_FillRect = mFill; MoveToEx = mMove; SWELL_LineTo = mLine; SetTextColor = mTextColor; SetBkMode = mBk;
-  SWELL_DrawText = mDraw; GetClientRect = mClient; SWELL_PtInRect = mPt; SWELL_Polygon = mPoly;
+  SWELL_DrawText = mDraw; GetClientRect = mClient; SWELL_PtInRect = mPt; SWELL_Polygon = mPoly; GetTextMetrics = mTm;
   Importer imp; ImportOptions opt; std::string err;
   if (!imp.load(argv[1], opt, &err)) { printf("%s\n", err.c_str()); return 1; }
   opt.destDir = "/Users/dmajor/Documents/REAPER Media";

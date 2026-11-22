@@ -40,13 +40,19 @@ int drawDmajorLogo(HDC dc, int right, int midY, int markH, COLORREF markColor, C
   DrawText(dc, url, -1, &m, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
   int tw = m.right - m.left;
   int tr = left - (int)std::lround(markH * 0.5);
-  // DrawText centers the whole line box (ascent + descent); lowercase type then sits optically high,
-  // so it is nudged down a little to line up with the middle of the mark
-  int nudge = (int)std::lround(markH * 0.07);
-  RECT rc = {tr - tw - 2, midY - markH + nudge, tr, midY + markH + nudge};
+  // put the middle of the capital / ascender height on the middle of the mark: baseline = mid + cap/2
+  TEXTMETRIC tm;
+  memset(&tm, 0, sizeof(tm));
+  GetTextMetrics(dc, &tm);
+  int em = tm.tmHeight - tm.tmInternalLeading;
+  if (em <= 0) em = markH;
+  int cap = (int)std::lround(em * 0.71);
+  int baseline = midY + (cap + 1) / 2;
+  int top2 = baseline - (tm.tmAscent > 0 ? tm.tmAscent : em);
+  RECT rc = {tr - tw - 2, top2, tr, top2 + (tm.tmHeight > 0 ? tm.tmHeight : em + em / 4)};
   SetTextColor(dc, textColor);
   SetBkMode(dc, TRANSPARENT);
-  DrawText(dc, url, -1, &rc, DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX);
+  DrawText(dc, url, -1, &rc, DT_SINGLELINE | DT_TOP | DT_RIGHT | DT_NOPREFIX);
   SelectObject(dc, oldF);
   return rc.left;
 }
