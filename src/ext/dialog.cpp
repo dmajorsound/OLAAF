@@ -93,7 +93,7 @@ const uint32_t kPalette[10] = {0x5580d4, 0x1F9A8A, 0x4E8F3A, 0xB8962E, 0xD9822B,
 COLORREF rgbToRef(uint32_t c) { return RGB((c >> 16) & 255, (c >> 8) & 255, c & 255); }
 
 enum HitId {
-  H_NONE, H_TRACK_CHECK, H_TRACK_COLOR, H_SEL_ALL, H_SEL_NONE, H_ZOOM_IN, H_ZOOM_OUT, H_MERGE, H_FADES, H_GAIN,
+  H_NONE, H_ZOOM_FIT, H_TRACK_CHECK, H_TRACK_COLOR, H_SEL_ALL, H_SEL_NONE, H_ZOOM_IN, H_ZOOM_OUT, H_MERGE, H_FADES, H_GAIN,
   H_COPY_YES, H_COPY_NO, H_SUBDIR, H_DEST, H_DEST_CHOOSE, H_LOCATE, H_CANCEL, H_IMPORT, H_TC_ON, H_TC_PLUS,
   H_TC_MINUS, H_TC_VALUE, H_TC_CURSOR, H_PAL, H_PAL_CUSTOM, H_PAL_NONE, H_LIST, H_TIMELINE
 };
@@ -288,7 +288,7 @@ void paint(State *st, HDC dc) {
   checkbox(st, g, x, fy + 16, st->tcOn, H_TC_ON, "Timecode offset: shifts every clip by this amount on import.");
   g.text(st->fBody, kInk, "Timecode offset", x + 24, fy + 10, x + 140, fy + 38, DT_LEFT);
   segmented(st, g, x + 140, fy + 10, 56, 28, "+", "\xe2\x88\x92", !st->tcMinus, H_TC_PLUS, H_TC_MINUS,
-            "Add or subtract the offset.");
+            "Add or subtract the offset. The ruler shows the shifted timecode.");
   g.box(x + 204, fy + 10, x + 304, fy + 38, kLine, kPanel);
   g.text(st->fBody, kInk, formatTC(st->tcAbs, s.fps), x + 204, fy + 10, x + 304, fy + 38, DT_CENTER);
   addHit(st, x + 204, fy + 10, x + 304, fy + 38, H_TC_VALUE, 0, "Click to type the offset as HH:MM:SS:FF.");
@@ -375,6 +375,7 @@ void paint(State *st, HDC dc) {
   button(st, g, lx + 306, ly + 7, lx + 360, ly + 33, "None", H_SEL_NONE, 0, "Deselect every track.");
   g.fill(lx + 372, ly + 12, lx + 373, ly + 28, kLine);
   g.text(st->fSec, kMute, "PREVIEW", lx + 384, ly, lx + 470, ly + 40, DT_LEFT);
+  button(st, g, lr - 124, ly + 7, lr - 76, ly + 33, "Fit", H_ZOOM_FIT, 0, "Show the whole project.");
   button(st, g, lr - 70, ly + 7, lr - 42, ly + 33, "\xe2\x88\x92", H_ZOOM_OUT, 0, "Zoom out. Shift + mouse wheel scrolls the timeline.");
   button(st, g, lr - 36, ly + 7, lr - 8, ly + 33, "+", H_ZOOM_IN, 0, "Zoom in. Shift + mouse wheel scrolls the timeline.");
 
@@ -546,6 +547,13 @@ void click(State *st, int x, int y) {
   }
   case H_SEL_ALL: for (auto &t : s.tracks) t.import = true; break;
   case H_SEL_NONE: for (auto &t : s.tracks) t.import = false; break;
+  case H_ZOOM_FIT: {
+    double a, b;
+    sessionRange(s, &a, &b);
+    st->viewStart = a - (b - a) * 0.02;
+    st->viewLen = (b - a) * 1.04;
+    break;
+  }
   case H_ZOOM_IN: st->viewStart += st->viewLen * 0.25; st->viewLen *= 0.5; break;
   case H_ZOOM_OUT: st->viewStart -= st->viewLen * 0.5; st->viewLen *= 2.0; break;
   case H_MERGE: {
@@ -659,6 +667,8 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     sessionRange(st->imp->session(), &a, &b);
     st->viewStart = a - (b - a) * 0.02;
     st->viewLen = (b - a) * 1.04;
+    // offer the start hour as offset (10:00:00:00 -> 00:00:00:00 with one click on minus)
+    st->tcAbs = std::floor(st->imp->session().firstClip() / 3600.0) * 3600.0;
     return 0;
   }
   case WM_ERASEBKGND: return 1;

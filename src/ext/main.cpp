@@ -32,6 +32,7 @@
 #define REAPERAPI_WANT_GetTrack
 #define REAPERAPI_WANT_GetUserFileNameForRead
 #define REAPERAPI_WANT_InsertTrackAtIndex
+#define REAPERAPI_WANT_Main_OnCommand
 #define REAPERAPI_WANT_PreventUIRefresh
 #define REAPERAPI_WANT_SetMediaTrackInfo_Value
 #define REAPERAPI_WANT_SetTrackStateChunk
@@ -186,6 +187,8 @@ static void importIntoProject() {
   }
   PreventUIRefresh(-1);
   TrackList_AdjustWindows(false);
+  // build the waveforms right away instead of when the items are first drawn
+  Main_OnCommand(40047, 0); // Peaks: Build any missing peaks
   UpdateArrange();
   Undo_EndBlock2(nullptr, "olAAF: Import AAF", -1);
 
