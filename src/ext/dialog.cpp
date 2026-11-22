@@ -32,10 +32,43 @@ SWELL_DEFINE_DIALOG_RESOURCE_END(IDD_OLAAF_IMPORT)
 #define OL_GETUSER(h) GetWindowLongPtr(h, GWLP_USERDATA)
 #define OL_SETUSER(h, v) SetWindowLongPtr(h, GWLP_USERDATA, (LONG_PTR)(v))
 #endif
+#ifdef _WIN32
+#include <shlobj.h>
+#endif
 #undef min
 #undef max
 
 namespace olaaf {
+
+// native folder chooser (macOS / Linux through SWELL, Windows through the shell)
+static bool pickFolder(HWND parent, const char *title, const std::string &start, std::string *out) {
+#ifdef _WIN32
+  (void)start;
+  wchar_t wtitle[256];
+  MultiByteToWideChar(CP_UTF8, 0, title, -1, wtitle, 256);
+  BROWSEINFOW bi;
+  memset(&bi, 0, sizeof(bi));
+  bi.hwndOwner = parent;
+  bi.lpszTitle = wtitle;
+  bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+  PIDLIST_ABSOLUTE pidl = SHBrowseForFolderW(&bi);
+  if (!pidl) return false;
+  wchar_t wpath[MAX_PATH * 4];
+  bool ok = SHGetPathFromIDListW(pidl, wpath) != 0;
+  CoTaskMemFree(pidl);
+  if (!ok) return false;
+  char buf[MAX_PATH * 8];
+  WideCharToMultiByte(CP_UTF8, 0, wpath, -1, buf, sizeof(buf), NULL, NULL);
+  *out = buf;
+  return true;
+#else
+  (void)parent;
+  char buf[4096] = {0};
+  if (!BrowseForDirectory(title, start.empty() ? NULL : start.c_str(), buf, sizeof(buf)) || !buf[0]) return false;
+  *out = buf;
+  return true;
+#endif
+}
 
 static void *g_hInst = nullptr;
 void dialogSetInstance(void *h) { g_hInst = h; }
@@ -85,9 +118,16 @@ struct State {
   bool tcOn = false, tcMinus = true;
   double tcAbs = 0;   // offset size in seconds
   int palTrack = -1;  // track whose color palette is open
+  // scrollbars (client pixels), filled in by paint()
+  RECT vTrack{}, vThumb{}, hTrack{}, hThumb{};
+  int rowsVisible = 1, rowsTotal = 0;
+  double rangeA = 0, rangeB = 1;
+  int drag = 0; // 1 vertical thumb, 2 horizontal thumb
+  int dragFrom = 0;
+  double dragValue = 0;
   bool merge = true;
   bool accepted = false;
-  HFONT fTitle = nullptr, fTitleThin = nullptr, fTag = nullptr, fBody = nullptr, fBold = nullptr, fSmall = nullptr, fSec = nullptr;
+  HFONT fCheck = nullptr, fClip = nullptr, fTitle = nullptr, fTitleThin = nullptr, fTag = nullptr, fBody = nullptr, fBold = nullptr, fSmall = nullptr, fSec = nullptr;
 };
 
 HFONT makeFont(double px, bool bold, double scale) {
@@ -157,10 +197,7 @@ void addHit(State *st, double l, double t, double r, double b, int id, int idx, 
 void checkbox(State *st, const Gfx &g, double x, double y, bool on, int id, const char *tip) {
   if (on) {
     g.box(x, y, x + 16, y + 16, kBlue, kBlue);
-    g.line(x + 3.5, y + 8.5, x + 6.5, y + 11.5, kPanel);
-    g.line(x + 6.5, y + 11.5, x + 12.5, y + 4.5, kPanel);
-    g.line(x + 3.5, y + 9.5, x + 6.5, y + 12.5, kPanel);
-    g.line(x + 6.5, y + 12.5, x + 12.5, y + 5.5, kPanel);
+    g.text(st->fCheck, kPanel, "\xe2\x9c\x93", x, y, x + 16, y + 16, DT_CENTER);
   } else
     g.box(x, y, x + 16, y + 16, RGB(0xa9, 0xaf, 0xb8), kPanel);
   addHit(st, x - 4, y - 4, x + 20, y + 20, id, 0, tip);
@@ -292,7 +329,7 @@ void paint(State *st, HDC dc) {
   g.text(st->fBody, kInk, opt.destDir, ax + 22, my + 160, ar - 110, my + 188, DT_LEFT);
   addHit(st, ax + 14, my + 160, ar - 104, my + 188, H_DEST, 0, "Click to type a destination folder.");
   button(st, g, ar - 96, my + 160, ar - 14, my + 188, "Choose\xe2\x80\xa6", H_DEST_CHOOSE, 0,
-         "Pick any file inside the folder you want to use.");
+         "Choose the folder the audio is written to.");
   g.text(st->fSmall, kMute, "WAV stays WAV. MXF, AIFF and embedded audio", ax + 14, my + 196, ar - 14, my + 214, DT_LEFT);
   g.text(st->fSmall, kMute, "become Broadcast WAV with timecode.", ax + 14, my + 212, ar - 14, my + 230, DT_LEFT);
   // Status
@@ -316,7 +353,7 @@ void paint(State *st, HDC dc) {
   if (ok < total) {
     g.text(st->fBody, kRed, strprintf("%d files missing", total - ok), ax + 14, sy + 56, ar - 150, sy + 80, DT_LEFT);
     g.text(st->fBody, kBlue, "Locate media folder\xe2\x80\xa6", ax + 14, sy + 56, ar - 14, sy + 80, DT_RIGHT);
-    addHit(st, ar - 170, sy + 56, ar - 14, sy + 80, H_LOCATE, 0, "Pick any audio file in the folder that holds the media.");
+    addHit(st, ar - 170, sy + 56, ar - 14, sy + 80, H_LOCATE, 0, "Choose the folder that holds the media; subfolders are searched too.");
   } else
     g.text(st->fBody, RGB(0x1D, 0x9E, 0x75), "All media is there.", ax + 14, sy + 56, ar - 14, sy + 80, DT_LEFT);
 
@@ -341,8 +378,9 @@ void paint(State *st, HDC dc) {
   button(st, g, lr - 70, ly + 7, lr - 42, ly + 33, "\xe2\x88\x92", H_ZOOM_OUT, 0, "Zoom out. Shift + mouse wheel scrolls the timeline.");
   button(st, g, lr - 36, ly + 7, lr - 8, ly + 33, "+", H_ZOOM_IN, 0, "Zoom in. Shift + mouse wheel scrolls the timeline.");
 
-  const double rowH = 34, listW = 300, top = ly + 41 + 26;
-  int rows = std::max(1, (int)((lb - top - 1) / rowH));
+  const double rowH = 34, listW = 300, top = ly + 41 + 26, sbW = 12;
+  double rowsBottom = lb - sbW - 1;
+  int rows = std::max(1, (int)((rowsBottom - top - 1) / rowH));
   int ntr = (int)s.tracks.size();
   st->scrollRow = std::max(0, std::min(st->scrollRow, std::max(0, ntr - rows)));
   // list header and ruler
@@ -353,7 +391,15 @@ void paint(State *st, HDC dc) {
   g.text(st->fSmall, kMute, "Clips", lx + 200, ly + 41, lx + listW - 12, top, DT_RIGHT);
   addHit(st, lx, top, lx + listW, lb, H_LIST, 0, "Click the square to set a track color. Mouse wheel scrolls.");
 
-  double tlx = lx + listW + 10, tlr = lr - 10, tlw = tlr - tlx;
+  double tlx = lx + listW + 10, tlr = lr - sbW - 6, tlw = tlr - tlx;
+  {
+    double a, b;
+    sessionRange(s, &a, &b);
+    st->rangeA = a - (b - a) * 0.02;
+    st->rangeB = b + (b - a) * 0.02;
+    double maxStart = std::max(st->rangeA, st->rangeB - st->viewLen);
+    st->viewStart = std::max(std::min(st->viewStart, maxStart), std::min(st->rangeA, maxStart));
+  }
   double spp = st->viewLen / tlw; // seconds per pixel
   double step = niceStep(spp);
   double off = tcOffset(st);
@@ -384,8 +430,8 @@ void paint(State *st, HDC dc) {
     addHit(st, lx + 34, y + 7, lx + 54, y + 27, H_TRACK_COLOR, ti, "Set the track color.");
     COLORREF nameC = on ? kInk : kMute;
     if (!t.mergedFrom.empty()) {
-      g.text(st->fBody, nameC, t.name, lx + 60, y + 2, lx + listW - 90, y + 20, DT_LEFT);
-      g.text(st->fSmall, kMute, t.mergedFrom, lx + 60, y + 18, lx + listW - 50, y + 32, DT_LEFT);
+      g.text(st->fBody, nameC, t.name, lx + 60, y + 1, lx + listW - 90, y + 18, DT_LEFT);
+      g.text(st->fClip, kMute, t.mergedFrom, lx + 60, y + 18, lx + listW - 90, y + 31, DT_LEFT);
     } else
       g.text(st->fBody, nameC, t.name, lx + 60, y, lx + listW - 90, y + rowH, DT_LEFT);
     if (t.channels >= 2) {
@@ -405,14 +451,42 @@ void paint(State *st, HDC dc) {
       b = std::min(b, tlr);
       if (b - a < 1) b = a + 1;
       g.fill(a, y + 5, b, y + rowH - 6, cc);
+      if (b - a > 40 && !c.name.empty())
+        g.text(st->fClip, on ? kPanel : kMute, c.name, a + 4, y + 6, b - 3, y + rowH - 7, DT_LEFT);
       double fi = c.fadeIn.len / spp, fo = c.fadeOut.len / spp;
       if (opt.fades && fi > 2) g.line(a, y + rowH - 6, std::min(b, a + fi), y + 5, kInk);
       if (opt.fades && fo > 2) g.line(std::max(a, b - fo), y + 5, b, y + rowH - 6, kInk);
     }
   }
-  if (ntr > rows) {
-    double sh = (lb - top) * rows / ntr, sp = top + (lb - top - sh) * st->scrollRow / std::max(1, ntr - rows);
-    g.fill(lr - 5, sp, lr - 2, sp + sh, kLine);
+  // vertical scrollbar (tracks)
+  st->rowsVisible = rows;
+  st->rowsTotal = ntr;
+  {
+    double vl = lr - sbW - 1, vr = lr - 1, vt = top + 1, vb = rowsBottom;
+    g.fill(vl, vt, vr, vb, RGB(0xf3, 0xf4, 0xf6));
+    g.fill(vl, vt, vl + 1, vb, kSoft);
+    double th = ntr > rows ? std::max(24.0, (vb - vt) * rows / ntr) : (vb - vt);
+    double tp = ntr > rows ? vt + (vb - vt - th) * st->scrollRow / (ntr - rows) : vt;
+    g.fill(vl + 3, tp + 2, vr - 2, tp + th - 2, ntr > rows ? RGB(0xa9, 0xaf, 0xb8) : kSoft);
+    st->vTrack = {(LONG)g.S(vl), (LONG)g.S(vt), (LONG)g.S(vr), (LONG)g.S(vb)};
+    st->vThumb = {(LONG)g.S(vl), (LONG)g.S(tp), (LONG)g.S(vr), (LONG)g.S(tp + th)};
+    addHit(st, vl, vt, vr, vb, H_NONE, 0, "Drag to scroll through the tracks.");
+  }
+  // horizontal scrollbar (time)
+  {
+    double hl = tlx, hr = tlr, ht = lb - sbW - 1, hb = lb - 1;
+    g.fill(lx + 1, ht - 1, lr - 1, ht, kLine);
+    g.fill(hl, ht, hr, hb, RGB(0xf3, 0xf4, 0xf6));
+    double total = st->rangeB - st->rangeA;
+    double frac = std::min(1.0, st->viewLen / std::max(1e-9, total));
+    double tw = std::max(24.0, (hr - hl) * frac);
+    double pos = total > st->viewLen ? (st->viewStart - st->rangeA) / (total - st->viewLen) : 0;
+    pos = std::max(0.0, std::min(1.0, pos));
+    double tx = hl + (hr - hl - tw) * pos;
+    g.fill(tx + 2, ht + 3, tx + tw - 2, hb - 2, frac < 1.0 ? RGB(0xa9, 0xaf, 0xb8) : kSoft);
+    st->hTrack = {(LONG)g.S(hl), (LONG)g.S(ht), (LONG)g.S(hr), (LONG)g.S(hb)};
+    st->hThumb = {(LONG)g.S(tx), (LONG)g.S(ht), (LONG)g.S(tx + tw), (LONG)g.S(hb)};
+    addHit(st, hl, ht, hr, hb, H_NONE, 0, "Drag to move through time, or use + and \xe2\x88\x92 to zoom.");
   }
 
   // ---- color palette popover
@@ -503,14 +577,13 @@ void click(State *st, int x, int y) {
   }
   case H_DEST_CHOOSE: {
     std::string p;
-    if (st->host->pickFile && st->host->pickFile("olAAF: pick any file in the destination folder", &p) && !p.empty())
-      opt.destDir = dirName(p);
+    if (pickFolder(st->hwnd, "olAAF: choose the destination folder", opt.destDir, &p)) opt.destDir = p;
     break;
   }
   case H_LOCATE: {
     std::string p;
-    if (st->host->pickFile && st->host->pickFile("olAAF: pick any audio file in the media folder", &p) && !p.empty()) {
-      opt.searchFolders.push_back(dirName(p));
+    if (pickFolder(st->hwnd, "olAAF: choose the folder that holds the media", dirName(s.aafPath), &p)) {
+      opt.searchFolders.push_back(p);
       st->imp->locateMedia(opt);
     }
     break;
@@ -573,6 +646,8 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                    std::max((int)pr.top, (int)(pr.top + pr.bottom - h) / 2), w, h, SWP_NOZORDER);
 #endif
     SetWindowText(hwnd, "olAAF - Import AAF");
+    st->fCheck = makeFont(13, true, st->scale);
+    st->fClip = makeFont(10, false, st->scale);
     st->fTitle = makeFont(19, true, st->scale);
     st->fTitleThin = makeFont(19, false, st->scale);
     st->fTag = makeFont(10.5, false, st->scale);
@@ -607,16 +682,64 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     EndPaint(hwnd, &ps);
     return 0;
   }
-  case WM_LBUTTONUP:
-    click(st, (short)LOWORD(lp), (short)HIWORD(lp));
+  case WM_LBUTTONDOWN: {
+    POINT p = {(short)LOWORD(lp), (short)HIWORD(lp)};
+    if (PtInRect(&st->vTrack, p) && st->rowsTotal > st->rowsVisible) {
+      if (PtInRect(&st->vThumb, p)) {
+        st->drag = 1;
+        st->dragFrom = p.y;
+        st->dragValue = st->scrollRow;
+      } else
+        st->scrollRow += p.y < st->vThumb.top ? -st->rowsVisible : st->rowsVisible;
+      SetCapture(hwnd);
+    } else if (PtInRect(&st->hTrack, p)) {
+      if (PtInRect(&st->hThumb, p)) {
+        st->drag = 2;
+        st->dragFrom = p.x;
+        st->dragValue = st->viewStart;
+      } else
+        st->viewStart += p.x < st->hThumb.left ? -st->viewLen * 0.9 : st->viewLen * 0.9;
+      SetCapture(hwnd);
+    }
+    InvalidateRect(hwnd, NULL, FALSE);
     return 0;
+  }
+  case WM_LBUTTONUP: {
+    POINT p = {(short)LOWORD(lp), (short)HIWORD(lp)};
+    bool wasScroll = st->drag || PtInRect(&st->vTrack, p) || PtInRect(&st->hTrack, p);
+    if (st->drag || GetCapture() == hwnd) ReleaseCapture();
+    st->drag = 0;
+    if (!wasScroll) click(st, p.x, p.y);
+    return 0;
+  }
   case WM_MOUSEMOVE: {
+    if (st->drag == 1) {
+      double span = (double)(st->vTrack.bottom - st->vTrack.top) - (double)(st->vThumb.bottom - st->vThumb.top);
+      int range = st->rowsTotal - st->rowsVisible;
+      if (span > 0 && range > 0)
+        st->scrollRow = (int)std::lround(st->dragValue + ((short)HIWORD(lp) - st->dragFrom) * range / span);
+      InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
+    }
+    if (st->drag == 2) {
+      double span = (double)(st->hTrack.right - st->hTrack.left) - (double)(st->hThumb.right - st->hThumb.left);
+      double range = (st->rangeB - st->rangeA) - st->viewLen;
+      if (span > 0 && range > 0) st->viewStart = st->dragValue + ((short)LOWORD(lp) - st->dragFrom) * range / span;
+      InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
+    }
     const Hit *h = hitAt(st, (short)LOWORD(lp), (short)HIWORD(lp));
     const char *tip = h ? h->tip : nullptr;
     if (tip != st->tip) {
       st->tip = tip;
       InvalidateRect(hwnd, NULL, FALSE);
     }
+    return 0;
+  }
+  case WM_MOUSEHWHEEL: {
+    int delta = (short)HIWORD(wp);
+    st->viewStart += st->viewLen * 0.05 * (delta > 0 ? 1 : -1);
+    InvalidateRect(hwnd, NULL, FALSE);
     return 0;
   }
   case WM_MOUSEWHEEL: {
@@ -638,7 +761,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return 0;
   case WM_DESTROY:
     if (st) {
-      DeleteObject(st->fTitle); DeleteObject(st->fTitleThin); DeleteObject(st->fTag); DeleteObject(st->fBody);
+      DeleteObject(st->fCheck); DeleteObject(st->fClip); DeleteObject(st->fTitle); DeleteObject(st->fTitleThin); DeleteObject(st->fTag); DeleteObject(st->fBody);
       DeleteObject(st->fBold); DeleteObject(st->fSmall); DeleteObject(st->fSec);
     }
     return 0;
@@ -668,6 +791,7 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   st.merge = opt.mergeStereo;
   st.palTrack = palTrack;
   st.tip = tip;
+  st.fCheck = makeFont(13, true, 1); st.fClip = makeFont(10, false, 1);
   st.fTitle = makeFont(19, true, 1); st.fTitleThin = makeFont(19, false, 1); st.fTag = makeFont(10.5, false, 1); st.fBody = makeFont(13, false, 1);
   st.fBold = makeFont(13, true, 1); st.fSmall = makeFont(11.5, false, 1); st.fSec = makeFont(10.5, true, 1);
   double a, b;

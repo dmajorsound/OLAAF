@@ -31,6 +31,7 @@ static void mLine(HDC, int x, int y) { char t[256]; snprintf(t, 256, "<line x1='
 static void mTextColor(HDC, int c) { curText = c; }
 static void mBk(HDC, int) {}
 static int mDraw(HDC, const char *buf, int, RECT *r, int align) {
+  if (align & DT_CALCRECT) { r->right = r->left + (int)(strlen(buf) * curFont.h * 0.6); r->bottom = r->top + curFont.h; return curFont.h; }
   char t[1024]; const char *anchor = (align & DT_CENTER) ? "middle" : (align & DT_RIGHT) ? "end" : "start";
   int x = (align & DT_CENTER) ? (r->left + r->right) / 2 : (align & DT_RIGHT) ? r->right : r->left;
   clipN++;
