@@ -160,7 +160,16 @@ bool Importer::prepareMedia(const ImportOptions &opt, MediaReport *rep, const Pr
   size_t step = 0, total = used.size() + 1;
   for (int mi : used) {
     Media &m = s_.media[(size_t)mi];
-    if (progress && !progress((double)step++ / (double)total, m.name)) return false;
+    if (progress) {
+      const char *verb = m.kind == MediaKind::Embedded ? "Extracting"
+                       : (m.kind == MediaKind::Mxf || m.kind == MediaKind::Aiff) ? "Converting"
+                       : opt.copyToSubdir ? "Copying" : "Linking";
+      std::string fn = m.kind == MediaKind::Embedded || m.foundPath.empty() ? m.name : baseName(m.foundPath);
+      if (!progress((double)step / (double)total,
+                    strprintf("%s %s  \xc2\xb7  %d / %d", verb, fn.c_str(), (int)step + 1, (int)used.size())))
+        return false;
+    }
+    step++;
     std::string err;
     std::string desc = m.name;
 
@@ -271,7 +280,7 @@ bool Importer::prepareMedia(const ImportOptions &opt, MediaReport *rep, const Pr
       std::string out = uniquePath(joinPath(target, base + "_" + std::to_string(c.sources.size()) + "ch.wav"));
       int64_t tref = infos[0].timeReference >= 0 ? infos[0].timeReference : m0.timeReference;
       std::string err;
-      if (progress && !progress((double)step / (double)total, "Combining " + base)) return false;
+      if (progress && !progress((double)step / (double)total, "Combining " + base + " to " + std::to_string(c.sources.size()) + " channels")) return false;
       if (interleaveToBwf(srcs, infos, out, tref, m0.name, &err)) {
         interleaved[key] = out;
         c.outPath = out;

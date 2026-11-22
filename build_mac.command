@@ -47,11 +47,19 @@ for f in third_party/libaaf/src/LibCFB/*.c third_party/libaaf/src/AAFCore/*.c \
 done
 
 echo "2/3  Compiling olAAF ..."
-for f in src/core/*.cpp src/ext/main.cpp; do
+for f in src/core/*.cpp src/ext/main.cpp src/ext/progress.cpp; do
   o="$B/obj/olaaf_$(basename "$f" .cpp).o"
   $CXX $ARCH -O2 -std=c++17 -fvisibility=hidden -DSWELL_PROVIDED_BY_APP \
        -Ithird_party/libaaf/include -Ithird_party/reaper-sdk/sdk -c "$f" -o "$o"
 done
+
+if [ "$OS" = "Darwin" ]; then
+  $CXX $ARCH -O2 -x objective-c++ -DSWELL_PROVIDED_BY_APP -c third_party/reaper-sdk/WDL/swell/swell-modstub.mm -o "$B/obj/swell_modstub.o"
+  LINK="$LINK -framework AppKit"
+else
+  $CXX $ARCH -O2 -DSWELL_PROVIDED_BY_APP -c third_party/reaper-sdk/WDL/swell/swell-modstub-generic.cpp -o "$B/obj/swell_modstub.o"
+  LINK="$LINK -lpthread -ldl"
+fi
 
 echo "3/3  Linking ..."
 $CXX $ARCH $LINK -o "$B/$OUT" "$B"/obj/*.o

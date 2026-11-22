@@ -8,6 +8,7 @@
 // C++ headers first: SWELL (mac/linux) and windows.h define min/max macros
 #include "../core/importer.h"
 #include "../core/util.h"
+#include "progress.h"
 
 #include <cstring>
 #include <string>
@@ -21,6 +22,7 @@
 #define REAPERAPI_WANT_ColorToNative
 #define REAPERAPI_WANT_CountTracks
 #define REAPERAPI_WANT_GetProjectPath
+#define REAPERAPI_WANT_GetMainHwnd
 #define REAPERAPI_WANT_GetTrack
 #define REAPERAPI_WANT_GetUserFileNameForRead
 #define REAPERAPI_WANT_InsertTrackAtIndex
@@ -75,11 +77,24 @@ static std::string summary(const Importer &imp, const MediaReport &rep, int merg
 
 static bool runImport(const std::string &aaf, ImportOptions &opt, Importer &imp, MediaReport &rep, int &merged,
                       std::string &err) {
-  if (!imp.load(aaf, opt, &err)) return false;
-  imp.locateMedia(opt);
-  merged = opt.mergeStereo ? imp.mergeStereoTracks() : 0;
-  imp.prepareMedia(opt, &rep, nullptr);
-  return true;
+  bool cancelled = false;
+  bool ok = runWithProgress(GetMainHwnd(), [&](const Progress &progress) {
+    progress(0.0, "Reading " + baseName(aaf));
+    if (!imp.load(aaf, opt, &err)) return false;
+    if (!progress(0.05, "Looking for linked media")) return false;
+    imp.locateMedia(opt);
+    merged = opt.mergeStereo ? imp.mergeStereoTracks() : 0;
+    // media takes the rest of the bar
+    Progress scaled = [&](double f, const std::string &w) { return progress(0.08 + 0.9 * f, w); };
+    if (!imp.prepareMedia(opt, &rep, scaled)) return false;
+    progress(1.0, "Building your Reaper session");
+    return true;
+  }, &cancelled);
+  if (cancelled) {
+    err = "Import cancelled. Files that were already written stay in the audio folder.";
+    return false;
+  }
+  return ok;
 }
 
 // ---------------------------------------------------------------- action: import into current project
@@ -182,7 +197,6 @@ static project_import_register_t g_projImport = {wantProjectFile, enumFileExtens
 
 extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance,
                                                                  reaper_plugin_info_t *rec) {
-  (void)hInstance;
   if (!rec) {
     plugin_register("-hookcommand2", (void *)onAction);
     plugin_register("-projectimport", &g_projImport);
@@ -190,6 +204,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_H
   }
   if (rec->caller_version != REAPER_PLUGIN_VERSION || !rec->GetFunc) return 0;
   if (REAPERAPI_LoadAPI(rec->GetFunc) != 0) return 0;
+  progressSetInstance((void *)hInstance);
 
   static custom_action_register_t act = {0, "DMAJORSOUND_OLAAF_IMPORT", "olAAF: Import AAF into current project...", nullptr};
   g_cmdImport = plugin_register("custom_action", &act);
