@@ -9,6 +9,7 @@
 #include "../core/importer.h"
 #include "../core/util.h"
 #include "progress.h"
+#include "dialog.h"
 
 #include <cstring>
 #include <string>
@@ -21,6 +22,10 @@
 #define REAPERAPI_MINIMAL
 #define REAPERAPI_WANT_AddExtensionsMainMenu
 #define REAPERAPI_WANT_ColorToNative
+#define REAPERAPI_WANT_ColorFromNative
+#define REAPERAPI_WANT_GR_SelectColor
+#define REAPERAPI_WANT_GetUserInputs
+#define REAPERAPI_WANT_GetCursorPosition
 #define REAPERAPI_WANT_CountTracks
 #define REAPERAPI_WANT_GetProjectPath
 #define REAPERAPI_WANT_GetMainHwnd
@@ -77,18 +82,60 @@ static std::string summary(const Importer &imp, const MediaReport &rep, int merg
   return m;
 }
 
+static DialogHost makeHost() {
+  DialogHost h;
+  h.askText = [](const char *title, const char *caption, std::string *value) {
+    char buf[4096];
+    snprintf(buf, sizeof(buf), "%s", value->c_str());
+    std::string cap = std::string(caption) + ",extrawidth=260,separator=\x1f";
+    if (!GetUserInputs(title, 1, cap.c_str(), buf, sizeof(buf))) return false;
+    *value = buf;
+    return true;
+  };
+  h.pickColor = [](HWND parent, uint32_t *rgb) {
+    int c = ColorToNative((*rgb >> 16) & 255, (*rgb >> 8) & 255, *rgb & 255);
+    if (!GR_SelectColor(parent, &c)) return false;
+    int r = 0, g = 0, b = 0;
+    ColorFromNative(c, &r, &g, &b);
+    *rgb = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+    return true;
+  };
+  h.pickFile = [](const char *title, std::string *path) {
+    char fn[4096] = {0};
+    if (!GetUserFileNameForRead(fn, title, "")) return false;
+    *path = fn;
+    return true;
+  };
+  h.editCursor = []() { return GetCursorPosition(); };
+  return h;
+}
+
+// read the AAF (worker thread + progress window), then show the dialog, then write the media
 static bool runImport(const std::string &aaf, ImportOptions &opt, Importer &imp, MediaReport &rep, int &merged,
                       std::string &err) {
   bool cancelled = false;
   bool ok = runWithProgress(GetMainHwnd(), [&](const Progress &progress) {
     progress(0.0, "Reading " + baseName(aaf));
     if (!imp.load(aaf, opt, &err)) return false;
-    if (!progress(0.05, "Looking for linked media")) return false;
+    progress(0.6, "Looking for linked media");
     imp.locateMedia(opt);
-    merged = opt.mergeStereo ? imp.mergeStereoTracks() : 0;
-    // media takes the rest of the bar
-    Progress scaled = [&](double f, const std::string &w) { return progress(0.08 + 0.9 * f, w); };
-    if (!imp.prepareMedia(opt, &rep, scaled)) return false;
+    imp.setMergeStereo(opt.mergeStereo);
+    return true;
+  }, &cancelled);
+  if (!ok || cancelled) {
+    if (cancelled) err = "Import cancelled.";
+    return false;
+  }
+
+  if (!showImportDialog(GetMainHwnd(), imp, opt, makeHost())) {
+    err.clear(); // closed without importing
+    return false;
+  }
+  merged = 0;
+  for (auto &t : imp.session().tracks) merged += !t.mergedFrom.empty();
+
+  ok = runWithProgress(GetMainHwnd(), [&](const Progress &progress) {
+    if (!imp.prepareMedia(opt, &rep, progress)) return false;
     progress(1.0, "Building your Reaper session");
     return true;
   }, &cancelled);
@@ -115,7 +162,7 @@ static void importIntoProject() {
   int merged = 0;
   std::string err;
   if (!runImport(fn, opt, imp, rep, merged, err)) {
-    ShowMessageBox(err.c_str(), "olAAF", 0);
+    if (!err.empty()) ShowMessageBox(err.c_str(), "olAAF", 0);
     return;
   }
 
@@ -191,7 +238,7 @@ static int loadProject(const char *fn, ProjectStateContext *ctx) {
   int merged = 0;
   std::string err;
   if (!runImport(fn, opt, imp, rep, merged, err)) {
-    ShowMessageBox(err.c_str(), "olAAF", 0);
+    if (!err.empty()) ShowMessageBox(err.c_str(), "olAAF", 0);
     return -1;
   }
   std::string rpp = imp.projectRpp(opt);
@@ -222,6 +269,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_H
   if (rec->caller_version != REAPER_PLUGIN_VERSION || !rec->GetFunc) return 0;
   if (REAPERAPI_LoadAPI(rec->GetFunc) != 0) return 0;
   progressSetInstance((void *)hInstance);
+  dialogSetInstance((void *)hInstance);
 
   static custom_action_register_t act = {0, "DMAJORSOUND_OLAAF_IMPORT", "olAAF: Import AAF into current project...", nullptr};
   g_cmdImport = plugin_register("custom_action", &act);

@@ -1,6 +1,6 @@
 # olAAF REAPER extension: reaper_olaaf.dll / .dylib / .so
 
-set(EXT_SRC main.cpp progress.cpp)
+set(EXT_SRC main.cpp progress.cpp dialog.cpp)
 set(SWELL ${PROJECT_SOURCE_DIR}/third_party/reaper-sdk/WDL/swell)
 if(APPLE)
   list(APPEND EXT_SRC ${SWELL}/swell-modstub.mm)

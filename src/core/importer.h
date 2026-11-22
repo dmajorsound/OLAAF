@@ -45,6 +45,9 @@ public:
   // Merges .L/.R track pairs (in place). Returns how many pairs were merged.
   int mergeStereoTracks();
 
+  // Switches the .L/.R merge on or off after loading (keeps the unmerged tracks to go back to).
+  int setMergeStereo(bool on);
+
   // Copies / converts / extracts media into the destination and assigns each clip its file.
   bool prepareMedia(const ImportOptions &opt, MediaReport *rep, const Progress &progress);
 
@@ -57,6 +60,8 @@ public:
 private:
   Session s_;
   std::unique_ptr<AafFile> aaf_;
+  std::vector<Track> unmerged_;
+  bool haveUnmerged_ = false;
 };
 
 std::string defaultSubdir(const Session &s);

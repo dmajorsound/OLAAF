@@ -20,6 +20,8 @@ std::string defaultSubdir(const Session &s) {
 
 bool Importer::load(const std::string &aafPath, const ImportOptions &opt, std::string *error) {
   s_ = Session();
+  unmerged_.clear();
+  haveUnmerged_ = false;
   aaf_.reset(new AafFile());
   return aaf_->load(aafPath, opt.read, &s_, error);
 }
@@ -104,6 +106,15 @@ static bool sameTimeline(const Track &a, const Track &b) {
     if (x.sources.size() != 1 || y.sources.size() != 1) return false;
   }
   return true;
+}
+
+int Importer::setMergeStereo(bool on) {
+  if (!haveUnmerged_) {
+    unmerged_ = s_.tracks;
+    haveUnmerged_ = true;
+  }
+  s_.tracks = unmerged_;
+  return on ? mergeStereoTracks() : 0;
 }
 
 int Importer::mergeStereoTracks() {
