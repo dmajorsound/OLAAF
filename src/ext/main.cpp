@@ -66,6 +66,7 @@ static std::string summary(const Importer &imp, const MediaReport &rep, int merg
     for (size_t i = 0; i < rep.missingNames.size() && i < 8; i++) m += "  " + rep.missingNames[i] + "\n";
     if (rep.missingNames.size() > 8) m += strprintf("  ... and %d more\n", (int)rep.missingNames.size() - 8);
   }
+  if (!rep.logPath.empty()) m += "\nDetails: " + rep.logPath + "\n";
   int shown = 0;
   for (auto &w : s.warnings) {
     if (w.rfind("AAF: ", 0) == 0) continue; // parser noise
@@ -202,7 +203,7 @@ static int loadProject(const char *fn, ProjectStateContext *ctx) {
     ctx->AddLine("%s", line.c_str());
     p = e + 1;
   }
-  if (rep.missing) ShowMessageBox(summary(imp, rep, merged).c_str(), "olAAF", 0);
+  ShowMessageBox(summary(imp, rep, merged).c_str(), "olAAF", 0);
   return 0;
 }
 

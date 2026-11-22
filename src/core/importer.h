@@ -29,6 +29,7 @@ struct ImportOptions {
 struct MediaReport {
   int found = 0, missing = 0, copied = 0, converted = 0, extracted = 0, interleaved = 0;
   std::vector<std::string> missingNames;
+  std::string logPath; // "olAAF import log.txt" in the audio folder
 };
 
 using Progress = std::function<bool(double fraction, const std::string &what)>; // return false to cancel

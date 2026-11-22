@@ -49,9 +49,19 @@ void Importer::locateMedia(const ImportOptions &opt) {
     if (fileExists(m.foundPath)) continue;
     m.foundPath.clear();
     std::string p = uriToPath(m.originalUri);
-    if (fileExists(p)) {
-      m.foundPath = p;
-    } else {
+    // macOS editors write the volume name first: "/Macintosh HD/Users/..." -> "/Users/...",
+    // other disks live under /Volumes: "/Media SSD/Project/..." -> "/Volumes/Media SSD/Project/..."
+    std::vector<std::string> tries = {p};
+    if (p.size() > 1 && p[0] == '/') {
+      size_t s2 = p.find('/', 1);
+      if (s2 != std::string::npos) {
+        tries.push_back(p.substr(s2));
+        tries.push_back("/Volumes" + p);
+      }
+    }
+    for (auto &t : tries)
+      if (m.foundPath.empty() && fileExists(t)) m.foundPath = t;
+    if (m.foundPath.empty()) {
       std::string b = lower(baseName(p));
       auto it = byName.find(b);
       if (it != byName.end()) m.foundPath = it->second;
@@ -303,6 +313,35 @@ bool Importer::prepareMedia(const ImportOptions &opt, MediaReport *rep, const Pr
     if (written && !m.outPath.empty() && !usedFiles.count(m.outPath) && m.outPath != m.foundPath &&
         fileExists(m.outPath))
       std::remove(m.outPath.c_str());
+  }
+
+  // a plain text log next to the audio, so problems can be traced on any machine
+  if (ensureDir()) {
+    r.logPath = joinPath(target, "olAAF import log.txt");
+    if (FILE *lf = openUtf8(r.logPath, "wb")) {
+      fprintf(lf, "olAAF import log\nAAF: %s\n%s %s %s\n%d Hz, %.3g fps, start %s\ndestination: %s\n\n", s_.aafPath.c_str(),
+              s_.company.c_str(), s_.product.c_str(), s_.version.c_str(), s_.sampleRate, s_.fps,
+              formatTC(s_.start, s_.fps).c_str(), target.c_str());
+      for (int mi : used) {
+        const Media &m = s_.media[(size_t)mi];
+        const char *k = m.kind == MediaKind::Embedded ? "embedded" : m.kind == MediaKind::Mxf ? "mxf"
+                      : m.kind == MediaKind::Aiff ? "aiff" : m.kind == MediaKind::Wav ? "wav" : "?";
+        fprintf(lf, "[%s] %s\n  aaf:  %s\n  found: %s\n  used: %s%s\n", k, m.name.c_str(), m.originalUri.c_str(),
+                m.foundPath.empty() ? "-" : m.foundPath.c_str(), m.outPath.c_str(),
+                fileExists(m.outPath) ? "" : usedFiles.count(m.outPath) ? "   (MISSING)" : "   (combined into a multichannel file)");
+      }
+      fprintf(lf, "\ntracks:\n");
+      for (auto &t : s_.tracks) {
+        if (!t.import) continue;
+        fprintf(lf, "  %s (%d ch, %zu clips)\n", t.name.c_str(), t.channels, t.clips.size());
+        for (auto &c : t.clips)
+          fprintf(lf, "    %s  %.3f s  %s%s\n", formatTC(c.pos, s_.fps).c_str(), c.len, c.outPath.c_str(),
+                  fileExists(c.outPath) ? "" : "   (MISSING)");
+      }
+      if (!s_.warnings.empty()) fprintf(lf, "\nnotes:\n");
+      for (auto &w : s_.warnings) fprintf(lf, "  %s\n", w.c_str());
+      fclose(lf);
+    }
   }
 
   if (progress) progress(1.0, "Done");
