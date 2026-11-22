@@ -2,10 +2,13 @@ name: build
 
 on:
   push:
-    tags: ["v*"]
-    branches: ["**"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Publish a release with this version tag, e.g. v0.5.0 (empty = just build)"
+        required: false
+        default: ""
 
 jobs:
   macos:
@@ -78,9 +81,9 @@ jobs:
             build/src/ext/reaper_olaaf.so
             build/olaaf-cli
 
-  # a tag like v0.5.0 publishes the installers as a GitHub release (the download page)
+  # "Run workflow" with a version (e.g. v0.5.0) publishes the installers as a GitHub release
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'workflow_dispatch' && inputs.release != ''
     needs: [macos, windows]
     runs-on: ubuntu-latest
     permissions:
@@ -92,6 +95,7 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release }}
         run: |
           cat > notes.txt <<'NOTES'
           **olAAF – AAF Import for Reaper.** Do you wanna build a Reaper Session?
@@ -117,7 +121,7 @@ jobs:
 
           V VERSION beta, developed with AI assistance. dmajorsound.com
           NOTES
-          sed -i "s/VERSION/${GITHUB_REF_NAME#v}/" notes.txt
-          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --title "olAAF ${GITHUB_REF_NAME#v} beta" \
+          sed -i "s/VERSION/${TAG#v}/" notes.txt
+          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "olAAF ${TAG#v} beta" \
             --notes-file notes.txt --prerelease \
             dl/olAAF-mac/*.pkg dl/olAAF-windows/installer/win/Output/*.exe
