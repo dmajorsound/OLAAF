@@ -287,6 +287,29 @@ void Importer::moveClips(const std::vector<int> &ids, int target, bool withAutom
   }
 }
 
+int Importer::addTrack(int like) {
+  Track t;
+  int n = 1;
+  for (auto &x : s_.tracks)
+    if (x.created) n++;
+  t.name = strprintf("New track %d", n);
+  t.created = true;
+  if (like >= 0 && like < (int)s_.tracks.size()) {
+    t.channels = s_.tracks[(size_t)like].channels;
+    t.group = s_.tracks[(size_t)like].group;
+  }
+  s_.tracks.push_back(t);
+  return (int)s_.tracks.size() - 1;
+}
+
+uint32_t Importer::trackColor(const Track &t, const ImportOptions &opt) const {
+  if (t.color) return t.color;
+  if (opt.folders && !t.group.empty())
+    for (auto &f : s_.folders)
+      if (f.key == t.group) return f.color;
+  return 0;
+}
+
 int Importer::setMergeStereo(bool on) {
   if (!haveUnmerged_) {
     unmerged_ = s_.tracks;
@@ -564,6 +587,14 @@ static uint32_t nativeColor(uint32_t rgb) {
   return 0x1000000u | (b << 16) | (g << 8) | r;
 }
 
+// a track added in the dialog that nothing was moved onto
+static bool emptyCreated(const Track &t) {
+  if (!t.created) return false;
+  for (auto &c : t.clips)
+    if (!c.excluded) return false;
+  return true;
+}
+
 std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
   std::vector<TrackChunk> out;
 
@@ -586,12 +617,13 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
   if (opt.folders && !s_.folders.empty()) {
     for (auto &f : s_.folders)
       for (auto &t : s_.tracks)
-        if (t.import && t.group == f.key) order.push_back({f.key, &t});
+        if (t.import && t.group == f.key && !emptyCreated(t)) order.push_back({f.key, &t});
     for (auto &t : s_.tracks)
-      if (t.import && (t.group.empty() || !const_cast<Session &>(s_).folder(t.group))) order.push_back({"", &t});
+      if (t.import && !emptyCreated(t) && (t.group.empty() || !const_cast<Session &>(s_).folder(t.group)))
+        order.push_back({"", &t});
   } else
     for (auto &t : s_.tracks)
-      if (t.import) order.push_back({"", &t});
+      if (t.import && !emptyCreated(t)) order.push_back({"", &t});
   for (size_t oi = 0; oi < order.size(); oi++) {
     const Track &t = *order[oi].second;
     const std::string &grp = order[oi].first;
@@ -610,7 +642,8 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
     std::string c;
     c += "<TRACK\n";
     c += "NAME " + q(t.name) + "\n";
-    if (t.color) c += strprintf("PEAKCOL %u\n", nativeColor(t.color));
+    uint32_t tcol = trackColor(t, opt);
+    if (tcol) c += strprintf("PEAKCOL %u\n", nativeColor(tcol));
     c += "VOLPAN " + num(t.volume) + " " + num(t.pan) + " -1 -1 1\n";
     int nch = t.channels <= 2 ? 2 : (t.channels + 1) / 2 * 2;
     c += strprintf("NCHAN %d\n", nch);
@@ -666,7 +699,7 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
     TrackChunk tc;
     tc.text = c;
     tc.folderDepth = lastInGroup ? -1 : 0;
-    tc.color = t.color;
+    tc.color = tcol;
     out.push_back(tc);
   }
   return out;

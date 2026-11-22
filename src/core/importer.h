@@ -69,6 +69,10 @@ public:
   // clip goes along (it replaces the target's automation over the clip's time range).
   void moveClips(const std::vector<int> &clipIds, int targetTrack, bool withAutomation);
   Clip *findClip(int id, int *track = nullptr);
+  // Appends an empty track (same channel count and folder as `like`) and returns its index.
+  int addTrack(int like);
+  // Track color as imported: its own color, otherwise the color of its folder (when folders are on)
+  uint32_t trackColor(const Track &t, const ImportOptions &opt) const;
 
   // Folder tracks. Tracks are sorted into DIALOG, FOLEY, FX, ATMO, MUSIC and OTHER by their names
   // (only when that gives at least two folders); the dialog can rename, add and remove folders.

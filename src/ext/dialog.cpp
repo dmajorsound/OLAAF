@@ -114,7 +114,7 @@ enum HitId {
   H_NONE, H_THEME, H_VIDEO, H_MARKERS, H_FOLDERS, H_ZOOM_FIT, H_TRACK_CHECK, H_TRACK_COLOR, H_SEL_ALL, H_SEL_NONE,
   H_ZOOM_IN, H_ZOOM_OUT, H_MERGE, H_FADES, H_GAIN, H_COPY_YES, H_COPY_NO, H_SUBDIR, H_DEST, H_DEST_CHOOSE, H_LOCATE,
   H_CANCEL, H_IMPORT, H_TC_ON, H_TC_PLUS, H_TC_MINUS, H_TC_VALUE, H_TC_CURSOR, H_PAL, H_PAL_CUSTOM, H_PAL_NONE,
-  H_LIST, H_TIMELINE, H_FOLDER_CELL, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN, H_EV_AUTOMATION, H_EV_RESET
+  H_LIST, H_TIMELINE, H_FOLDER_CELL, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP, H_FOLD_COLOR, H_PAL_BG, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN, H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE
 };
 
 struct Hit {
@@ -145,7 +145,9 @@ struct State {
   double viewStart = 0, viewLen = 60;
   bool tcOn = false, tcMinus = true;
   double tcAbs = 0;
-  int palTrack = -1;
+  int palTrack = -1;          // color popover for this track ...
+  std::string palFolder;      // ... or for this folder
+  double palX = 0, palY = 0, palY0 = 0; // anchor: below (palY) or above (palY0) the clicked square
   RECT vTrack{}, vThumb{}, hTrack{}, hThumb{}, rowsRc{};
   int rowsTotal = 0;
   double rangeA = 0, rangeB = 1;
@@ -445,7 +447,7 @@ void paintTimeline(State *st, const Gfx &g) {
   st->rowsRc = {(LONG)g.X(tlx), (LONG)g.Y(kRowsTop), (LONG)g.X(tlr), (LONG)g.Y(kRowsBot)};
   st->clipHits.clear();
   addHit(st, tlx, kRowsTop, tlr, kRowsBot, H_TIMELINE, 0,
-         "Click selects, Shift-click adds, drag up or down moves events to another track.");
+         "Click selects, Shift-click adds. Drag or arrow up/down moves events to another track, M mutes, Delete removes.");
   int dragDelta = (st->drag == 3 && st->dragMoved) ? st->dragRows : 0;
   for (int row = 0; row < kRows; row++) {
     int ti = st->scrollRow + row;
@@ -453,7 +455,8 @@ void paintTimeline(State *st, const Gfx &g) {
     g.fill(l + 1, y + kRowH - 1, r - 1, y + kRowH, kSoft);
     if (ti >= ntr) continue;
     Track &tr = s.tracks[(size_t)ti];
-    COLORREF tc = tr.color ? rgbToRef(tr.color) : RGB(0x7f, 0x9c, 0xd8);
+    uint32_t eff = st->imp->trackColor(tr, opt);
+    COLORREF tc = eff ? rgbToRef(eff) : RGB(0x7f, 0x9c, 0xd8);
     for (auto &c : tr.clips) {
       double x0 = tlx + (c.pos - st->viewStart) / spp, x1 = tlx + (c.pos + c.len - st->viewStart) / spp;
       if (x1 < tlx || x0 > tlr) continue;
@@ -472,6 +475,11 @@ void paintTimeline(State *st, const Gfx &g) {
       if (c.excluded) {
         g.box(x0, y0, x1, y1, selected ? kInk : kLine, kPanel);
         g.line(x0, y1, x1, y0, kLine);
+      } else if (c.mute) { // muted: outline in the track color, imported as a muted item
+        COLORREF cc = tr.import ? tc : theme().off;
+        if (selected) g.fill(x0 - 1, y0 - 2, x1 + 1, y1 + 2, kInk);
+        g.box(x0, y0, x1, y1, cc, kPanel);
+        if (x1 - x0 > 6) g.box(x0 + 1, y0 + 1, x1 - 1, y1 - 1, cc, kPanel);
       } else {
         COLORREF cc = tr.import ? tc : theme().off;
         if (selected) g.fill(x0 - 1, y0 - 2, x1 + 1, y1 + 2, kInk);
@@ -481,7 +489,8 @@ void paintTimeline(State *st, const Gfx &g) {
         if (opt.fades && fo > 2) g.line(std::max(x0, x1 - fo), y0, x1, y1, kInk);
       }
       if (x1 - x0 > 40 && !c.name.empty())
-        g.text(st->fClip, c.excluded ? kMute : (tr.import ? kWhite : kMute), c.name, x0 + 4, y0 + 1, x1 - 3, y1 - 1, DT_LEFT);
+        g.text(st->fClip, (c.excluded || c.mute) ? kMute : (tr.import ? kWhite : kMute), c.mute ? "M  " + c.name : c.name,
+               x0 + 4, y0 + 1, x1 - 3, y1 - 1, DT_LEFT);
       ClipHit h;
       h.r = {(LONG)g.X(x0), (LONG)g.Y(y0), (LONG)g.X(x1), (LONG)g.Y(y1)};
       h.id = c.id;
@@ -531,16 +540,25 @@ void paintTrackList(State *st, const Gfx &g) {
     int ti = st->scrollRow + row;
     double y = kRowsTop + row * kRowH;
     g.fill(l + 1, y + kRowH - 1, r - 1, y + kRowH, kSoft);
-    if (ti >= ntr) continue;
+    if (ti >= ntr) {
+      if (ti == ntr && st->drag == 3 && st->dragMoved && st->dragRows > 0)
+        g.text(st->fBody, kBlue, "+ New track", l + 60, y, r - kSb - 10, y + kRowH, DT_LEFT);
+      continue;
+    }
     Track &tr = s.tracks[(size_t)ti];
     bool on = tr.import;
+    if (tr.created) g.text(st->fClip, kBlue, "NEW", l + 300, y, l + 330, y + kRowH, DT_LEFT);
     checkbox(st, g, l + 12, y + 7, on, H_TRACK_CHECK, ti, "Import this track or leave it out.");
+    uint32_t effC = st->imp->trackColor(tr, opt);
     if (tr.color) g.box(l + 36, y + 7, l + 52, y + 23, RGB(0x99, 0x99, 0x99), rgbToRef(tr.color));
-    else {
+    else if (effC) { // follows its folder: the folder color, smaller
+      g.box(l + 36, y + 7, l + 52, y + 23, theme().empty, kPanel);
+      g.fill(l + 40, y + 11, l + 48, y + 19, rgbToRef(effC));
+    } else {
       g.box(l + 36, y + 7, l + 52, y + 23, theme().empty, kPanel);
       g.line(l + 38, y + 21, l + 50, y + 9, theme().empty);
     }
-    addHit(st, l + 34, y + 5, l + 54, y + 25, H_TRACK_COLOR, ti, "Set the track color.");
+    addHit(st, l + 34, y + 5, l + 54, y + 25, H_TRACK_COLOR, ti, "Set the track color. Without one, a track takes the color of its folder.");
     double nameR = opt.folders ? l + 222 : l + 290;
     if (tr.channels >= 2) {
       const char *badge = tr.channels == 2 ? (tr.mergedFrom.empty() ? "ST" : "L+R") : "MC";
@@ -624,17 +642,23 @@ void paintEvent(State *st, const Gfx &g, double ch) {
       g.text(st->fSmall, kMute, anyOut && anyIn ? "Some of them are removed from the import." : anyOut ? "All of them are removed from the import." : "",
              l + 14, t + 50, r - 14, t + 68, DT_LEFT);
     }
+    bool allMuted = true;
+    for (int id : ids)
+      if (Clip *k = st->imp->findClip(id)) allMuted = allMuted && k->mute;
     double by = b - 40;
     if (anyIn)
-      button(st, g, l + 14, by, l + 174, by + 28, "Remove from import", H_EV_REMOVE, 0,
-             "Leaves the selected events out. They stay visible here and can be restored.");
+      button(st, g, l + 14, by, l + 164, by + 28, "Remove from import", H_EV_REMOVE, 0,
+             "Leaves the selected events out (Delete key). They stay visible here and can be restored.");
     else
-      button(st, g, l + 14, by, l + 174, by + 28, "Restore", H_EV_RESTORE, 0, "Puts the selected events back into the import.");
-    button(st, g, l + 182, by, l + 280, by + 28, "\xe2\x96\xb2 Track up", H_EV_UP, 0, "Moves the selected events one track up.");
-    button(st, g, l + 286, by, l + 400, by + 28, "\xe2\x96\xbc Track down", H_EV_DOWN, 0, "Moves the selected events one track down.");
-    checkbox(st, g, l + 414, by + 6, st->moveAutomation, H_EV_AUTOMATION, 0,
+      button(st, g, l + 14, by, l + 164, by + 28, "Restore", H_EV_RESTORE, 0, "Puts the selected events back into the import (Delete key).");
+    button(st, g, l + 170, by, l + 240, by + 28, allMuted ? "Unmute" : "Mute", H_EV_MUTE, 0,
+           "Imports the selected events as muted items (M key).");
+    button(st, g, l + 246, by, l + 336, by + 28, "\xe2\x96\xb2 Track up", H_EV_UP, 0, "Moves the selected events one track up (arrow up).");
+    button(st, g, l + 342, by, l + 446, by + 28, "\xe2\x96\xbc Track down", H_EV_DOWN, 0,
+           "Moves the selected events one track down (arrow down). Below the last track a new track is added.");
+    checkbox(st, g, l + 460, by + 6, st->moveAutomation, H_EV_AUTOMATION, 0,
              "Volume and pan automation under a moved event goes with it to the new track.");
-    g.text(st->fBody, kInk, "Move automation along", l + 438, by, r - 14, by + 28, DT_LEFT);
+    g.text(st->fBody, kInk, "Move automation along", l + 484, by, r - 14, by + 28, DT_LEFT);
   }
   if (st->edited)
     button(st, g, r - 116, t + 6, r - 14, t + 28, "Reset edits", H_EV_RESET, 0,
@@ -753,13 +777,14 @@ void paintFolderPopover(State *st, const Gfx &g) {
     const Folder &f = s.folders[(size_t)i];
     bool cur = tr.group == f.key;
     if (cur) g.fill(px + 1, y, px + pw - 1, y + rowH, kBlueSoft);
-    g.fill(px + 12, y + 8, px + 22, y + 18, f.color ? rgbToRef(f.color) : kMute);
+    g.box(px + 9, y + 5, px + 25, y + 21, theme().empty, f.color ? rgbToRef(f.color) : kPanel);
+    addHit(st, px + 7, y + 3, px + 27, y + 23, H_FOLD_COLOR, i, "Set the folder color.");
     bool renaming = st->editKind == 2 && st->editKey == f.key;
     if (!renaming) g.text(cur ? st->fBold : st->fBody, kInk, f.name, px + 30, y, px + pw - 64, y + rowH, DT_LEFT);
     int nTr = 0;
     for (auto &t : s.tracks) nTr += t.group == f.key;
     g.text(st->fClip, kMute, std::to_string(nTr), px + pw - 84, y, px + pw - 62, y + rowH, DT_RIGHT);
-    addHit(st, px + 1, y, px + pw - 60, y + rowH, H_FOLD_ASSIGN, i, "Put the track into this folder.");
+    addHit(st, px + 28, y, px + pw - 60, y + rowH, H_FOLD_ASSIGN, i, "Put the track into this folder.");
     g.box(px + pw - 56, y + 3, px + pw - 34, y + rowH - 3, kLine, kPanel);
     g.text(st->fBody, kInk, "\xe2\x9c\x8e", px + pw - 56, y + 3, px + pw - 34, y + rowH - 3, DT_CENTER);
     addHit(st, px + pw - 56, y + 3, px + pw - 34, y + rowH - 3, H_FOLD_RENAME, i, "Rename this folder.");
@@ -776,22 +801,41 @@ void paintFolderPopover(State *st, const Gfx &g) {
   button(st, g, px + 10, y, px + 130, y + 26, "+ New folder", H_FOLD_NEW, 0, "Add a folder and put this track into it.");
 }
 
+// color popover for a track or a folder, next to the square that was clicked
 void paintPalette(State *st, const Gfx &g) {
   Session &s = st->imp->session();
-  if (st->palTrack < st->scrollRow || st->palTrack >= st->scrollRow + kRows) return;
-  double py = kRowsTop + (st->palTrack - st->scrollRow + 1) * kRowH;
-  if (py + 130 > kBandBot) py -= kRowH + 130;
-  double px = kColR + 30;
-  g.box(px, py, px + 176, py + 126, kLine, kPanel);
-  g.text(st->fSec, kMute, "COLOR \xc2\xb7 " + s.tracks[(size_t)st->palTrack].name, px + 10, py + 4, px + 170, py + 24, DT_LEFT);
+  uint32_t cur = 0;
+  std::string title, noneLabel = "None";
+  const char *noneTip = "REAPER's default color.";
+  if (!st->palFolder.empty()) {
+    Folder *f = s.folder(st->palFolder);
+    if (!f) return;
+    cur = f->color;
+    title = f->name;
+  } else {
+    if (st->palTrack < 0 || st->palTrack >= (int)s.tracks.size()) return;
+    Track &t = s.tracks[(size_t)st->palTrack];
+    cur = t.color;
+    title = t.name;
+    if (st->opt->folders && !t.group.empty() && s.folder(t.group)) {
+      noneLabel = "Folder";
+      noneTip = "No color of its own: the track takes the color of its folder.";
+    }
+  }
+  const double pw = 176, ph = 126;
+  double px = std::min(st->palX, (double)W - 16 - pw);
+  double py = st->palY + 4;
+  if (py + ph > H - 30) py = st->palY0 - 4 - ph;
+  g.box(px, py, px + pw, py + ph, kLine, kPanel);
+  addHit(st, px, py, px + pw, py + ph, H_PAL_BG, 0, nullptr);
+  g.text(st->fSec, kMute, "COLOR \xc2\xb7 " + title, px + 10, py + 4, px + 170, py + 24, DT_LEFT);
   for (int i = 0; i < 10; i++) {
     double sx = px + 10 + (i % 5) * 32, sy = py + 28 + (i / 5) * 30;
-    bool cur = s.tracks[(size_t)st->palTrack].color == kPalette[i];
-    g.box(sx, sy, sx + 24, sy + 24, cur ? kInk : RGB(0x99, 0x99, 0x99), rgbToRef(kPalette[i]));
+    g.box(sx, sy, sx + 24, sy + 24, cur == kPalette[i] ? kInk : RGB(0x99, 0x99, 0x99), rgbToRef(kPalette[i]));
     addHit(st, sx, sy, sx + 24, sy + 24, H_PAL, i, "Pick this color.");
   }
   button(st, g, px + 10, py + 92, px + 86, py + 116, "Custom\xe2\x80\xa6", H_PAL_CUSTOM, 0, "Any color.");
-  button(st, g, px + 92, py + 92, px + 166, py + 116, "None", H_PAL_NONE, 0, "REAPER's default color.");
+  button(st, g, px + 92, py + 92, px + 166, py + 116, noneLabel, H_PAL_NONE, 0, noneTip);
 }
 
 void paint(State *st, HDC dc) {
@@ -811,8 +855,8 @@ void paint(State *st, HDC dc) {
   paintEvent(st, g, ch);
   paintStatus(st, g, ch);
   paintOptions(st, g, ch);
-  if (st->palTrack >= 0) paintPalette(st, g);
   if (st->folderTrack >= 0 && st->opt->folders) paintFolderPopover(st, g);
+  if (st->palTrack >= 0 || !st->palFolder.empty()) paintPalette(st, g);
   g.text(st->fSmall, kMute, st->tip ? st->tip : "Pick the tracks and events to import, check the options, then Import.",
          16, ch - 46, cw - 16, ch - 28, DT_LEFT);
   g.fill(16, ch - 26, cw - 16, ch - 25, kLine);
@@ -820,8 +864,7 @@ void paint(State *st, HDC dc) {
   // light / dark switch, bottom right
   g.box(cw - 38, ch - 23, cw - 16, ch - 5, kLine, kPanel);
   g.text(st->fBody, kInk, darkTheme() ? "\xe2\x98\xbe" : "\xe2\x98\x80", cw - 38, ch - 23, cw - 16, ch - 5, DT_CENTER);
-  g.text(st->fTag, kMute, darkTheme() ? "Dark" : "Light", cw - 120, ch - 23, cw - 44, ch - 5, DT_RIGHT);
-  addHit(st, cw - 120, ch - 23, cw - 16, ch - 5, H_THEME, 0, "Light or dark interface.");
+  addHit(st, cw - 38, ch - 23, cw - 16, ch - 5, H_THEME, 0, "Light or dark interface.");
 }
 
 // ------------------------------------------------------------------ input
@@ -844,6 +887,23 @@ const ClipHit *clipAt(State *st, int x, int y) {
 
 std::vector<int> selection(State *st) { return std::vector<int>(st->sel.begin(), st->sel.end()); }
 
+void toggleMute(State *st) {
+  bool all = true;
+  for (int id : st->sel)
+    if (Clip *k = st->imp->findClip(id)) all = all && k->mute;
+  for (int id : st->sel)
+    if (Clip *k = st->imp->findClip(id)) k->mute = !all;
+  if (!st->sel.empty()) st->edited = true;
+}
+
+void toggleExcluded(State *st) {
+  bool anyIn = false;
+  for (int id : st->sel)
+    if (Clip *k = st->imp->findClip(id)) anyIn = anyIn || !k->excluded;
+  st->imp->setExcluded(std::vector<int>(st->sel.begin(), st->sel.end()), anyIn);
+  if (!st->sel.empty()) st->edited = true;
+}
+
 void moveSelectionBy(State *st, int delta) {
   if (!delta || st->sel.empty()) return;
   Session &s = st->imp->session();
@@ -858,12 +918,17 @@ void moveSelectionBy(State *st, int delta) {
     }
   }
   if (hi < 0) return;
-  // each event keeps its distance to the others; stop at the first / last track
+  // each event keeps its distance to the others; stop at the first track,
+  // below the last track new tracks are added
   delta = std::max(delta, -lo);
-  delta = std::min(delta, (int)s.tracks.size() - 1 - hi);
   if (!delta) return;
+  while (hi + delta >= (int)s.tracks.size()) st->imp->addTrack(hi);
   for (auto &p : byTrack) st->imp->moveClips({p.second}, p.first + delta, st->moveAutomation);
   st->edited = true;
+  // keep the moved events in view
+  int target = std::min(hi + delta, (int)s.tracks.size() - 1), top = std::max(0, lo + delta);
+  if (target >= st->scrollRow + kRows) st->scrollRow = target - kRows + 1;
+  if (top < st->scrollRow) st->scrollRow = top;
 }
 
 void keepTrackChoices(State *st, const std::function<void()> &rebuild) {
@@ -946,14 +1011,18 @@ void click(State *st, int x, int y, bool shift) {
   const Hit *h = hitAt(st, x, y);
   int id = h ? h->id : H_NONE;
   bool inFolderPop = id == H_FOLD_ASSIGN || id == H_FOLD_NONE || id == H_FOLD_RENAME || id == H_FOLD_DELETE ||
-                     id == H_FOLD_NEW || id == H_FOLD_POP;
-  if (st->folderTrack >= 0 && !inFolderPop && id != H_FOLDER_CELL) {
-    st->folderTrack = -1;
-    InvalidateRect(st->hwnd, NULL, FALSE);
-    if (id == H_LIST || id == H_TIMELINE || id == H_NONE) return;
-  }
-  if (st->palTrack >= 0 && id != H_PAL && id != H_PAL_CUSTOM && id != H_PAL_NONE && id != H_TRACK_COLOR) {
+                     id == H_FOLD_NEW || id == H_FOLD_POP || id == H_FOLD_COLOR;
+  bool inPal = id == H_PAL || id == H_PAL_CUSTOM || id == H_PAL_NONE || id == H_PAL_BG;
+  bool palOpen = st->palTrack >= 0 || !st->palFolder.empty();
+  // a click outside a popover closes it; a click on empty space only closes it
+  if (palOpen && !inPal && id != H_TRACK_COLOR && id != H_FOLD_COLOR) {
     st->palTrack = -1;
+    st->palFolder.clear();
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    if (id == H_LIST || id == H_TIMELINE || id == H_NONE || id == H_FOLD_POP) return;
+  }
+  if (st->folderTrack >= 0 && !inFolderPop && !inPal && id != H_FOLDER_CELL) {
+    st->folderTrack = -1;
     InvalidateRect(st->hwnd, NULL, FALSE);
     if (id == H_LIST || id == H_TIMELINE || id == H_NONE) return;
   }
@@ -997,15 +1066,51 @@ void click(State *st, int x, int y, bool shift) {
     return;
   }
   case H_FOLD_POP: return;
-  case H_TRACK_COLOR: st->palTrack = st->palTrack == h->idx ? -1 : h->idx; break;
-  case H_PAL: s.tracks[(size_t)st->palTrack].color = kPalette[h->idx]; st->palTrack = -1; break;
-  case H_PAL_NONE: s.tracks[(size_t)st->palTrack].color = 0; st->palTrack = -1; break;
-  case H_PAL_CUSTOM: {
-    uint32_t c = s.tracks[(size_t)st->palTrack].color;
-    if (st->host->pickColor && st->host->pickColor(st->hwnd, &c)) s.tracks[(size_t)st->palTrack].color = c ? c : 1;
-    st->palTrack = -1;
+  case H_TRACK_COLOR: {
+    bool same = st->palTrack == h->idx;
+    st->palTrack = same ? -1 : h->idx;
+    st->palFolder.clear();
+    st->folderTrack = -1;
+    double y = kRowsTop + (h->idx - st->scrollRow) * kRowH;
+    st->palX = kColR + 34;
+    st->palY = y + 25;
+    st->palY0 = y + 5;
     break;
   }
+  case H_FOLD_COLOR: {
+    std::string key = s.folders[(size_t)h->idx].key;
+    bool same = st->palFolder == key;
+    st->palFolder = same ? std::string() : key;
+    st->palTrack = -1;
+    double px, py, ph;
+    folderPopoverRect(st, &px, &py, &ph);
+    double y = py + 30 + h->idx * kFpRowH;
+    st->palX = px + 7;
+    st->palY = y + 23;
+    st->palY0 = y + 3;
+    break;
+  }
+  case H_PAL:
+  case H_PAL_NONE:
+  case H_PAL_CUSTOM: {
+    uint32_t *target = nullptr;
+    if (!st->palFolder.empty()) {
+      if (Folder *f = s.folder(st->palFolder)) target = &f->color;
+    } else if (st->palTrack >= 0 && st->palTrack < (int)s.tracks.size())
+      target = &s.tracks[(size_t)st->palTrack].color;
+    if (target) {
+      if (id == H_PAL) *target = kPalette[h->idx];
+      else if (id == H_PAL_NONE) *target = 0;
+      else {
+        uint32_t c = *target;
+        if (st->host->pickColor && st->host->pickColor(st->hwnd, &c)) *target = c ? c : 1;
+      }
+    }
+    st->palTrack = -1; // the folder popover stays open after picking a folder color
+    st->palFolder.clear();
+    break;
+  }
+  case H_PAL_BG: return;
   case H_SEL_ALL: for (auto &t : s.tracks) t.import = true; break;
   case H_SEL_NONE: for (auto &t : s.tracks) t.import = false; break;
   case H_ZOOM_FIT: {
@@ -1071,6 +1176,7 @@ void click(State *st, int x, int y, bool shift) {
     break;
   }
   case H_EV_REMOVE: st->imp->setExcluded(selection(st), true); st->edited = true; break;
+  case H_EV_MUTE: toggleMute(st); break;
   case H_EV_RESTORE: st->imp->setExcluded(selection(st), false); st->edited = true; break;
   case H_EV_UP: moveSelectionBy(st, -1); break;
   case H_EV_DOWN: moveSelectionBy(st, 1); break;
@@ -1123,6 +1229,25 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return 0;
   }
   case WM_ERASEBKGND: return 1;
+#ifdef _WIN32
+  case WM_GETDLGCODE: // the dialog wants the arrow keys and letters for the selected events
+    SetWindowLongPtr(hwnd, DWLP_MSGRESULT, DLGC_WANTARROWS | DLGC_WANTCHARS);
+    return TRUE;
+#endif
+  case WM_KEYDOWN:
+    if (st && !st->editKind && !st->sel.empty()) {
+      bool done = true;
+      if (wp == VK_UP) moveSelectionBy(st, -1);
+      else if (wp == VK_DOWN) moveSelectionBy(st, 1);
+      else if (wp == 'M') toggleMute(st);
+      else if (wp == VK_DELETE || wp == VK_BACK) toggleExcluded(st);
+      else done = false;
+      if (done) {
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 1;
+      }
+    }
+    return 0;
   case WM_SIZE:
     if (st) {
       if (st->editKind) endEdit(st, true);
@@ -1160,6 +1285,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   case WM_LBUTTONDOWN: {
     POINT p = {(short)LOWORD(lp), (short)HIWORD(lp)};
     if (st->editKind && !PtInRect(&st->editRc, p)) endEdit(st, true); // clicking elsewhere applies what was typed
+    if (!st->editKind) SetFocus(hwnd); // so the arrow keys reach the selected events
     st->dragMoved = false;
     st->pressedClip = 0;
     if (PtInRect(&st->vTrack, p) && st->rowsTotal > kRows) {
@@ -1340,6 +1466,7 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   if (!tr.empty() && tr[0].clips.size() > 2) {
     st.sel.insert(tr[0].clips[2].id);
     imp.setExcluded({tr[0].clips[1].id}, true);
+    if (tr[0].clips.size() > 3) tr[0].clips[3].mute = true;
     st.edited = true;
   }
   paint(&st, dc);

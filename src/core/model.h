@@ -81,6 +81,7 @@ struct Track {
   int channels = 1;
   std::vector<Clip> clips;
   bool import = true;
+  bool created = false;   // added in the dialog to move events onto; skipped when it stays empty
   uint32_t color = 0;     // 0xRRGGBB, 0 = no color
   double volume = 1.0;    // constant track fader gain from the AAF
   double pan = 0.0;       // -1 left .. +1 right
