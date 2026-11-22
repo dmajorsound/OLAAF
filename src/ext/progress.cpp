@@ -214,7 +214,7 @@ void paint(HWND hwnd, HDC dc, Ui *ui) {
 
   // footer
   fill(dc, pl, S(302), pr, S(303), kLine);
-  text(dc, ui->fTag, kMute, "V 0.4 beta developed with AI assistance", pl, S(306), pr, S(324), DT_LEFT);
+  text(dc, ui->fTag, kMute, "V 0.5 beta developed with AI assistance", pl, S(306), pr, S(324), DT_LEFT);
 
 }
 
