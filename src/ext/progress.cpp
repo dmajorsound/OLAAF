@@ -164,6 +164,7 @@ void paint(HWND hwnd, HDC dc, Ui *ui) {
     text(dc, ui->fLine, kMute, "\xe2\x80\x93 AAF Import for Reaper", S(52) + tw + S(6), S(16), S(520), S(34), DT_LEFT);
   }
   text(dc, ui->fTag, kMute, "Do you wanna build a Reaper Session?", S(52), S(33), S(400), S(46), DT_LEFT);
+  drawDmajorLogo(dc, cr.right - S(16), S(31), S(26), kInk, kMute, ui->fTag);
 
   // panel
   int pl = S(16), pt = S(58), pr = cr.right - S(16), pb = S(250);
@@ -213,8 +214,8 @@ void paint(HWND hwnd, HDC dc, Ui *ui) {
 
   // footer
   fill(dc, pl, S(302), pr, S(303), kLine);
-  text(dc, ui->fTag, kMute, "V 0.4 beta developed with AI assistance", pl, S(306), pr - S(150), S(324), DT_LEFT);
-  drawDmajorLogo(dc, pr, S(315), S(14), kInk, kMute, ui->fTag);
+  text(dc, ui->fTag, kMute, "V 0.4 beta developed with AI assistance", pl, S(306), pr, S(324), DT_LEFT);
+
 }
 
 INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {

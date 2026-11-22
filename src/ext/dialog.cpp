@@ -326,9 +326,7 @@ void paintHeader(State *st, const Gfx &g, double cw) {
   if (tw < 20 || tw > 200) tw = 55;
   g.text(st->fTitleThin, kMute, "\xe2\x80\x93 AAF Import for Reaper", 56 + tw + 6, 10, 600, 36, DT_LEFT);
   g.text(st->fTag, kMute, "Do you wanna build a Reaper Session?", 56, 34, 400, 50, DT_LEFT);
-  g.box(cw - 48, 16, cw - 16, 48, kLine, kPanel);
-  g.text(st->fTheme, kInk, darkTheme() ? "\xe2\x98\xbe" : "\xe2\x98\x80", cw - 48, 16, cw - 16, 48, DT_CENTER);
-  addHit(st, cw - 48, 16, cw - 16, 48, H_THEME, 0, "Light or dark interface.");
+  drawDmajorLogo(g.dc, g.S(cw - 16), g.S(33), g.S(30), kInk, kMute, st->fSmall);
 
   // file bar with the timecode offset
   double fy = 60, fb = 104;
@@ -704,7 +702,11 @@ void paint(State *st, HDC dc) {
          16, ch - 46, cw - 16, ch - 28, DT_LEFT);
   g.fill(16, ch - 26, cw - 16, ch - 25, kLine);
   g.text(st->fTag, kMute, "V 0.4 beta developed with AI assistance", 16, ch - 22, cw - 200, ch - 6, DT_LEFT);
-  drawDmajorLogo(dc, g.S(cw - 16), g.S(ch - 14), g.S(14), kInk, kMute, st->fTag);
+  // light / dark switch, bottom right
+  g.box(cw - 38, ch - 23, cw - 16, ch - 5, kLine, kPanel);
+  g.text(st->fBody, kInk, darkTheme() ? "\xe2\x98\xbe" : "\xe2\x98\x80", cw - 38, ch - 23, cw - 16, ch - 5, DT_CENTER);
+  g.text(st->fTag, kMute, darkTheme() ? "Dark" : "Light", cw - 120, ch - 23, cw - 44, ch - 5, DT_RIGHT);
+  addHit(st, cw - 120, ch - 23, cw - 16, ch - 5, H_THEME, 0, "Light or dark interface.");
 }
 
 // ------------------------------------------------------------------ input
