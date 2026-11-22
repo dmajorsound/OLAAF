@@ -5,6 +5,7 @@
 #include <vector>
 #include "../src/core/importer.h"
 #include "../src/core/util.h"
+#include "../src/ext/theme.h"
 #include "../third_party/reaper-sdk/WDL/swell/swell.h"
 #undef min
 #undef max
@@ -38,7 +39,7 @@ static int mDraw(HDC, const char *buf, int, RECT *r, int align) {
   snprintf(t, 1024, "<clipPath id='c%d'><rect x='%ld' y='%ld' width='%ld' height='%ld'/></clipPath><text clip-path='url(#c%d)' x='%d' y='%ld' font-family='Helvetica, Arial, sans-serif' font-size='%d' font-weight='%s' fill='%s' text-anchor='%s' dominant-baseline='central'>",
            clipN, r->left, r->top, r->right - r->left, r->bottom - r->top, clipN, x, (r->top + r->bottom) / 2, curFont.h, curFont.bold ? "bold" : "normal", hex(curText).c_str(), anchor);
   svg += t; svg += esc(buf); svg += "</text>\n"; return 0; }
-static void mClient(HWND, RECT *r) { r->left = r->top = 0; r->right = 1180; r->bottom = 760; }
+static void mClient(HWND, RECT *r) { r->left = r->top = 0; r->right = 1180; r->bottom = 800; }
 static BOOL mPt(const RECT *r, POINT p) { return p.x >= r->left && p.x < r->right && p.y >= r->top && p.y < r->bottom; }
 
 int main(int argc, char **argv) {
@@ -52,7 +53,8 @@ int main(int argc, char **argv) {
   if (imp.session().tracks.size() > 2) imp.session().tracks[2].color = 0xD9822B;
   if (imp.session().tracks.size() > 4) imp.session().tracks[4].import = false;
   int pal = argc > 3 ? atoi(argv[3]) : -1;
-  svg = "<svg xmlns='http://www.w3.org/2000/svg' width='1180' height='760'>\n";
+  svg = "<svg xmlns='http://www.w3.org/2000/svg' width='1180' height='800'>\n";
+  if (argc > 4) olaaf::setDarkTheme(true);
   dialogPaintTest(imp, opt, (HDC)1, pal, nullptr);
   svg += "</svg>\n";
   FILE *f = fopen(argv[2], "wb"); fwrite(svg.data(), 1, svg.size(), f); fclose(f);

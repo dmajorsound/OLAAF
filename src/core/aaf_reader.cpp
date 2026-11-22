@@ -126,6 +126,40 @@ bool AafFile::load(const std::string &path, const ReadOptions &opt, Session *s, 
     s->media.push_back(m);
   }
 
+  // video (libAAF reads one video clip per track)
+  if (a->Video) {
+    aafiVideoTrack *vt = nullptr;
+    AAFI_foreachVideoTrack(a, vt) {
+      if (!vt->timelineItems || !vt->timelineItems->data) continue;
+      aafiVideoClip *vc = (aafiVideoClip *)vt->timelineItems->data;
+      aafPosition_t startEU = aafi_convertUnit(a->compositionStart, a->compositionStart_editRate, vt->edit_rate);
+      VideoClip v;
+      v.pos = eu2s(vc->pos + startEU, vt->edit_rate);
+      v.len = eu2s(vc->len, vt->edit_rate);
+      v.srcOffset = eu2s(vc->essence_offset, vt->edit_rate);
+      if (vc->Essence) {
+        v.name = vc->Essence->name ? vc->Essence->name : "";
+        v.originalUri = vc->Essence->original_file_path ? vc->Essence->original_file_path : "";
+        if (vc->Essence->usable_file_path) v.foundPath = vc->Essence->usable_file_path;
+      }
+      if (!v.originalUri.empty()) s->video.push_back(v);
+    }
+  }
+
+  // markers
+  aafiMarker *mk = nullptr;
+  AAFI_foreachMarker(a, mk) {
+    Marker m;
+    aafPosition_t startEU = aafi_convertUnit(a->compositionStart, a->compositionStart_editRate, mk->edit_rate);
+    m.pos = eu2s(mk->start + startEU, mk->edit_rate);
+    m.len = eu2s(mk->length, mk->edit_rate);
+    m.name = mk->name ? mk->name : "";
+    m.comment = mk->comment ? mk->comment : "";
+    auto c8 = [](uint16_t v) { return (uint32_t)(v > 255 ? v >> 8 : v); }; // 8 or 16 bit components
+    m.color = (c8(mk->RGBColor[0]) << 16) | (c8(mk->RGBColor[1]) << 8) | c8(mk->RGBColor[2]);
+    s->markers.push_back(m);
+  }
+
   // tracks and clips
   aafiAudioTrack *tr = nullptr;
   AAFI_foreachAudioTrack(a, tr) {

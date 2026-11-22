@@ -14,6 +14,7 @@
 #include <thread>
 
 #include "progress.h"
+#include "theme.h"
 
 #ifndef _WIN32
 #include "../../third_party/reaper-sdk/WDL/swell/swell-dlggen.h"
@@ -47,12 +48,13 @@ void progressSetInstance(void *h) { g_hInst = h; }
 namespace {
 
 // look of the other dmajorsound plugins (light mode)
-const COLORREF kFace = RGB(0xe9, 0xeb, 0xee);
-const COLORREF kPanel = RGB(0xff, 0xff, 0xff);
-const COLORREF kLine = RGB(0xc4, 0xc9, 0xd0);
-const COLORREF kMute = RGB(0x66, 0x70, 0x7b);
-const COLORREF kInk = RGB(0x2b, 0x30, 0x36);
-const COLORREF kBlue = RGB(0x55, 0x80, 0xd4);
+#define kFace (theme().face)
+#define kPanel (theme().panel)
+#define kLine (theme().line)
+#define kMute (theme().mute)
+#define kInk (theme().ink)
+#define kBlue (theme().blue)
+const COLORREF kWhite = RGB(0xff, 0xff, 0xff);
 const COLORREF kGreen = RGB(0x1D, 0x9E, 0x75);
 const COLORREF kAmber = RGB(0xE8, 0xA0, 0x20);
 const COLORREF kRed = RGB(0xe2, 0x3b, 0x2e);
@@ -146,9 +148,9 @@ void paint(HWND hwnd, HDC dc, Ui *ui) {
 
   // header: logo and name
   fill(dc, S(16), S(18), S(42), S(44), kBlue);
-  fill(dc, S(22), S(24), S(31), S(27), kPanel);
-  fill(dc, S(26), S(29), S(37), S(32), kPanel);
-  fill(dc, S(22), S(34), S(29), S(37), kPanel);
+  fill(dc, S(22), S(24), S(31), S(27), kWhite);
+  fill(dc, S(26), S(29), S(37), S(32), kWhite);
+  fill(dc, S(22), S(34), S(29), S(37), kWhite);
   text(dc, ui->fTitle, kInk, "olAAF", S(52), S(16), S(400), S(34), DT_LEFT);
   {
     HGDIOBJ old = SelectObject(dc, ui->fTitle);

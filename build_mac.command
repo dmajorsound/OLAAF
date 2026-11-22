@@ -47,7 +47,7 @@ for f in third_party/libaaf/src/LibCFB/*.c third_party/libaaf/src/AAFCore/*.c \
 done
 
 echo "2/3  Compiling olAAF ..."
-for f in src/core/*.cpp src/ext/main.cpp src/ext/progress.cpp src/ext/dialog.cpp; do
+for f in src/core/*.cpp src/ext/main.cpp src/ext/progress.cpp src/ext/dialog.cpp src/ext/theme.cpp; do
   o="$B/obj/olaaf_$(basename "$f" .cpp).o"
   $CXX $ARCH -O2 -std=c++17 -fvisibility=hidden -DSWELL_PROVIDED_BY_APP \
        -Ithird_party/libaaf/include -Ithird_party/reaper-sdk/sdk -c "$f" -o "$o"

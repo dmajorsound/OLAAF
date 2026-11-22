@@ -10,6 +10,7 @@
 #include "../core/util.h"
 #include "progress.h"
 #include "dialog.h"
+#include "theme.h"
 
 #include <cstring>
 #include <string>
@@ -32,6 +33,9 @@
 #define REAPERAPI_WANT_GetTrack
 #define REAPERAPI_WANT_GetUserFileNameForRead
 #define REAPERAPI_WANT_InsertTrackAtIndex
+#define REAPERAPI_WANT_AddProjectMarker2
+#define REAPERAPI_WANT_GetExtState
+#define REAPERAPI_WANT_SetExtState
 #define REAPERAPI_WANT_Main_OnCommand
 #define REAPERAPI_WANT_PreventUIRefresh
 #define REAPERAPI_WANT_SetMediaTrackInfo_Value
@@ -83,6 +87,42 @@ static std::string summary(const Importer &imp, const MediaReport &rep, int merg
   return m;
 }
 
+// ---------------------------------------------------------------- remembered settings
+
+static bool getFlag(const char *key, bool def) {
+  const char *v = GetExtState("olAAF", key);
+  return (v && *v) ? v[0] == '1' : def;
+}
+static void setFlag(const char *key, bool v) { SetExtState("olAAF", key, v ? "1" : "0", true); }
+
+static void loadSettings(ImportOptions &o) {
+  o.copyToSubdir = getFlag("copy", true);
+  o.mergeStereo = getFlag("merge", true);
+  o.fades = getFlag("fades", true);
+  o.clipGain = getFlag("gain", true);
+  o.video = getFlag("video", true);
+  o.markers = getFlag("markers", true);
+  o.folders = getFlag("folders", true);
+  setDarkTheme(getFlag("dark", false));
+  const char *d = GetExtState("olAAF", "dest");
+  if (d && *d && getFlag("destCustom", false)) o.destDir = d;
+}
+
+static void saveSettings(const ImportOptions &o, const std::string &defaultDest) {
+  setFlag("copy", o.copyToSubdir);
+  setFlag("merge", o.mergeStereo);
+  setFlag("fades", o.fades);
+  setFlag("gain", o.clipGain);
+  setFlag("video", o.video);
+  setFlag("markers", o.markers);
+  setFlag("folders", o.folders);
+  setFlag("dark", darkTheme());
+  // remember a destination only when the user chose one (not the project folder)
+  bool custom = o.destDir != defaultDest;
+  setFlag("destCustom", custom);
+  if (custom) SetExtState("olAAF", "dest", o.destDir.c_str(), true);
+}
+
 static DialogHost makeHost() {
   DialogHost h;
   h.askText = [](const char *title, const char *caption, std::string *value) {
@@ -128,7 +168,12 @@ static bool runImport(const std::string &aaf, ImportOptions &opt, Importer &imp,
     return false;
   }
 
-  if (!showImportDialog(GetMainHwnd(), imp, opt, makeHost())) {
+  std::string defaultDest = opt.destDir;
+  loadSettings(opt);
+  imp.setMergeStereo(opt.mergeStereo);
+  bool accepted = showImportDialog(GetMainHwnd(), imp, opt, makeHost());
+  saveSettings(opt, defaultDest);
+  if (!accepted) {
     err.clear(); // closed without importing
     return false;
   }
@@ -171,20 +216,23 @@ static void importIntoProject() {
   PreventUIRefresh(1);
   int base = CountTracks(nullptr);
   auto chunks = imp.trackChunks(opt);
-  size_t ti = 0;
   for (size_t i = 0; i < chunks.size(); i++) {
     InsertTrackAtIndex(base + (int)i, false);
     MediaTrack *tr = GetTrack(nullptr, base + (int)i);
     if (!tr) continue;
-    SetTrackStateChunk(tr, chunks[i].c_str(), false);
-    // set the color through the API so it is right on every platform
-    while (ti < imp.session().tracks.size() && !imp.session().tracks[ti].import) ti++;
-    if (ti < imp.session().tracks.size()) {
-      uint32_t c = imp.session().tracks[ti].color;
-      if (c) SetMediaTrackInfo_Value(tr, "I_CUSTOMCOLOR", (double)(ColorToNative((c >> 16) & 255, (c >> 8) & 255, c & 255) | 0x1000000));
-      ti++;
-    }
+    SetTrackStateChunk(tr, chunks[i].text.c_str(), false);
+    // color and folder structure through the API, so they are right on every platform
+    uint32_t c = chunks[i].color;
+    if (c) SetMediaTrackInfo_Value(tr, "I_CUSTOMCOLOR", (double)(ColorToNative((c >> 16) & 255, (c >> 8) & 255, c & 255) | 0x1000000));
+    SetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH", (double)chunks[i].folderDepth);
   }
+  if (opt.markers)
+    for (auto &m : imp.session().markers) {
+      uint32_t c = m.color;
+      int col = c ? (ColorToNative((c >> 16) & 255, (c >> 8) & 255, c & 255) | 0x1000000) : 0;
+      std::string name = m.name.empty() ? m.comment : m.name;
+      AddProjectMarker2(nullptr, m.len > 0, m.pos + opt.tcOffset, m.pos + m.len + opt.tcOffset, name.c_str(), -1, col);
+    }
   PreventUIRefresh(-1);
   TrackList_AdjustWindows(false);
   // build the waveforms right away instead of when the items are first drawn

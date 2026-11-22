@@ -61,6 +61,19 @@ struct Clip {
   int chanMode = 0;        // REAPER take channel mode (0 normal, 3 left, 4 right)
 };
 
+struct VideoClip {
+  std::string name;
+  std::string originalUri;
+  std::string foundPath;
+  double pos = 0.0, len = 0.0, srcOffset = 0.0;
+};
+
+struct Marker {
+  double pos = 0.0, len = 0.0;
+  std::string name, comment;
+  uint32_t color = 0; // 0xRRGGBB, 0 = default
+};
+
 struct Track {
   std::string name;
   int channels = 1;
@@ -72,6 +85,7 @@ struct Track {
   std::vector<GainPoint> volEnv; // track volume automation (absolute time, linear gain)
   std::vector<GainPoint> panEnv; // track pan automation (absolute time, -1..+1)
   std::string mergedFrom; // "SFX 1.L + SFX 1.R" when merged
+  std::string group;      // folder it goes into: DIALOG, FOLEY, FX, ATMO, MUSIC, OTHER
 };
 
 struct Session {
@@ -86,6 +100,8 @@ struct Session {
   int bits = 24;
   std::vector<Track> tracks;
   std::vector<Media> media;
+  std::vector<VideoClip> video;
+  std::vector<Marker> markers;
   std::vector<std::string> warnings;
 
   double firstClip() const;

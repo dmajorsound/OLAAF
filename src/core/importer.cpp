@@ -6,6 +6,7 @@
 #include "util.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -13,6 +14,43 @@
 #include <set>
 
 namespace olaaf {
+
+static std::vector<std::string> tokens(const std::string &name) {
+  std::vector<std::string> out;
+  std::string cur;
+  for (unsigned char c : lower(name)) {
+    if (std::isalnum(c) || c >= 0x80) cur += (char)c;
+    else if (!cur.empty()) { out.push_back(cur); cur.clear(); }
+  }
+  if (!cur.empty()) out.push_back(cur);
+  return out;
+}
+
+std::string trackGroup(const std::string &trackName) {
+  static const struct { const char *group; std::vector<std::string> keys; } table[] = {
+      {"MUSIC", {"mus", "music", "musik", "mx", "score", "song"}},
+      {"ATMO", {"atmo", "atmos", "amb", "ambi", "ambience", "bg", "bgs", "roomtone", "rt"}},
+      {"FOLEY", {"foley", "fol", "ger\xc3\xa4usche", "ger\xc3\xa4usch", "gerausche", "steps", "fs"}},
+      {"FX", {"sfx", "fx", "effect", "effects", "hardfx", "design", "sd"}},
+      {"DIALOG", {"dia", "dx", "dlg", "dial", "dialog", "dialogue", "boom", "lav", "anstecker", "fr", "vo", "adr",
+                  "voice", "ot", "guide", "sprache", "mic"}},
+  };
+  auto tk = tokens(trackName);
+  for (auto &row : table)
+    for (auto &t : tk)
+      for (auto &k : row.keys)
+        if (t == k || (k.size() >= 4 && t.compare(0, k.size(), k) == 0)) return row.group;
+  return "OTHER";
+}
+
+uint32_t groupColor(const std::string &g) {
+  if (g == "DIALOG") return 0x5580d4;
+  if (g == "FOLEY") return 0x7A5AC8;
+  if (g == "FX") return 0xD9822B;
+  if (g == "ATMO") return 0x1F9A8A;
+  if (g == "MUSIC") return 0xC8423B;
+  return 0x6B7480;
+}
 
 std::string defaultSubdir(const Session &s) {
   return safeFileName((s.name.empty() ? stemName(s.aafPath) : s.name) + "_Audio");
@@ -45,6 +83,28 @@ void Importer::locateMedia(const ImportOptions &opt) {
     byName.emplace(e.first, e.second);
     byLoose.emplace(loose(e.first), e.second);
   }
+
+  auto findFile = [&](const std::string &uri) -> std::string {
+    std::string p = uriToPath(uri);
+    std::vector<std::string> tries = {p};
+    if (p.size() > 1 && p[0] == '/') {
+      size_t s2 = p.find('/', 1);
+      if (s2 != std::string::npos) {
+        tries.push_back(p.substr(s2));
+        tries.push_back("/Volumes" + p);
+      }
+    }
+    for (auto &t : tries)
+      if (fileExists(t)) return t;
+    std::string b = lower(baseName(p));
+    auto it = byName.find(b);
+    if (it != byName.end()) return it->second;
+    auto il = byLoose.find(loose(b));
+    if (il != byLoose.end()) return il->second;
+    return "";
+  };
+  for (auto &v : s_.video)
+    if (!fileExists(v.foundPath)) v.foundPath = findFile(v.originalUri);
 
   for (auto &m : s_.media) {
     if (m.kind == MediaKind::Embedded) continue;
@@ -380,10 +440,52 @@ static uint32_t nativeColor(uint32_t rgb) {
   return 0x1000000u | (b << 16) | (g << 8) | r;
 }
 
-std::vector<std::string> Importer::trackChunks(const ImportOptions &opt) const {
-  std::vector<std::string> out;
-  for (auto &t : s_.tracks) {
-    if (!t.import) continue;
+std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
+  std::vector<TrackChunk> out;
+
+  // video reference on top
+  if (opt.video && !s_.video.empty()) {
+    TrackChunk v;
+    v.text = "<TRACK\nNAME \"VIDEO\"\nNCHAN 2\n";
+    for (auto &vc : s_.video) {
+      std::string f = vc.foundPath.empty() ? uriToPath(vc.originalUri) : vc.foundPath;
+      v.text += "<ITEM\nPOSITION " + num(vc.pos + opt.tcOffset) + "\nLENGTH " + num(vc.len) + "\nLOOP 0\n";
+      v.text += "NAME " + q(vc.name.empty() ? baseName(f) : vc.name) + "\nSOFFS " + num(vc.srcOffset) + "\n";
+      v.text += "<SOURCE VIDEO\nFILE " + q(f) + "\n>\n>\n";
+    }
+    v.text += ">\n";
+    out.push_back(v);
+  }
+
+  // the order tracks are written in: grouped by folder, or as in the AAF
+  std::vector<std::pair<std::string, const Track *>> order;
+  static const char *groups[] = {"DIALOG", "FOLEY", "FX", "ATMO", "MUSIC", "OTHER"};
+  // folders only help when the tracks fall into at least two groups
+  std::set<std::string> present;
+  for (auto &t : s_.tracks)
+    if (t.import) present.insert(trackGroup(t.name));
+  bool useFolders = opt.folders && present.size() >= 2;
+  if (useFolders) {
+    for (const char *g : groups)
+      for (auto &t : s_.tracks)
+        if (t.import && trackGroup(t.name) == g) order.push_back({g, &t});
+  } else
+    for (auto &t : s_.tracks)
+      if (t.import) order.push_back({"", &t});
+
+  for (size_t oi = 0; oi < order.size(); oi++) {
+    const Track &t = *order[oi].second;
+    const std::string &grp = order[oi].first;
+    bool firstInGroup = useFolders && (oi == 0 || order[oi - 1].first != grp);
+    bool lastInGroup = useFolders && (oi + 1 == order.size() || order[oi + 1].first != grp);
+    if (firstInGroup) {
+      TrackChunk f;
+      f.text = "<TRACK\nNAME " + q(grp) + "\n" + strprintf("PEAKCOL %u\n", nativeColor(groupColor(grp))) +
+               "ISBUS 1 1\nNCHAN 2\n>\n";
+      f.folderDepth = 1;
+      f.color = groupColor(grp);
+      out.push_back(f);
+    }
     std::string c;
     c += "<TRACK\n";
     c += "NAME " + q(t.name) + "\n";
@@ -434,7 +536,16 @@ std::vector<std::string> Importer::trackChunks(const ImportOptions &opt) const {
       c += ">\n";
     }
     c += ">\n";
-    out.push_back(c);
+    if (lastInGroup) {
+      // ISBUS 2 -1 closes the folder
+      size_t pos = c.find("\nNCHAN");
+      c.insert(pos, "\nISBUS 2 -1");
+    }
+    TrackChunk tc;
+    tc.text = c;
+    tc.folderDepth = lastInGroup ? -1 : 0;
+    tc.color = t.color;
+    out.push_back(tc);
   }
   return out;
 }
@@ -442,7 +553,12 @@ std::vector<std::string> Importer::trackChunks(const ImportOptions &opt) const {
 std::string Importer::projectRpp(const ImportOptions &opt) const {
   std::string r = "<REAPER_PROJECT 0.1 \"7.0/olAAF\" 0\n";
   r += strprintf("SAMPLERATE %d 0 0\n", s_.sampleRate);
-  for (auto &c : trackChunks(opt)) r += c;
+  if (opt.markers) {
+    int n = 1;
+    for (auto &m : s_.markers)
+      r += strprintf("MARKER %d %s %s 0\n", n++, num(m.pos + opt.tcOffset).c_str(), q(m.name.empty() ? m.comment : m.name).c_str());
+  }
+  for (auto &c : trackChunks(opt)) r += c.text;
   r += ">\n";
   return r;
 }
