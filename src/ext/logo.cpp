@@ -14,33 +14,18 @@ const Pt kMark[] = {{0.0000f,0.8156f},{0.0125f,0.8531f},{0.0375f,0.8906f},{0.065
 const float kMarkW = 1.4812f;
 } // namespace
 
-int drawDmajorLogo(HDC dc, int right, int midY, int markH, COLORREF color, HFONT font) {
-  const char *word = "DMAJORSOUND";
-  int n = (int)strlen(word);
-  HGDIOBJ oldF = SelectObject(dc, font);
-  int adv[16], total = 0;
-  int track = (int)std::lround(markH * 0.18); // letter spacing like the artwork
-  for (int i = 0; i < n; i++) {
-    char ch[2] = {word[i], 0};
-    RECT rc = {0, 0, 1000, 100};
-    DrawText(dc, ch, 1, &rc, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
-    adv[i] = rc.right - rc.left;
-    total += adv[i] + (i < n - 1 ? track : 0);
-  }
-  int markW = (int)std::lround(markH * kMarkW);
-  int gap = (int)std::lround(markH * 0.45);
-  int left = right - total - gap - markW;
-
-  // mark
+int drawDmajorLogo(HDC dc, int right, int midY, int markH, COLORREF markColor, COLORREF textColor, HFONT font) {
+  // the mark at the right edge
   const int np = (int)(sizeof(kMark) / sizeof(kMark[0]));
   POINT pts[sizeof(kMark) / sizeof(kMark[0])];
-  int top = midY - markH / 2;
+  int markW = (int)std::lround(markH * kMarkW);
+  int left = right - markW, top = midY - markH / 2;
   for (int i = 0; i < np; i++) {
     pts[i].x = left + (int)std::lround(kMark[i].x * markH);
     pts[i].y = top + (int)std::lround(kMark[i].y * markH);
   }
-  HBRUSH br = CreateSolidBrush(color);
-  HPEN pen = CreatePen(PS_SOLID, 1, color);
+  HBRUSH br = CreateSolidBrush(markColor);
+  HPEN pen = CreatePen(PS_SOLID, 1, markColor);
   HGDIOBJ oldB = SelectObject(dc, br), oldP = SelectObject(dc, pen);
   Polygon(dc, pts, np);
   SelectObject(dc, oldB);
@@ -48,17 +33,18 @@ int drawDmajorLogo(HDC dc, int right, int midY, int markH, COLORREF color, HFONT
   DeleteObject(br);
   DeleteObject(pen);
 
-  // word
-  SetTextColor(dc, color);
+  // "dmajorsound.com" in small type, left of the mark
+  const char *url = "dmajorsound.com";
+  HGDIOBJ oldF = SelectObject(dc, font);
+  RECT m = {0, 0, 2000, 200};
+  DrawText(dc, url, -1, &m, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+  int tw = m.right - m.left;
+  int tr = left - (int)std::lround(markH * 0.5);
+  RECT rc = {tr - tw - 2, midY - markH, tr, midY + markH};
+  SetTextColor(dc, textColor);
   SetBkMode(dc, TRANSPARENT);
-  int x = left + markW + gap;
-  for (int i = 0; i < n; i++) {
-    char ch[2] = {word[i], 0};
-    RECT rc = {x, midY - markH, x + adv[i] + 4, midY + markH};
-    DrawText(dc, ch, 1, &rc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
-    x += adv[i] + track;
-  }
+  DrawText(dc, url, -1, &rc, DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX);
   SelectObject(dc, oldF);
-  return left;
+  return rc.left;
 }
 } // namespace olaaf

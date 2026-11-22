@@ -8,8 +8,7 @@
 #endif
 
 namespace olaaf {
-// Draws the dmajorsound logo (mark plus spaced "DMAJORSOUND") as one line, right-aligned at
-// 'right', vertically centered on 'midY'. markH is the mark height in device pixels.
-// Returns the left edge of what was drawn.
-int drawDmajorLogo(HDC dc, int right, int midY, int markH, COLORREF color, HFONT font);
+// Footer signature: the dmajorsound mark at 'right', "dmajorsound.com" in small type to its left,
+// vertically centered on 'midY'. markH is the mark height in device pixels. Returns the left edge.
+int drawDmajorLogo(HDC dc, int right, int midY, int markH, COLORREF markColor, COLORREF textColor, HFONT font);
 } // namespace olaaf

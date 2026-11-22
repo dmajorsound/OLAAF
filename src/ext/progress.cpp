@@ -213,8 +213,8 @@ void paint(HWND hwnd, HDC dc, Ui *ui) {
 
   // footer
   fill(dc, pl, S(302), pr, S(303), kLine);
-  text(dc, ui->fTag, kMute, "V 0.4 beta developed with AI assistance by dmajorsound", pl, S(306), pr - S(150), S(324), DT_LEFT);
-  drawDmajorLogo(dc, pr, S(315), S(13), kInk, ui->fLogo);
+  text(dc, ui->fTag, kMute, "V 0.4 beta developed with AI assistance", pl, S(306), pr - S(150), S(324), DT_LEFT);
+  drawDmajorLogo(dc, pr, S(315), S(14), kInk, kMute, ui->fTag);
 }
 
 INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
