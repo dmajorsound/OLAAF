@@ -1,0 +1,67 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (universal arm64 + x86_64)
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+          cmake --build build --config Release -j 4
+      - name: Package (.pkg)
+        run: |
+          mkdir -p pkgroot payload
+          cp build/src/ext/reaper_olaaf.dylib payload/
+          chmod +x installer/mac/postinstall
+          pkgbuild --root payload --install-location /tmp/olaaf-install \
+            --scripts installer/mac --identifier com.dmajorsound.olaaf \
+            --version 0.1.0 olAAF-0.1.0-mac.pkg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: olAAF-mac
+          path: |
+            olAAF-0.1.0-mac.pkg
+            build/src/ext/reaper_olaaf.dylib
+            build/olaaf-cli
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (x64)
+        run: |
+          cmake -S . -B build -A x64
+          cmake --build build --config Release
+      - name: Package (.exe)
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\win\olaaf.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: olAAF-windows
+          path: |
+            installer/win/Output/olAAF-0.1.0-win64.exe
+            build/src/ext/Release/reaper_olaaf.dll
+            build/Release/olaaf-cli.exe
+
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j 4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: olAAF-linux
+          path: |
+            build/src/ext/reaper_olaaf.so
+            build/olaaf-cli

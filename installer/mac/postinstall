@@ -1,0 +1,12 @@
+#!/bin/sh
+# olAAF installer: copies the extension into the REAPER UserPlugins folder of the logged-in user.
+USER_NAME=$(stat -f%Su /dev/console)
+USER_HOME=$(dscl . -read "/Users/$USER_NAME" NFSHomeDirectory | awk '{print $2}')
+DEST="$USER_HOME/Library/Application Support/REAPER/UserPlugins"
+mkdir -p "$DEST"
+cp -f /tmp/olaaf-install/reaper_olaaf.dylib "$DEST/"
+# remove the quarantine flag so REAPER can load it
+xattr -d com.apple.quarantine "$DEST/reaper_olaaf.dylib" 2>/dev/null
+chown "$USER_NAME" "$DEST/reaper_olaaf.dylib"
+rm -rf /tmp/olaaf-install
+exit 0
