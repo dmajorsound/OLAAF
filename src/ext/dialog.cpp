@@ -704,7 +704,7 @@ void paint(State *st, HDC dc) {
          16, ch - 46, cw - 16, ch - 28, DT_LEFT);
   g.fill(16, ch - 26, cw - 16, ch - 25, kLine);
   g.text(st->fTag, kMute, "V 0.4 beta developed with AI assistance", 16, ch - 22, cw - 200, ch - 6, DT_LEFT);
-  drawDmajorLogo(dc, g.S(cw - 16), g.S(ch - 13), g.S(14), kInk, kMute, st->fTag);
+  drawDmajorLogo(dc, g.S(cw - 16), g.S(ch - 14), g.S(14), kInk, kMute, st->fTag);
 }
 
 // ------------------------------------------------------------------ input

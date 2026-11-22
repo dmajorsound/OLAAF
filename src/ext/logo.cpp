@@ -40,7 +40,10 @@ int drawDmajorLogo(HDC dc, int right, int midY, int markH, COLORREF markColor, C
   DrawText(dc, url, -1, &m, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
   int tw = m.right - m.left;
   int tr = left - (int)std::lround(markH * 0.5);
-  RECT rc = {tr - tw - 2, midY - markH, tr, midY + markH};
+  // DrawText centers the whole line box (ascent + descent); lowercase type then sits optically high,
+  // so it is nudged down a little to line up with the middle of the mark
+  int nudge = (int)std::lround(markH * 0.07);
+  RECT rc = {tr - tw - 2, midY - markH + nudge, tr, midY + markH + nudge};
   SetTextColor(dc, textColor);
   SetBkMode(dc, TRANSPARENT);
   DrawText(dc, url, -1, &rc, DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX);
