@@ -61,7 +61,11 @@ bool Importer::load(const std::string &aafPath, const ImportOptions &opt, std::s
   unmerged_.clear();
   haveUnmerged_ = false;
   aaf_.reset(new AafFile());
-  return aaf_->load(aafPath, opt.read, &s_, error);
+  if (!aaf_->load(aafPath, opt.read, &s_, error)) return false;
+  int id = 1;
+  for (auto &t : s_.tracks)
+    for (auto &c : t.clips) c.id = id++;
+  return true;
 }
 
 // ------------------------------------------------------------------ locate
@@ -168,6 +172,80 @@ static bool sameTimeline(const Track &a, const Track &b) {
   return true;
 }
 
+// ------------------------------------------------------------------ event edits
+
+static double envAt(const std::vector<GainPoint> &env, double t, double def) {
+  if (env.empty()) return def;
+  if (t <= env.front().time) return env.front().gain;
+  if (t >= env.back().time) return env.back().gain;
+  for (size_t i = 1; i < env.size(); i++)
+    if (t <= env[i].time) {
+      const GainPoint &a = env[i - 1], &b = env[i];
+      double f = b.time > a.time ? (t - a.time) / (b.time - a.time) : 0;
+      return a.gain + (b.gain - a.gain) * f;
+    }
+  return def;
+}
+
+// copy the source envelope over [t0, t1] into dst, keeping dst's own values outside
+static void spliceEnv(const std::vector<GainPoint> &src, double srcDef, std::vector<GainPoint> &dst, double dstDef,
+                      double t0, double t1) {
+  if (src.empty() && dst.empty()) return;
+  std::vector<GainPoint> out;
+  const double eps = 1e-4;
+  for (auto &p : dst)
+    if (p.time < t0 - eps) out.push_back(p);
+  out.push_back({t0 - eps, envAt(dst, t0, dstDef)});
+  out.push_back({t0, envAt(src, t0, srcDef)});
+  for (auto &p : src)
+    if (p.time > t0 && p.time < t1) out.push_back(p);
+  out.push_back({t1, envAt(src, t1, srcDef)});
+  out.push_back({t1 + eps, envAt(dst, t1, dstDef)});
+  for (auto &p : dst)
+    if (p.time > t1 + eps) out.push_back(p);
+  dst.swap(out);
+}
+
+Clip *Importer::findClip(int id, int *track) {
+  for (size_t t = 0; t < s_.tracks.size(); t++)
+    for (auto &c : s_.tracks[t].clips)
+      if (c.id == id) {
+        if (track) *track = (int)t;
+        return &c;
+      }
+  return nullptr;
+}
+
+void Importer::setExcluded(const std::vector<int> &ids, bool ex) {
+  for (int id : ids)
+    if (Clip *c = findClip(id)) c->excluded = ex;
+}
+
+void Importer::moveClips(const std::vector<int> &ids, int target, bool withAutomation) {
+  if (target < 0 || target >= (int)s_.tracks.size()) return;
+  for (int id : ids) {
+    int from = -1;
+    Clip *c = findClip(id, &from);
+    if (!c || from == target) continue;
+    Clip moved = *c;
+    Track &src = s_.tracks[(size_t)from];
+    Track &dst = s_.tracks[(size_t)target];
+    if (withAutomation) {
+      double t0 = moved.pos, t1 = moved.pos + moved.len;
+      if (!src.volEnv.empty() || !dst.volEnv.empty()) {
+        // a target without automation still plays at its fader level outside the clip
+        spliceEnv(src.volEnv, src.volume, dst.volEnv, dst.volume, t0, t1);
+      }
+      if (!src.panEnv.empty() || !dst.panEnv.empty()) spliceEnv(src.panEnv, src.pan, dst.panEnv, dst.pan, t0, t1);
+    }
+    src.clips.erase(src.clips.begin() + (c - src.clips.data()));
+    auto at = std::lower_bound(dst.clips.begin(), dst.clips.end(), moved,
+                               [](const Clip &a, const Clip &b) { return a.pos < b.pos; });
+    dst.clips.insert(at, moved);
+    if ((int)moved.sources.size() > dst.channels) dst.channels = (int)moved.sources.size();
+  }
+}
+
 int Importer::setMergeStereo(bool on) {
   if (!haveUnmerged_) {
     unmerged_ = s_.tracks;
@@ -235,8 +313,9 @@ bool Importer::prepareMedia(const ImportOptions &opt, MediaReport *rep, const Pr
   for (auto &t : s_.tracks)
     if (t.import)
       for (auto &c : t.clips)
-        for (auto &src : c.sources)
-          if (src.media >= 0) used.insert(src.media);
+        if (!c.excluded)
+          for (auto &src : c.sources)
+            if (src.media >= 0) used.insert(src.media);
 
   size_t step = 0, total = used.size() + 1;
   for (int mi : used) {
@@ -309,6 +388,7 @@ bool Importer::prepareMedia(const ImportOptions &opt, MediaReport *rep, const Pr
   for (auto &t : s_.tracks) {
     if (!t.import) continue;
     for (auto &c : t.clips) {
+      if (c.excluded) continue;
       c.chanMode = 0;
       if (c.sources.empty() || c.sources[0].media < 0) continue;
       const Media &m0 = s_.media[(size_t)c.sources[0].media];
@@ -505,6 +585,7 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
       c += ">\n";
     }
     for (auto &k : t.clips) {
+      if (k.excluded) continue;
       c += "<ITEM\n";
       c += "POSITION " + num(k.pos + opt.tcOffset) + "\n";
       c += "LENGTH " + num(k.len) + "\n";

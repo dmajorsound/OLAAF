@@ -59,6 +59,8 @@ struct Clip {
   std::vector<GainPoint> gainEnv; // clip gain automation (optional)
   std::string outPath;     // file used by REAPER for this clip (set by media stage)
   int chanMode = 0;        // REAPER take channel mode (0 normal, 3 left, 4 right)
+  int id = 0;              // unique within the session (selection in the dialog)
+  bool excluded = false;   // removed from the import in the dialog
 };
 
 struct VideoClip {

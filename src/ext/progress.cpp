@@ -211,7 +211,7 @@ void paint(HWND hwnd, HDC dc, Ui *ui) {
 
   // footer
   fill(dc, pl, S(302), pr, S(303), kLine);
-  text(dc, ui->fTag, kMute, "V 0.3 beta developed with AI assistance by dmajorsound", pl, S(306), pr, S(324), DT_LEFT);
+  text(dc, ui->fTag, kMute, "V 0.4 beta developed with AI assistance by dmajorsound", pl, S(306), pr, S(324), DT_LEFT);
 }
 
 INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {

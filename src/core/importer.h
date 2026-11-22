@@ -60,7 +60,15 @@ public:
   int mergeStereoTracks();
 
   // Switches the .L/.R merge on or off after loading (keeps the unmerged tracks to go back to).
+  // Event edits (removed / moved clips) are reset by this.
   int setMergeStereo(bool on);
+
+  // Event edits from the dialog
+  void setExcluded(const std::vector<int> &clipIds, bool excluded);
+  // Moves clips to another track; with `withAutomation` the track volume/pan automation under each
+  // clip goes along (it replaces the target's automation over the clip's time range).
+  void moveClips(const std::vector<int> &clipIds, int targetTrack, bool withAutomation);
+  Clip *findClip(int id, int *track = nullptr);
 
   // Copies / converts / extracts media into the destination and assigns each clip its file.
   bool prepareMedia(const ImportOptions &opt, MediaReport *rep, const Progress &progress);
