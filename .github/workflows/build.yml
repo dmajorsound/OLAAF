@@ -2,6 +2,8 @@ name: build
 
 on:
   push:
+    tags: ["v*"]
+    branches: ["**"]
   pull_request:
   workflow_dispatch:
 
@@ -75,3 +77,47 @@ jobs:
           path: |
             build/src/ext/reaper_olaaf.so
             build/olaaf-cli
+
+  # a tag like v0.5.0 publishes the installers as a GitHub release (the download page)
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.txt <<'NOTES'
+          **olAAF – AAF Import for Reaper.** Do you wanna build a Reaper Session?
+
+          Free REAPER extension by dmajorsound. Imports AAF files from Pro Tools, DaVinci Resolve, Premiere, Avid and Nuendo with tracks, clips, fades, crossfades, clip gain and automation, sample-accurate.
+
+          ### Download
+          - **Mac** (Apple Silicon and Intel): `olAAF-…-mac.pkg`
+          - **Windows** (64-bit): `olAAF-…-win64.exe`
+
+          ### Install
+          1. Quit REAPER.
+          2. Open the installer and click through. It puts olAAF into your REAPER UserPlugins folder.
+          3. Start REAPER and open **Extensions → olAAF: Import AAF…** (or drag an .aaf onto REAPER).
+
+          Mac: if macOS says the installer is from an unidentified developer, right-click the .pkg, choose **Open**, then **Open** again.
+          Windows: if SmartScreen warns, click **More info → Run anyway**.
+
+          ### What it does
+          - Preview of the whole AAF: choose tracks, folders and colors, remove, mute or move single events (automation goes along)
+          - Combine .L / .R tracks to stereo, timecode offset, video and markers
+          - Finds the media next to the AAF (and in folders you point to); MXF, AIFF and embedded audio become Broadcast WAV
+
+          V VERSION beta, developed with AI assistance. dmajorsound.com
+          NOTES
+          sed -i "s/VERSION/${GITHUB_REF_NAME#v}/" notes.txt
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --title "olAAF ${GITHUB_REF_NAME#v} beta" \
+            --notes-file notes.txt --prerelease \
+            dl/olAAF-mac/*.pkg dl/olAAF-windows/installer/win/Output/*.exe
