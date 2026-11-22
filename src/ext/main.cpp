@@ -19,6 +19,7 @@
 
 #define REAPERAPI_IMPLEMENT
 #define REAPERAPI_MINIMAL
+#define REAPERAPI_WANT_AddExtensionsMainMenu
 #define REAPERAPI_WANT_ColorToNative
 #define REAPERAPI_WANT_CountTracks
 #define REAPERAPI_WANT_GetProjectPath
@@ -152,6 +153,20 @@ static bool onAction(KbdSectionInfo *sec, int command, int val, int val2, int re
   return false;
 }
 
+// ---------------------------------------------------------------- Extensions menu
+
+static void menuHook(const char *menuId, void *menu, int flag) {
+  if (flag != 0 || !menu || !g_cmdImport || strcmp(menuId, "Main extensions")) return;
+  MENUITEMINFO mi;
+  memset(&mi, 0, sizeof(mi));
+  mi.cbSize = sizeof(mi);
+  mi.fMask = MIIM_TYPE | MIIM_ID;
+  mi.fType = MFT_STRING;
+  mi.wID = (UINT)g_cmdImport;
+  mi.dwTypeData = (char *)"olAAF: Import AAF...";
+  InsertMenuItem((HMENU)menu, GetMenuItemCount((HMENU)menu), TRUE, &mi);
+}
+
 // ---------------------------------------------------------------- project import (.aaf as project)
 
 static bool wantProjectFile(const char *fn) {
@@ -200,6 +215,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_H
   if (!rec) {
     plugin_register("-hookcommand2", (void *)onAction);
     plugin_register("-projectimport", &g_projImport);
+    plugin_register("-hookcustommenu", (void *)menuHook);
     return 0;
   }
   if (rec->caller_version != REAPER_PLUGIN_VERSION || !rec->GetFunc) return 0;
@@ -210,5 +226,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_H
   g_cmdImport = plugin_register("custom_action", &act);
   plugin_register("hookcommand2", (void *)onAction);
   plugin_register("projectimport", &g_projImport);
+  AddExtensionsMainMenu();
+  plugin_register("hookcustommenu", (void *)menuHook);
   return 1;
 }
