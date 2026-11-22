@@ -280,13 +280,13 @@ struct Gfx {
     SetTextColor(dc, c);
     SetBkMode(dc, TRANSPARENT);
     RECT rc = R(l, t, r, b);
-    DrawText(dc, str.c_str(), -1, &rc, align | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+    olDrawText(dc, str.c_str(), &rc, align | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
     SelectObject(dc, old);
   }
   double width(HFONT f, const std::string &str) const {
     HGDIOBJ old = SelectObject(dc, f);
     RECT rc = {0, 0, 4000, 100};
-    DrawText(dc, str.c_str(), -1, &rc, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+    olDrawText(dc, str.c_str(), &rc, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
     SelectObject(dc, old);
     return (rc.right - rc.left) / s;
   }
@@ -1235,7 +1235,7 @@ void startEdit(State *st, int kind, RECT r, const std::string &text, const std::
   st->editKind = kind;
   st->editKey = key;
   SetWindowPos(st->tcEdit, NULL, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
-  SetWindowText(st->tcEdit, text.c_str());
+  olSetText(st->tcEdit, text.c_str());
   ShowWindow(st->tcEdit, SW_SHOW);
   SetFocus(st->tcEdit);
   SendMessage(st->tcEdit, EM_SETSEL, 0, -1);
@@ -1246,9 +1246,7 @@ void endEdit(State *st, bool apply) {
   if (!st->editKind || !st->tcEdit) return;
   int kind = st->editKind;
   st->editKind = 0; // first, so the focus change below does not come back here
-  char buf[512] = {0};
-  GetWindowText(st->tcEdit, buf, sizeof(buf));
-  std::string v = buf;
+  std::string v = olGetText(st->tcEdit);
   while (!v.empty() && (v.back() == ' ' || v.back() == '\t')) v.pop_back();
   while (!v.empty() && (v[0] == ' ' || v[0] == '\t')) v.erase(0, 1);
   if (apply && kind == 1) {
@@ -1529,7 +1527,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       SetWindowPos(hwnd, NULL, std::max((int)pr.left, (int)(pr.left + pr.right - w) / 2),
                    std::max((int)pr.top, (int)(pr.top + pr.bottom - h) / 2), w, h, SWP_NOZORDER);
 #endif
-    SetWindowText(hwnd, "olAAF - AAF Import for Reaper");
+    olSetText(hwnd, "olAAF \xe2\x80\x93 AAF Import for Reaper");
     relayout(st);
     double a, b;
     sessionRange(st->imp->session(), &a, &b);

@@ -127,7 +127,7 @@ void text(HDC dc, HFONT f, COLORREF c, const std::string &s, int l, int t, int r
   SetTextColor(dc, c);
   SetBkMode(dc, TRANSPARENT);
   RECT rc = {l, t, r, b};
-  DrawText(dc, s.c_str(), -1, &rc, align | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+  olDrawText(dc, s.c_str(), &rc, align | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
   SelectObject(dc, old);
 }
 
@@ -157,7 +157,7 @@ void paint(HWND hwnd, HDC dc, Ui *ui) {
   {
     HGDIOBJ old = SelectObject(dc, ui->fTitle);
     RECT m = {0, 0, 4000, 100};
-    DrawText(dc, "olAAF", -1, &m, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+    olDrawText(dc, "olAAF", &m, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
     SelectObject(dc, old);
     int tw = m.right - m.left;
     if (tw < S(20) || tw > S(200)) tw = S(46);

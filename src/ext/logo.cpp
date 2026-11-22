@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstring>
 #include "logo.h"
+#include "theme.h"
 #undef min
 #undef max
 
@@ -37,7 +38,7 @@ int drawDmajorLogo(HDC dc, int right, int midY, int markH, COLORREF markColor, C
   const char *url = "dmajorsound.com";
   HGDIOBJ oldF = SelectObject(dc, font);
   RECT m = {0, 0, 2000, 200};
-  DrawText(dc, url, -1, &m, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+  olDrawText(dc, url, &m, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
   int tw = m.right - m.left;
   int tr = left - (int)std::lround(markH * 0.5);
   // put the middle of the capital / ascender height on the middle of the mark: baseline = mid + cap/2
@@ -52,7 +53,7 @@ int drawDmajorLogo(HDC dc, int right, int midY, int markH, COLORREF markColor, C
   RECT rc = {tr - tw - 2, top2, tr, top2 + (tm.tmHeight > 0 ? tm.tmHeight : em + em / 4)};
   SetTextColor(dc, textColor);
   SetBkMode(dc, TRANSPARENT);
-  DrawText(dc, url, -1, &rc, DT_SINGLELINE | DT_TOP | DT_RIGHT | DT_NOPREFIX);
+  olDrawText(dc, url, &rc, DT_SINGLELINE | DT_TOP | DT_RIGHT | DT_NOPREFIX);
   SelectObject(dc, oldF);
   return rc.left;
 }

@@ -13,7 +13,41 @@
 #undef min
 #undef max
 
+#include <string>
+
 namespace olaaf {
+
+// Text in olAAF is UTF-8. Windows needs it as UTF-16 (the plain DrawText / SetWindowText take the
+// ANSI code page and turn "–", "·", "▾" into garbage); macOS / Linux (SWELL) take UTF-8 directly.
+#ifdef _WIN32
+inline std::wstring olWide(const char *s) {
+  int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
+  std::wstring w(n > 0 ? (size_t)n : 1, L'\0');
+  if (n > 0) MultiByteToWideChar(CP_UTF8, 0, s, -1, &w[0], n);
+  if (!w.empty() && w.back() == L'\0') w.pop_back();
+  return w;
+}
+inline int olDrawText(HDC dc, const char *s, RECT *rc, UINT fmt) {
+  std::wstring w = olWide(s);
+  return DrawTextW(dc, w.c_str(), (int)w.size(), rc, fmt);
+}
+inline void olSetText(HWND h, const char *s) { SetWindowTextW(h, olWide(s).c_str()); }
+inline std::string olGetText(HWND h) {
+  wchar_t buf[1024] = {0};
+  GetWindowTextW(h, buf, 1024);
+  char out[4096] = {0};
+  WideCharToMultiByte(CP_UTF8, 0, buf, -1, out, sizeof(out), NULL, NULL);
+  return out;
+}
+#else
+inline int olDrawText(HDC dc, const char *s, RECT *rc, UINT fmt) { return DrawText(dc, s, -1, rc, fmt); }
+inline void olSetText(HWND h, const char *s) { SetWindowText(h, s); }
+inline std::string olGetText(HWND h) {
+  char buf[4096] = {0};
+  GetWindowText(h, buf, sizeof(buf));
+  return buf;
+}
+#endif
 
 struct Theme {
   COLORREF face, panel, line, soft, track, mute, ink, blue, blueSoft, blueLine, red, green, thumb, empty, off;
