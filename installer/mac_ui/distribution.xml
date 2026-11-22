@@ -2,8 +2,8 @@
 <installer-gui-script minSpecVersion="2">
     <title>olAAF – AAF Import for Reaper</title>
     <organization>com.dmajorsound</organization>
-    <background file="background.tiff" alignment="center" scaling="none"/>
-    <background-darkAqua file="background-darkAqua.tiff" alignment="center" scaling="none"/>
+    <background file="background.tiff" alignment="bottomleft" scaling="none"/>
+    <background-darkAqua file="background-darkAqua.tiff" alignment="bottomleft" scaling="none"/>
     <welcome file="welcome.html" mime-type="text/html"/>
     <license file="LICENSE.txt"/>
     <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
