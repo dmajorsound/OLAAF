@@ -43,6 +43,8 @@ struct TrackChunk {
   int folderDepth = 0;  // REAPER I_FOLDERDEPTH: 1 opens a folder, -1 closes it
   uint32_t color = 0;   // 0xRRGGBB
   bool videoFromFile = false; // the VIDEO track: take each item's length from its file
+  std::string targetGuid;     // set: no new track - put `items` on this existing REAPER track
+  std::vector<std::string> items; // the "<ITEM ... >" chunks of the track
 };
 
 // folder a track belongs in, from its name ("Boom 1" -> DIALOG, "ATMO Stereo 2" -> ATMO)

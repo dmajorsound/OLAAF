@@ -25,6 +25,8 @@ struct DialogHost {
   std::function<bool(HWND parent, uint32_t *rgb)> pickColor; // 0xRRGGBB
   std::function<bool(const char *title, std::string *path)> pickFile;
   std::function<double()> editCursor;
+  // tracks of the open REAPER project (GUID, name), for putting AAF tracks on existing ones; empty = none
+  std::function<std::vector<std::pair<std::string, std::string>>()> projectTracks;
 };
 
 // Shows the dialog. Returns true when the user pressed Import; `opt` and the session's

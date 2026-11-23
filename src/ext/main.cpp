@@ -53,6 +53,9 @@
 #define REAPERAPI_WANT_GetMediaItemTake_Source
 #define REAPERAPI_WANT_GetMediaSourceLength
 #define REAPERAPI_WANT_SetMediaItemInfo_Value
+#define REAPERAPI_WANT_GetSetMediaTrackInfo_String
+#define REAPERAPI_WANT_AddMediaItemToTrack
+#define REAPERAPI_WANT_SetItemStateChunk
 #include "reaper_plugin.h"
 #include "reaper_plugin_functions.h"
 #undef min
@@ -184,6 +187,18 @@ static DialogHost makeHost() {
     return true;
   };
   h.editCursor = []() { return GetCursorPosition(); };
+  h.projectTracks = []() {
+    std::vector<std::pair<std::string, std::string>> out;
+    int n = CountTracks(nullptr);
+    for (int i = 0; i < n; i++) {
+      MediaTrack *tr = GetTrack(nullptr, i);
+      char guid[64] = {0}, name[512] = {0};
+      if (!tr || !GetSetMediaTrackInfo_String(tr, "GUID", guid, false)) continue;
+      GetSetMediaTrackInfo_String(tr, "P_NAME", name, false);
+      out.push_back({guid, name[0] ? std::string(name) : strprintf("Track %d", i + 1)});
+    }
+    return out;
+  };
   return h;
 }
 
@@ -237,7 +252,9 @@ static bool runImport(const std::string &aaf, ImportOptions &opt, Importer &imp,
                       std::string &err) {
   std::string defaultDest;
   if (!loadForImport(aaf, opt, imp, err, defaultDest)) return false;
-  bool accepted = showImportDialog(GetMainHwnd(), imp, opt, makeHost());
+  DialogHost host = makeHost();
+  host.projectTracks = nullptr; // a new project: no existing tracks to put the AAF on
+  bool accepted = showImportDialog(GetMainHwnd(), imp, opt, host);
   saveSettings(opt, defaultDest);
   saveMediaFolders(opt.searchFolders); // Locate puts its folder first
   if (!accepted) {
@@ -252,9 +269,27 @@ static void insertTracks(Importer &imp, ImportOptions &opt, const MediaReport &r
   PreventUIRefresh(1);
   int base = CountTracks(nullptr);
   auto chunks = imp.trackChunks(opt);
+  int added = 0;
   for (size_t i = 0; i < chunks.size(); i++) {
-    InsertTrackAtIndex(base + (int)i, false);
-    MediaTrack *tr = GetTrack(nullptr, base + (int)i);
+    if (!chunks[i].targetGuid.empty()) { // onto an existing track ("match tracks"): only the items
+      MediaTrack *dst = nullptr;
+      for (int k = 0; k < CountTracks(nullptr) && !dst; k++) {
+        MediaTrack *tr = GetTrack(nullptr, k);
+        char guid[64] = {0};
+        if (tr && GetSetMediaTrackInfo_String(tr, "GUID", guid, false) && chunks[i].targetGuid == guid) dst = tr;
+      }
+      if (dst) {
+        for (auto &it : chunks[i].items) {
+          MediaItem *mi = AddMediaItemToTrack(dst);
+          if (mi) SetItemStateChunk(mi, it.c_str(), false);
+        }
+        continue;
+      }
+      // the track is gone (deleted while the window was open): a new track after all
+    }
+    InsertTrackAtIndex(base + added, false);
+    MediaTrack *tr = GetTrack(nullptr, base + added);
+    added++;
     if (!tr) continue;
     SetTrackStateChunk(tr, chunks[i].text.c_str(), false);
     // color and folder structure through the API, so they are right on every platform

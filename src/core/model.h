@@ -85,6 +85,8 @@ struct Track {
   bool import = true;
   bool created = false;   // added in the dialog to move events onto; skipped when it stays empty
   int uid = 0;            // stable id (tracks can be reordered)
+  std::string target;     // GUID of an existing REAPER track to put the events on ("" = a new track)
+  std::string targetName; // its name, for the dialog
   uint32_t color = 0;     // 0xRRGGBB, 0 = no color
   double volume = 1.0;    // constant track fader gain from the AAF
   double pan = 0.0;       // -1 left .. +1 right

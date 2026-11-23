@@ -725,9 +725,10 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
   if (opt.folders && !s_.folders.empty()) {
     for (auto &f : s_.folders)
       for (auto &t : s_.tracks)
-        if (t.import && t.group == f.key && !emptyCreated(t)) order.push_back({f.key, &t});
+        if (t.import && t.target.empty() && t.group == f.key && !emptyCreated(t)) order.push_back({f.key, &t});
     for (auto &t : s_.tracks)
-      if (t.import && !emptyCreated(t) && (t.group.empty() || !const_cast<Session &>(s_).folder(t.group)))
+      if (t.import && !emptyCreated(t) &&
+          (!t.target.empty() || t.group.empty() || !const_cast<Session &>(s_).folder(t.group)))
         order.push_back({"", &t});
   } else
     for (auto &t : s_.tracks)
@@ -767,8 +768,10 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
       for (auto &pt : t.panEnv) c += "PT " + num(pt.time + opt.tcOffset) + " " + num(-pt.gain) + " 0\n";
       c += ">\n";
     }
+    std::vector<std::string> items;
     for (auto &k : t.clips) {
       if (k.excluded) continue;
+      size_t itemStart = c.size();
       c += "<ITEM\n";
       c += "POSITION " + num(k.pos + opt.tcOffset) + "\n";
       c += "LENGTH " + num(k.len) + "\n";
@@ -799,6 +802,7 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
         c += ">\n";
       }
       c += ">\n";
+      items.push_back(c.substr(itemStart));
     }
     c += ">\n";
     if (lastInGroup) {
@@ -810,6 +814,8 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
     tc.text = c;
     tc.folderDepth = lastInGroup ? -1 : 0;
     tc.color = tcol;
+    tc.targetGuid = t.target;
+    tc.items = std::move(items);
     out.push_back(tc);
   }
   return out;
@@ -823,7 +829,7 @@ std::string Importer::projectRpp(const ImportOptions &opt) const {
     for (auto &m : s_.markers)
       r += strprintf("MARKER %d %s %s 0\n", n++, num(m.pos + opt.tcOffset).c_str(), q(m.name.empty() ? m.comment : m.name).c_str());
   }
-  for (auto &c : trackChunks(opt)) r += c.text;
+  for (auto &c : trackChunks(opt)) r += c.text; // (a new project: there are no existing tracks to match)
   r += ">\n";
   return r;
 }

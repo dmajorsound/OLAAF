@@ -123,7 +123,7 @@ enum HitId {
   H_CANCEL, H_IMPORT, H_TC_PLUS, H_TC_MINUS, H_TC_VALUE, H_TC_CURSOR, H_PAL, H_PAL_CUSTOM, H_PAL_NONE,
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
-  H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO
+  H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP
 };
 
 struct Hit {
@@ -192,6 +192,10 @@ struct State {
   std::string palFolder;   // ... or for this folder
   double palX = 0, palY = 0, palY0 = 0;
   int folderTrack = -1;    // folder popover for this track
+  int destTrack = -1;      // "put on" popover for this track (an existing REAPER track or a new one)
+  double dpX = 0, dpY = 0, dpY0 = 0;
+  int destScroll = 0;
+  std::vector<std::pair<std::string, std::string>> projTracks; // GUID, name - read when the popover opens
   double fpX = 0, fpY = 0, fpY0 = 0;
   // in-place text editor
   HWND tcEdit = nullptr;
@@ -802,6 +806,13 @@ void paintArrange(State *st, const Gfx &g) {
       g.box(hx + 20, cy, hx + 38, cy + 18, theme().empty, kPanel);
     addHit(st, hx + 16, y + 2, hx + 42, y + kRowH - 2, H_TRACK_CHECK, row.track, "Import this track or leave it out.");
     double nameR = kL + kHdr - 34;
+    if (st->host && st->host->projectTracks) { // put the events on an existing REAPER track
+      bool matched = !tr.target.empty();
+      g.text(st->fSmall, matched ? kBlue : kMute, "\xe2\x87\xa5", nameR - 16, y, nameR - 2, y + kRowH, DT_CENTER);
+      addHit(st, nameR - 18, y + 4, nameR, y + kRowH - 4, H_TRACK_DEST, row.track,
+             "Put this track on a track that is already in your REAPER project (or on a new one).");
+      nameR -= 18;
+    }
     if (opt.folders) {
       g.text(st->fSmall, kMute, "\xe2\x96\xbe", nameR - 16, y, nameR - 2, y + kRowH, DT_CENTER);
       addHit(st, nameR - 18, y + 4, nameR, y + kRowH - 4, H_TRACK_FOLDERMENU, row.track, "Choose the folder for this track.");
@@ -816,7 +827,10 @@ void paintArrange(State *st, const Gfx &g) {
     COLORREF nameC = (on && !grabbed) ? kInk : kMute;
     if (st->editKind == 4 && st->editTrack == row.track) nameC = trSel ? kBlueSoft : kPanel; // the editor sits on top
     double nx = hx + 48;
-    if (!tr.mergedFrom.empty()) {
+    if (!tr.target.empty()) {
+      g.text(st->fBody, nameC, tr.name, nx, y + 1, nameR, y + 18, DT_LEFT);
+      g.text(st->fClip, kBlue, "\xe2\x86\x92 " + tr.targetName, nx, y + 16, nameR, y + kRowH - 2, DT_LEFT);
+    } else if (!tr.mergedFrom.empty()) {
       g.text(st->fBody, nameC, tr.name, nx, y + 1, nameR, y + 18, DT_LEFT);
       g.text(st->fClip, kMute, tr.mergedFrom, nx, y + 16, nameR, y + kRowH - 2, DT_LEFT);
     } else
@@ -1137,6 +1151,51 @@ void paintFolderPopover(State *st, const Gfx &g) {
   button(st, g, px + 10, y, px + 130, y + 26, "+ New folder", H_FOLD_NEW, 0, "Add a folder and put this track into it.");
 }
 
+const int kDpRows = 9;
+const double kDpRowH = 24, kDpW = 260;
+
+void paintDestPopover(State *st, const Gfx &g) {
+  Session &s = st->imp->session();
+  if (st->destTrack < 0 || st->destTrack >= (int)s.tracks.size()) return;
+  Track &tr = s.tracks[(size_t)st->destTrack];
+  int n = (int)st->projTracks.size();
+  int shown = std::min(n, kDpRows);
+  double ph = 30 + 2 * kDpRowH + 9 + std::max(1, shown) * kDpRowH + 8;
+  double px = std::min(st->dpX, (double)W - 16 - kDpW), py = st->dpY;
+  if (py + ph > H - 20) py = st->dpY0 - ph;
+  py = std::max(py, 60.0);
+  g.box(px, py, px + kDpW, py + ph, kLine, kPanel);
+  addHit(st, px, py, px + kDpW, py + ph, H_DEST_POP, 0, nullptr);
+  g.text(st->fSec, kMute, "PUT ON \xc2\xb7 " + tr.name, px + 10, py + 4, px + kDpW - 10, py + 26, DT_LEFT);
+  double y = py + 30;
+  bool isNew = tr.target.empty();
+  if (isNew) g.fill(px + 1, y, px + kDpW - 1, y + kDpRowH, kBlueSoft);
+  g.text(isNew ? st->fBold : st->fBody, kInk, "A new track", px + 12, y, px + kDpW - 10, y + kDpRowH, DT_LEFT);
+  addHit(st, px + 1, y, px + kDpW - 1, y + kDpRowH, H_DEST_NEW, 0, "Import this track as a new REAPER track.");
+  y += kDpRowH;
+  g.text(st->fBody, kBlue, "Match all tracks by name", px + 12, y, px + kDpW - 10, y + kDpRowH, DT_LEFT);
+  addHit(st, px + 1, y, px + kDpW - 1, y + kDpRowH, H_DEST_MATCHALL, 0,
+         "Every AAF track goes onto the REAPER track with the same name; the others stay new tracks.");
+  y += kDpRowH + 4;
+  g.fill(px + 8, y, px + kDpW - 8, y + 1, kLine);
+  y += 5;
+  if (n == 0) {
+    g.text(st->fSmall, kMute, "Your project has no tracks yet.", px + 12, y, px + kDpW - 10, y + kDpRowH, DT_LEFT);
+    return;
+  }
+  st->destScroll = std::max(0, std::min(st->destScroll, n - shown));
+  for (int i = 0; i < shown; i++, y += kDpRowH) {
+    int k = st->destScroll + i;
+    bool cur = tr.target == st->projTracks[(size_t)k].first;
+    if (cur) g.fill(px + 1, y, px + kDpW - 1, y + kDpRowH, kBlueSoft);
+    g.text(cur ? st->fBold : st->fBody, kInk, st->projTracks[(size_t)k].second, px + 12, y, px + kDpW - 22, y + kDpRowH, DT_LEFT);
+    addHit(st, px + 1, y, px + kDpW - 1, y + kDpRowH, H_DEST_PICK, k, "Put the events on this REAPER track.");
+  }
+  if (n > shown) // a thin bar: where in the list we are (mouse wheel scrolls)
+    g.fill(px + kDpW - 6, py + 30 + 2 * kDpRowH + 9 + (double)st->destScroll / n * shown * kDpRowH, px + kDpW - 3,
+           py + 30 + 2 * kDpRowH + 9 + (double)(st->destScroll + shown) / n * shown * kDpRowH, theme().thumb);
+}
+
 void paintPalette(State *st, const Gfx &g) {
   Session &s = st->imp->session();
   uint32_t cur = 0;
@@ -1190,6 +1249,7 @@ void paint(State *st, HDC dc) {
   paintMediaBar(st, g);
   paintFooter(st, g);
   if (st->folderTrack >= 0 && st->opt->folders) paintFolderPopover(st, g);
+  if (st->destTrack >= 0) paintDestPopover(st, g);
   if (st->palTrack >= 0 || !st->palFolder.empty()) paintPalette(st, g);
 }
 
@@ -1292,9 +1352,9 @@ void dropTracks(State *st, int slot) {
 
 void keepTrackChoices(State *st, const std::function<void()> &rebuild) {
   Session &s = st->imp->session();
-  struct Keep { std::string name, group; bool import; uint32_t color; };
+  struct Keep { std::string name, group; bool import; uint32_t color; std::string target, targetName; };
   std::vector<Keep> keep;
-  for (auto &t : s.tracks) keep.push_back({t.name, t.group, t.import, t.color});
+  for (auto &t : s.tracks) keep.push_back({t.name, t.group, t.import, t.color, t.target, t.targetName});
   rebuild();
   for (auto &t : s.tracks)
     for (auto &k : keep)
@@ -1302,6 +1362,8 @@ void keepTrackChoices(State *st, const std::function<void()> &rebuild) {
         t.import = k.import;
         t.color = k.color;
         if (k.group.empty() || s.folder(k.group)) t.group = k.group;
+        t.target = k.target;
+        t.targetName = k.targetName;
       }
 }
 
@@ -1402,6 +1464,12 @@ void click(State *st, int x, int y, bool shift) {
     InvalidateRect(st->hwnd, NULL, FALSE);
     if (id == H_LANES || id == H_NONE || id == H_FOLD_POP) return;
   }
+  bool inDest = id == H_DEST_NEW || id == H_DEST_MATCHALL || id == H_DEST_PICK || id == H_DEST_POP;
+  if (st->destTrack >= 0 && !inDest && id != H_TRACK_DEST) {
+    st->destTrack = -1;
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    if (id == H_LANES || id == H_NONE) return;
+  }
   if (st->folderTrack >= 0 && !inFolderPop && !inPal && id != H_TRACK_FOLDERMENU) {
     st->folderTrack = -1;
     InvalidateRect(st->hwnd, NULL, FALSE);
@@ -1433,6 +1501,59 @@ void click(State *st, int x, int y, bool shift) {
     }
     break;
   }
+  case H_TRACK_DEST: {
+    bool same = st->destTrack == h->idx;
+    st->destTrack = same ? -1 : h->idx;
+    st->folderTrack = st->palTrack = -1;
+    st->palFolder.clear();
+    if (!same) {
+      st->projTracks = st->host->projectTracks ? st->host->projectTracks() : decltype(st->projTracks)();
+      st->destScroll = 0;
+    }
+    st->dpX = (h->r.left - st->ox) / st->scale - 120;
+    st->dpY = (h->r.bottom - st->oy) / st->scale + 2;
+    st->dpY0 = (h->r.top - st->oy) / st->scale - 2;
+    break;
+  }
+  case H_DEST_NEW:
+  case H_DEST_PICK: {
+    // the clicked track, or every selected track when it is one of them
+    std::set<int> which;
+    if (st->selTracks.count(st->destTrack)) which = st->selTracks;
+    else which.insert(st->destTrack);
+    for (int t : which) {
+      Track &tr = s.tracks[(size_t)t];
+      if (id == H_DEST_NEW) {
+        tr.target.clear();
+        tr.targetName.clear();
+      } else {
+        tr.target = st->projTracks[(size_t)h->idx].first;
+        tr.targetName = st->projTracks[(size_t)h->idx].second;
+        tr.group.clear(); // an existing track is not put into a new folder
+      }
+    }
+    st->destTrack = -1;
+    break;
+  }
+  case H_DEST_MATCHALL: {
+    int n = 0;
+    for (auto &tr : s.tracks) {
+      for (auto &p : st->projTracks)
+        if (lower(p.second) == lower(tr.name)) {
+          tr.target = p.first;
+          tr.targetName = p.second;
+          tr.group.clear();
+          n++;
+          break;
+        }
+    }
+    static std::string tipBuf;
+    tipBuf = n ? strprintf("%d track%s matched by name.", n, n == 1 ? "" : "s") : std::string("No track names match your project.");
+    st->tip = tipBuf.c_str();
+    st->destTrack = -1;
+    break;
+  }
+  case H_DEST_POP: return;
   case H_TRACK_FOLDERMENU: {
     bool same = st->folderTrack == h->idx;
     st->folderTrack = same ? -1 : h->idx;
@@ -1745,7 +1866,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     st->dragMoved = false;
     st->pressedClip = 0;
     int nrows = (int)st->rows.size();
-    bool popOpen = st->palTrack >= 0 || !st->palFolder.empty() || st->folderTrack >= 0;
+    bool popOpen = st->palTrack >= 0 || !st->palFolder.empty() || st->folderTrack >= 0 || st->destTrack >= 0;
     if (PtInRect(&st->vTrack, p) && nrows > kRows) {
       if (PtInRect(&st->vThumb, p)) {
         st->drag = 1;
@@ -1941,6 +2062,12 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   }
   case WM_MOUSEWHEEL: {
     int delta = (short)HIWORD(wp);
+    if (st->destTrack >= 0) { // scrolls the track list of the "put on" popover
+      st->destScroll += delta > 0 ? -1 : 1;
+      if (st->destScroll < 0) st->destScroll = 0;
+      InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
+    }
     if (altDown()) { // Alt / Option + wheel: zoom around the mouse
       POINT mp = {(short)LOWORD(lp), (short)HIWORD(lp)};
       ScreenToClient(hwnd, &mp);
@@ -1965,8 +2092,8 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     if (LOWORD(wp) == IDCANCEL) {
       if (st->editKind) endEdit(st, false); // Esc leaves the field, not the dialog
-      else if (st->folderTrack >= 0 || st->palTrack >= 0 || !st->palFolder.empty()) {
-        st->folderTrack = st->palTrack = -1;
+      else if (st->folderTrack >= 0 || st->palTrack >= 0 || !st->palFolder.empty() || st->destTrack >= 0) {
+        st->folderTrack = st->palTrack = st->destTrack = -1;
         st->palFolder.clear();
         InvalidateRect(hwnd, NULL, FALSE);
       } else
@@ -2037,6 +2164,19 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
     st.edited = true;
   }
   if (getenv("OLAAF_SHOWAUTO")) opt.showAutomation = true;
+  if (getenv("OLAAF_DEST")) { // the "put on" popover with a made-up project
+    host.projectTracks = []() {
+      return std::vector<std::pair<std::string, std::string>>{{"{1}", "DX Boom"}, {"{2}", "DX Lav"}, {"{3}", "MIX"},
+                                                             {"{4}", "Music"}, {"{5}", "Atmo"}};
+    };
+    st.projTracks = host.projectTracks();
+    imp.session().tracks[2].target = "{3}";
+    imp.session().tracks[2].targetName = "MIX";
+    st.destTrack = 3;
+    st.dpX = 60;
+    st.dpY = 300;
+    st.dpY0 = 270;
+  }
   if (palTrack >= 0) {
     st.palTrack = palTrack;
     st.palX = 32;
