@@ -65,11 +65,13 @@ jobs:
         run: |
           choco install innosetup -y --no-progress
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\win\olaaf.iss
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\win\olaaf_uninstall.iss
       - uses: actions/upload-artifact@v4
         with:
           name: OLAAF-windows
           path: |
             installer/win/Output/OLAAF-0.6.0-win64.exe
+            installer/win/Output/OLAAF-0.6.0-win64-uninstall.exe
             build/src/ext/Release/reaper_olaaf.dll
             build/Release/olaaf-cli.exe
 
@@ -146,7 +148,7 @@ jobs:
 
           ### Uninstall
           - **Mac:** quit REAPER, open `OLAAF-VERSION-mac-uninstall.pkg` and click through (same right-click → Open as above if macOS complains).
-          - **Windows:** quit REAPER, then **Settings → Apps → Installed apps → OLAAF → Uninstall** (or Control Panel → Programs).
+          - **Windows:** quit REAPER, open `OLAAF-VERSION-win64-uninstall.exe` and click through (same More info → Run anyway as above if SmartScreen complains). Or **Settings → Apps → Installed apps → OLAAF → Uninstall**.
 
           Your REAPER projects and imported audio stay untouched.
 
@@ -159,6 +161,12 @@ jobs:
           V VERSION beta, developed with AI assistance · [dmajorsound.com](https://dmajorsound.com)
           NOTES
           sed -i "s/VERSION/${TAG#v}/g" notes.txt
-          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "OLAAF ${TAG#v} beta" \
-            --notes-file notes.txt --prerelease \
-            dl/OLAAF-mac/*.pkg dl/OLAAF-windows/installer/win/Output/*.exe
+          FILES="dl/OLAAF-mac/*.pkg dl/OLAAF-windows/installer/win/Output/*.exe"
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # already published: replace the files and the notes
+            gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber $FILES
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --notes-file notes.txt
+          else
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "OLAAF ${TAG#v} beta" \
+              --notes-file notes.txt --prerelease $FILES
+          fi
