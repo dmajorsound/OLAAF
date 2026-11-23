@@ -178,8 +178,9 @@ static DialogHost makeHost() {
 }
 
 // read the AAF (worker thread + progress window), then show the dialog, then write the media
-static bool runImport(const std::string &aaf, ImportOptions &opt, Importer &imp, MediaReport &rep, int &merged,
-                      std::string &err) {
+// step 1: read the AAF and find its media (progress window), then the remembered settings
+static bool loadForImport(const std::string &aaf, ImportOptions &opt, Importer &imp, std::string &err,
+                          std::string &defaultDest) {
   bool cancelled = false;
   {
     // newest first: the first folder that has a file wins
@@ -198,21 +199,18 @@ static bool runImport(const std::string &aaf, ImportOptions &opt, Importer &imp,
     if (cancelled) err = "Import cancelled.";
     return false;
   }
-
-  std::string defaultDest = opt.destDir;
+  defaultDest = opt.destDir;
   loadSettings(opt);
   imp.setMergeStereo(opt.mergeStereo);
-  bool accepted = showImportDialog(GetMainHwnd(), imp, opt, makeHost());
-  saveSettings(opt, defaultDest);
-  saveMediaFolders(opt.searchFolders); // Locate puts its folder first
-  if (!accepted) {
-    err.clear(); // closed without importing
-    return false;
-  }
+  return true;
+}
+
+// step 3 (after the dialog): write the media (progress window)
+static bool finishImport(Importer &imp, ImportOptions &opt, MediaReport &rep, int &merged, std::string &err) {
   merged = 0;
   for (auto &t : imp.session().tracks) merged += !t.mergedFrom.empty();
-
-  ok = runWithProgress(GetMainHwnd(), [&](const Progress &progress) {
+  bool cancelled = false;
+  bool ok = runWithProgress(GetMainHwnd(), [&](const Progress &progress) {
     if (!imp.prepareMedia(opt, &rep, progress)) return false;
     progress(1.0, "Building your Reaper session");
     return true;
@@ -224,26 +222,22 @@ static bool runImport(const std::string &aaf, ImportOptions &opt, Importer &imp,
   return ok;
 }
 
-// ---------------------------------------------------------------- action: import into current project
-
-static void importIntoProject() {
-  char fn[4096] = {0};
-  if (!GetUserFileNameForRead(fn, "OLAAF: Import AAF", "aaf")) return;
-
-  ImportOptions opt;
-  char proj[4096] = {0};
-  GetProjectPath(proj, sizeof(proj));
-  opt.destDir = proj[0] ? proj : dirName(fn);
-
-  Importer imp;
-  MediaReport rep;
-  int merged = 0;
-  std::string err;
-  if (!runImport(fn, opt, imp, rep, merged, err)) {
-    if (!err.empty()) ShowMessageBox(err.c_str(), "OLAAF", 0);
-    return;
+// all three steps with a modal dialog (File > Open project: REAPER waits for the result)
+static bool runImport(const std::string &aaf, ImportOptions &opt, Importer &imp, MediaReport &rep, int &merged,
+                      std::string &err) {
+  std::string defaultDest;
+  if (!loadForImport(aaf, opt, imp, err, defaultDest)) return false;
+  bool accepted = showImportDialog(GetMainHwnd(), imp, opt, makeHost());
+  saveSettings(opt, defaultDest);
+  saveMediaFolders(opt.searchFolders); // Locate puts its folder first
+  if (!accepted) {
+    err.clear(); // closed without importing
+    return false;
   }
+  return finishImport(imp, opt, rep, merged, err);
+}
 
+static void insertTracks(Importer &imp, ImportOptions &opt, const MediaReport &rep, int merged) {
   Undo_BeginBlock2(nullptr);
   PreventUIRefresh(1);
   int base = CountTracks(nullptr);
@@ -273,6 +267,45 @@ static void importIntoProject() {
   Undo_EndBlock2(nullptr, "OLAAF: Import AAF", -1);
 
   ShowMessageBox(summary(imp, rep, merged).c_str(), "OLAAF", 0);
+}
+
+// the import into the open project: the window does not block REAPER (the edit cursor can be moved,
+// the project scrolled) - the import runs when the window is closed with Build session
+struct PendingImport {
+  ImportOptions opt;
+  Importer imp;
+  DialogHost host;
+  std::string defaultDest;
+};
+
+static void importIntoProject() {
+  char fn[4096] = {0};
+  if (!GetUserFileNameForRead(fn, "OLAAF: Import AAF", "aaf")) return;
+
+  PendingImport *p = new PendingImport;
+  char proj[4096] = {0};
+  GetProjectPath(proj, sizeof(proj));
+  p->opt.destDir = proj[0] ? proj : dirName(fn);
+  p->host = makeHost();
+  std::string err;
+  if (!loadForImport(fn, p->opt, p->imp, err, p->defaultDest)) {
+    if (!err.empty()) ShowMessageBox(err.c_str(), "OLAAF", 0);
+    delete p;
+    return;
+  }
+  HWND h = openImportDialog(GetMainHwnd(), p->imp, p->opt, p->host, [p](bool accepted) {
+    saveSettings(p->opt, p->defaultDest);
+    saveMediaFolders(p->opt.searchFolders);
+    if (accepted) {
+      MediaReport rep;
+      int merged = 0;
+      std::string e;
+      if (finishImport(p->imp, p->opt, rep, merged, e)) insertTracks(p->imp, p->opt, rep, merged);
+      else if (!e.empty()) ShowMessageBox(e.c_str(), "OLAAF", 0);
+    }
+    delete p;
+  });
+  if (!h) delete p; // one is open already (brought to the front)
 }
 
 static bool onAction(KbdSectionInfo *sec, int command, int val, int val2, int relmode, HWND hwnd) {

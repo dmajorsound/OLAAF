@@ -30,6 +30,10 @@ struct DialogHost {
 // Shows the dialog. Returns true when the user pressed Import; `opt` and the session's
 // track flags / colors then hold the choices.
 bool showImportDialog(HWND parent, Importer &imp, ImportOptions &opt, const DialogHost &host);
+// The same window without blocking REAPER: returns at once; onClose runs after the window is closed
+// (accepted = Build session). Only one can be open; a second call brings it to the front and returns nullptr.
+HWND openImportDialog(HWND parent, Importer &imp, ImportOptions &opt, const DialogHost &host,
+                      std::function<void(bool accepted)> onClose);
 
 void dialogSetInstance(void *hInstance);
 // for REAPER's accelerator hook ("accelerator" plugin_register): keys while the import dialog is open

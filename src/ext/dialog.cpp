@@ -184,6 +184,8 @@ struct State {
   bool edited = false;
   bool merge = true;
   bool accepted = false;
+  bool modeless = false;                 // REAPER stays usable while the window is open
+  std::function<void(bool)> onClose;     // modeless: called after the window is gone
   // popovers
   int palTrack = -1;       // color popover for this track ...
   std::string palFolder;   // ... or for this folder
@@ -1278,6 +1280,18 @@ void endEdit(State *st, bool apply) {
   InvalidateRect(st->hwnd, NULL, FALSE);
 }
 
+// closes the window: modal -> EndDialog, modeless -> destroy it, then hand the result on
+void closeDialog(State *st, bool accepted) {
+  st->accepted = accepted;
+  if (!st->modeless) {
+    EndDialog(st->hwnd, accepted ? 1 : 0);
+    return;
+  }
+  std::function<void(bool)> cb = st->onClose;
+  DestroyWindow(st->hwnd); // deletes st (WM_DESTROY)
+  if (cb) cb(accepted);
+}
+
 // horizontal zoom by `factor` (< 1 zooms in), keeping the time under layout x `ax` in place
 void zoomBy(State *st, double factor, double ax) {
   double tlw = kTlr - kTlx;
@@ -1505,11 +1519,10 @@ void click(State *st, int x, int y, bool shift) {
     st->sel.clear();
     st->edited = false;
     break;
-  case H_CANCEL: EndDialog(st->hwnd, 0); return;
+  case H_CANCEL: closeDialog(st, false); return;
   case H_IMPORT:
     opt.tcOffset = tcOffset(st);
-    st->accepted = true;
-    EndDialog(st->hwnd, 1);
+    closeDialog(st, true);
     return;
   default: break;
   }
@@ -1847,7 +1860,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         st->palFolder.clear();
         InvalidateRect(hwnd, NULL, FALSE);
       } else
-        EndDialog(hwnd, 0);
+        closeDialog(st, false);
     }
     return 0;
 #ifdef _WIN32
@@ -1861,13 +1874,17 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   }
 #endif
   case WM_CLOSE:
-    EndDialog(hwnd, 0);
+    if (st) closeDialog(st, false);
     return 0;
   case WM_DESTROY:
     if (g_open == st) g_open = nullptr;
     if (st) {
       freeFonts(st);
       if (st->editBrush) DeleteObject(st->editBrush);
+    }
+    if (st && st->modeless) {
+      OL_SETUSER(hwnd, 0);
+      delete st;
     }
     return 0;
   }
@@ -1937,10 +1954,54 @@ int dialogTranslateKey(MSG *msg) {
   State *st = g_open;
   if (!st || !st->hwnd || !msg) return 0;
   if (msg->hwnd != st->hwnd && !IsChild(st->hwnd, msg->hwnd)) return 0;
-  if (st->editKind) return -1; // typing in a field
+  if (st->editKind) { // typing in a field: Return applies, Esc cancels
+    if (msg->message == WM_KEYDOWN && (msg->wParam == VK_RETURN || msg->wParam == VK_ESCAPE)) {
+      endEdit(st, msg->wParam == VK_RETURN);
+      return 1;
+    }
+    return -1;
+  }
+  if (msg->message == WM_KEYDOWN && msg->wParam == VK_ESCAPE) {
+    SendMessage(st->hwnd, WM_COMMAND, IDCANCEL, 0);
+    return 1;
+  }
   if (msg->message == WM_KEYDOWN && handleKey(st, (int)msg->wParam)) return 1;
   if (msg->message == WM_KEYDOWN || msg->message == WM_CHAR || msg->message == WM_KEYUP) return -1;
   return 0;
+}
+
+HWND openImportDialog(HWND parent, Importer &imp, ImportOptions &opt, const DialogHost &host,
+                      std::function<void(bool accepted)> onClose) {
+  if (g_open) { // one at a time
+    ShowWindow(g_open->hwnd, SW_SHOW);
+    SetForegroundWindow(g_open->hwnd);
+    return nullptr;
+  }
+  State *st = new State;
+  st->imp = &imp;
+  st->opt = &opt;
+  st->host = &host;
+  st->merge = opt.mergeStereo;
+  st->modeless = true;
+  st->onClose = std::move(onClose);
+  HWND h;
+#ifdef _WIN32
+  static DlgTemplate dt;
+  memset(&dt, 0, sizeof(dt));
+  dt.t.style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX;
+  dt.t.cx = 600;
+  dt.t.cy = 400;
+  wcscpy(dt.title, L"OLAAF");
+  h = CreateDialogIndirectParam((HINSTANCE)g_hInst, &dt.t, parent, (DLGPROC)dlgProc, (LPARAM)st);
+#else
+  h = CreateDialogParam(g_hInst, MAKEINTRESOURCE(IDD_OLAAF_IMPORT), parent, dlgProc, (LPARAM)st);
+#endif
+  if (!h) {
+    delete st;
+    return nullptr;
+  }
+  ShowWindow(h, SW_SHOW);
+  return h;
 }
 
 bool showImportDialog(HWND parent, Importer &imp, ImportOptions &opt, const DialogHost &host) {
