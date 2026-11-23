@@ -173,6 +173,7 @@ struct State {
   int pressedClip = 0;
   std::set<int> selTracks; // tracks selected by their names (to drag them into a folder)
   int pressedTrack = -1;
+  int anchorTrack = -1;    // Shift-click selects from here to the clicked track
   int dropRow = -1;        // slot (line above that row) the selected tracks would be dropped at
   int dragMouseY = 0;
   int rangeFromRow = -1;   // dragging over names selects from this row
@@ -1673,6 +1674,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       } else {
         st->selTracks.clear();
         st->selTracks.insert(t);
+        st->anchorTrack = t;
         st->drag = 5;
         st->rangeFromRow = rowAtY(st, p.y);
       }
@@ -1731,12 +1733,20 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       if (drag == 4 && moved && st->dropRow >= 0) dropTracks(st, st->dropRow);
       else if (drag != 5 && st->pressedTrack >= 0) {
         int t = st->pressedTrack;
-        if (shiftDown() || ctrlDown()) {
+        if (shiftDown()) { // Shift: everything from the last clicked track to this one (as shown)
+          int a = posOfTrack(st, st->anchorTrack >= 0 ? st->anchorTrack : t), b = posOfTrack(st, t);
+          if (a < 0) a = b;
+          st->selTracks.clear();
+          for (int i = std::min(a, b); i <= std::max(a, b) && i < (int)st->order.size(); i++)
+            st->selTracks.insert(st->order[(size_t)i]);
+        } else if (ctrlDown()) { // Cmd / Ctrl: add or take away one
           if (st->selTracks.count(t)) st->selTracks.erase(t);
           else st->selTracks.insert(t);
+          st->anchorTrack = t;
         } else {
           st->selTracks.clear();
           st->selTracks.insert(t);
+          st->anchorTrack = t;
         }
       }
       st->dropRow = -1;
