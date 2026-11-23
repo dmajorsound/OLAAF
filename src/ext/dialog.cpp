@@ -85,7 +85,7 @@ static void *g_hInst = nullptr;
 void dialogSetInstance(void *h) { g_hInst = h; }
 namespace {
 
-const int W = 1180, H = 716;
+const int W = 1180, H = 742;
 
 #define kFace (theme().face)
 #define kPanel (theme().panel)
@@ -124,7 +124,8 @@ const double kLB = kLT + kRows * kRowH;       // below the last lane
 const double kAB = kLB + kSb + 2;             // arrange window bottom
 const double kTlx = kL + kHdr + 1;            // timeline left
 const double kTlr = kR - 1 - kSb;             // timeline right (vertical scrollbar beside it)
-const double kEvT = kAB + 4, kEvB = H - 4;       // the bar under the arrange view
+const double kFootH = 28;                         // footer: hints for what is under the mouse
+const double kEvT = kAB + 4, kEvB = H - kFootH - 2; // the bar under the arrange view
 
 enum HitId {
   H_NONE, H_THEME, H_VIDEO, H_MARKERS, H_FOLDERS, H_ZOOM_FIT, H_TRACK_CHECK, H_TRACK_COLOR,
@@ -884,7 +885,7 @@ void gonioUpdate(State *st) {
 
 void paintGonio(State *st, const Gfx &g) {
   if (!st->gonioOpen) return;
-  double w = 236, h = 300;
+  double w = 248, h = 330;
   double l = kR - w - 14, t = kLB - h - 10;
   g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 14, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
   g.rbox(l, t, l + w, t + h, 14, kLine, kPop);
@@ -920,24 +921,32 @@ void paintGonio(State *st, const Gfx &g) {
     if (std::fabs(x - cx) + std::fabs(y - cy) > rad) continue;
     g.fill(x - dot, y - dot, x + dot, y + dot, kBlue);
   }
-  // correlation: -1 ... 0 ... +1
-  double by = cy + rad + 22, bl = l + 22, br = l + w - 22;
-  g.rfill(bl, by, br, by + 8, 4, mixColor(kPop, kInk, 0.12));
-  double mid = (bl + br) / 2;
-  g.fill(mid - 0.5, by - 3, mid + 0.5, by + 11, kMute);
+  // correlation meter: -1 ... 0 ... +1
+  double by = cy + rad + 26, bl = l + 20, br = l + w - 20;
+  g.text(st->fSmall, kMute, "Correlation", bl, by - 2, bl + 120, by + 14, DT_LEFT);
   double c = std::max(-1.0, std::min(1.0, st->corr));
   COLORREF cc = c < 0 ? kRed : c < 0.3 ? kWarn : theme().green;
+  g.text(st->fMono, cc, strprintf("%+.2f", c), br - 70, by - 4, br, by + 16, DT_RIGHT);
+  by += 18;
+  g.rfill(bl, by, br, by + 14, 5, mixColor(kPop, kInk, 0.10));
+  double mid = (bl + br) / 2;
   double px = mid + c * (br - bl) / 2;
-  if (px > mid) g.rfill(mid, by, px, by + 8, 4, cc);
-  else g.rfill(px, by, mid, by + 8, 4, cc);
-  g.text(st->fSmall, kMute, "\xe2\x88\x92" "1", bl - 4, by + 10, bl + 20, by + 26, DT_LEFT);
-  g.text(st->fSmall, kMute, "+1", br - 20, by + 10, br + 4, by + 26, DT_RIGHT);
-  g.text(st->fMonoSmall, cc, strprintf("%+.2f", c), mid - 30, by + 10, mid + 30, by + 26, DT_CENTER);
+  if (px > mid) g.rfill(mid, by, px, by + 14, 5, cc);
+  else g.rfill(px, by, mid, by + 14, 5, cc);
+  for (int k = 0; k <= 4; k++) { // ticks at -1, -0.5, 0, +0.5, +1
+    double tx = bl + (br - bl) * k / 4.0;
+    g.fill(tx - 0.5, by + 14, tx + 0.5, by + 18, kMute);
+  }
+  g.fill(mid - 1, by - 2, mid + 1, by + 16, kInk);
+  g.text(st->fSmall, kMute, "\xe2\x88\x92" "1", bl - 4, by + 18, bl + 24, by + 34, DT_LEFT);
+  g.text(st->fSmall, kMute, "0", mid - 10, by + 18, mid + 10, by + 34, DT_CENTER);
+  g.text(st->fSmall, kMute, "+1", br - 24, by + 18, br + 4, by + 34, DT_RIGHT);
+  by += 16;
   const char *what = st->playClip == 0 ? "Play a stereo event (P) to measure."
                      : c < 0         ? "Out of phase: one channel may be inverted."
                      : c < 0.3       ? "Wide or barely related channels."
                                      : "Coherent.";
-  g.text(st->fSmall, kMute, what, l + 16, by + 26, l + w - 12, by + 44, DT_LEFT);
+  g.text(st->fSmall, cc, what, l + 20, by + 20, l + w - 12, by + 38, DT_LEFT);
 }
 
 // The waveform of one event: one lane per channel for mono and stereo (two small waveforms for
@@ -1323,9 +1332,7 @@ void paintEventBar(State *st, const Gfx &g) {
   Session &s = st->imp->session();
   double t = kEvT, b = kEvB, mid = (t + b) / 2;
   std::vector<int> ids(st->sel.begin(), st->sel.end());
-  // right: dmajorsound
-  drawDmajorLogo(g.dc, g.X(kR), g.Y(mid), g.S(20), kMute, kMute, st->fSmall);
-  double right = kR - 160;
+  double right = kR;
   if (!ids.empty()) {
     bool anyIn = false, allMuted = true;
     for (int id : ids)
@@ -1387,8 +1394,7 @@ void paintEventBar(State *st, const Gfx &g) {
   }
   double x = kL;
   if (ids.empty()) {
-    g.text(st->fBody, kMute, "Click an event to select it, Space plays. Hover over anything for a hint, H for help.", x, t,
-           right, b, DT_LEFT);
+    g.text(st->fBody, kMute, "No event selected. Click one to listen, mute, remove, move or swap it.", x, t, right, b, DT_LEFT);
     return;
   }
   int ti = -1;
@@ -1616,6 +1622,17 @@ void paintHelp(State *st, const Gfx &g) {
          l + w - 24, y + 44, DT_LEFT);
 }
 
+// The footer: what the thing under the mouse does (or a general hint), dmajorsound on the right.
+void paintFooter(State *st, const Gfx &g) {
+  double t = H - kFootH, b = H;
+  g.fill(0, t, W, t + 1, kLine);
+  drawDmajorLogo(g.dc, g.X(kR), g.Y((t + b) / 2), g.S(16), kMute, kMute, st->fSmall);
+  const char *hint = st->tip ? st->tip
+                             : "Hover over anything for a hint. Space plays from the playhead, P plays the selected event, H shows "
+                               "all shortcuts.";
+  g.text(st->fSmall, st->tip ? kInk : kMute, hint, kL, t + 1, kR - 150, b, DT_LEFT);
+}
+
 // a short hint next to the mouse, after it rests a moment
 void paintTooltip(State *st, const Gfx &g) {
   if (!st->tip || !st->tipVisible || st->mouseLX < 0) return;
@@ -1839,7 +1856,7 @@ void paint(State *st, HDC dc) {
   if (st->optsOpen) paintOptions(st, g);
   paintGonio(st, g);
   if (st->helpOpen) paintHelp(st, g);
-  paintTooltip(st, g);
+  paintFooter(st, g);
 }
 
 // ------------------------------------------------------------------ input
@@ -2930,7 +2947,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       st->hoverRow = hr;
       st->tipVisible = false;
       KillTimer(hwnd, kTipTimer);
-      if (tip) SetTimer(hwnd, kTipTimer, wasShown ? 120 : 550, NULL); // quick once tips are showing
+      (void)wasShown;
       InvalidateRect(hwnd, NULL, FALSE);
     }
     return 0;
@@ -3069,8 +3086,9 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
           st.playClip = c.id;
           st.sel.clear();
           st.sel.insert(c.id);
+          double p0 = getenv("OLAAF_GPOS") ? atof(getenv("OLAAF_GPOS")) : 20;
           for (int k = 0; k < 8; k++) {
-            st.playPos = 20 + k * 0.03;
+            st.playPos = p0 + k * 0.03;
             gonioUpdate(&st);
           }
         }
