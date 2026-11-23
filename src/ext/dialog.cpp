@@ -123,7 +123,7 @@ enum HitId {
   H_CANCEL, H_IMPORT, H_TC_PLUS, H_TC_MINUS, H_TC_VALUE, H_TC_CURSOR, H_PAL, H_PAL_CUSTOM, H_PAL_NONE,
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
-  H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE
+  H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE
 };
 
 struct Hit {
@@ -569,8 +569,18 @@ void paintToolbar(State *st, const Gfx &g) {
   x = chip(st, g, x, t, "Fades", opt.fades, true, H_FADES, "Fade ins, fade outs and crossfades from the AAF.") + 6;
   x = chip(st, g, x, t, "Clip gain", opt.clipGain, true, H_GAIN,
            "Clip gain becomes item volume, clip gain automation a take volume envelope.") + 6;
-  x = chip(st, g, x, t, videoOk && !fileExists(s.video[0].foundPath) ? "Video (missing)" : "Video", opt.video && videoOk,
-           videoOk, H_VIDEO, videoOk ? "The picture the AAF points to, on a VIDEO track at the top." : "This AAF has no video.") + 6;
+  if (videoOk) {
+    bool manual = s.video[0].manual;
+    x = chip(st, g, x, t, !fileExists(s.video[0].foundPath) ? "Video (missing)" : "Video", opt.video, true, H_VIDEO,
+             manual ? "The picture you chose, on a VIDEO track at the top, where the AAF starts."
+                    : "The picture the AAF points to, on a VIDEO track at the top.") + 2;
+    if (manual) // choose another file
+      x = chip(st, g, x, t, "\xe2\x80\xa6", false, true, H_VIDEO_CHOOSE, "Choose another video file.") + 6;
+    else
+      x += 4;
+  } else
+    x = chip(st, g, x, t, "Video\xe2\x80\xa6", false, true, H_VIDEO_CHOOSE,
+             "This AAF has no video. Choose the picture: it goes on a VIDEO track at the top, where the AAF starts.") + 6;
   x = chip(st, g, x, t, mLabel, opt.markers && !s.markers.empty(), !s.markers.empty(), H_MARKERS,
            s.markers.empty() ? "This AAF has no markers." : "Markers from the edit become REAPER markers.") + 6;
   chip(st, g, x, t, "Folders", opt.folders, true, H_FOLDERS,
@@ -1477,6 +1487,20 @@ void click(State *st, int x, int y, bool shift) {
   case H_FADES: opt.fades = !opt.fades; break;
   case H_GAIN: opt.clipGain = !opt.clipGain; break;
   case H_VIDEO: opt.video = !opt.video; break;
+  case H_VIDEO_CHOOSE: { // the AAF has no picture (or a chosen one is replaced): pick the file by hand
+    std::string path;
+    if (st->host->pickFile && st->host->pickFile("OLAAF: choose the video for this AAF", &path) && !path.empty()) {
+      VideoClip v;
+      v.foundPath = path;
+      v.name = baseName(path);
+      v.pos = s.firstClip(); // where the AAF starts ("AAF STARTS AT")
+      v.manual = true;
+      s.video.clear();
+      s.video.push_back(v);
+      opt.video = true;
+    }
+    break;
+  }
   case H_MARKERS: opt.markers = !opt.markers; break;
   case H_FOLDERS: opt.folders = !opt.folders; st->folderTrack = -1; break;
   case H_THEME: setDarkTheme(!darkTheme()); break;

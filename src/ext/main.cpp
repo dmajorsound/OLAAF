@@ -47,6 +47,12 @@
 #define REAPERAPI_WANT_Undo_EndBlock2
 #define REAPERAPI_WANT_UpdateArrange
 #define REAPERAPI_WANT_plugin_register
+#define REAPERAPI_WANT_CountTrackMediaItems
+#define REAPERAPI_WANT_GetTrackMediaItem
+#define REAPERAPI_WANT_GetActiveTake
+#define REAPERAPI_WANT_GetMediaItemTake_Source
+#define REAPERAPI_WANT_GetMediaSourceLength
+#define REAPERAPI_WANT_SetMediaItemInfo_Value
 #include "reaper_plugin.h"
 #include "reaper_plugin_functions.h"
 #undef min
@@ -251,6 +257,15 @@ static void insertTracks(Importer &imp, ImportOptions &opt, const MediaReport &r
     uint32_t c = chunks[i].color;
     if (c) SetMediaTrackInfo_Value(tr, "I_CUSTOMCOLOR", (double)(ColorToNative((c >> 16) & 255, (c >> 8) & 255, c & 255) | 0x1000000));
     SetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH", (double)chunks[i].folderDepth);
+    if (chunks[i].videoFromFile) // a picture chosen by hand: the item as long as the file
+      for (int k = 0; k < CountTrackMediaItems(tr); k++) {
+        MediaItem *it = GetTrackMediaItem(tr, k);
+        MediaItem_Take *tk = it ? GetActiveTake(it) : nullptr;
+        PCM_source *src = tk ? GetMediaItemTake_Source(tk) : nullptr;
+        bool qn = false;
+        double len = src ? GetMediaSourceLength(src, &qn) : 0.0;
+        if (len > 0 && !qn) SetMediaItemInfo_Value(it, "D_LENGTH", len);
+      }
   }
   if (opt.markers)
     for (auto &m : imp.session().markers) {

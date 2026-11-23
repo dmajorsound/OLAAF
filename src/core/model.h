@@ -69,6 +69,7 @@ struct VideoClip {
   std::string originalUri;
   std::string foundPath;
   double pos = 0.0, len = 0.0, srcOffset = 0.0;
+  bool manual = false; // chosen in the dialog (the AAF had none): length comes from the file in REAPER
 };
 
 struct Marker {

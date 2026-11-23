@@ -660,7 +660,12 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
     v.text = "<TRACK\nNAME \"VIDEO\"\nNCHAN 2\n";
     for (auto &vc : s_.video) {
       std::string f = vc.foundPath.empty() ? uriToPath(vc.originalUri) : vc.foundPath;
-      v.text += "<ITEM\nPOSITION " + num(vc.pos + opt.tcOffset) + "\nLENGTH " + num(vc.len) + "\nLOOP 0\n";
+      double len = vc.len;
+      if (vc.manual || len <= 0) { // length unknown here: the AAF's length for now, REAPER sets the file's own
+        len = std::max(1.0, s_.end - vc.pos);
+        v.videoFromFile = true;
+      }
+      v.text += "<ITEM\nPOSITION " + num(vc.pos + opt.tcOffset) + "\nLENGTH " + num(len) + "\nLOOP 0\n";
       v.text += "NAME " + q(vc.name.empty() ? baseName(f) : vc.name) + "\nSOFFS " + num(vc.srcOffset) + "\n";
       v.text += "<SOURCE VIDEO\nFILE " + q(f) + "\n>\n>\n";
     }

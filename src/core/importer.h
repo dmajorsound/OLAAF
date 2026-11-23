@@ -40,6 +40,7 @@ struct TrackChunk {
   std::string text;     // "<TRACK ... >"
   int folderDepth = 0;  // REAPER I_FOLDERDEPTH: 1 opens a folder, -1 closes it
   uint32_t color = 0;   // 0xRRGGBB
+  bool videoFromFile = false; // the VIDEO track: take each item's length from its file
 };
 
 // folder a track belongs in, from its name ("Boom 1" -> DIALOG, "ATMO Stereo 2" -> ATMO)
