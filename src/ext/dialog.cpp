@@ -123,7 +123,7 @@ enum HitId {
   H_CANCEL, H_IMPORT, H_TC_PLUS, H_TC_MINUS, H_TC_VALUE, H_TC_CURSOR, H_PAL, H_PAL_CUSTOM, H_PAL_NONE,
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
-  H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE
+  H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO
 };
 
 struct Hit {
@@ -567,8 +567,10 @@ void paintToolbar(State *st, const Gfx &g) {
   x = chip(st, g, x, t, "Combine .L / .R", st->merge, true, H_MERGE,
            "Combines two mono tracks named .L and .R whose clips line up into one stereo track.") + 6;
   x = chip(st, g, x, t, "Fades", opt.fades, true, H_FADES, "Fade ins, fade outs and crossfades from the AAF.") + 6;
-  x = chip(st, g, x, t, "Clip gain", opt.clipGain, true, H_GAIN,
-           "Clip gain becomes item volume, clip gain automation a take volume envelope.") + 6;
+  x = chip(st, g, x, t, !opt.clipGain ? "Clip gain" : (opt.clipGainToTrack ? "Clip gain \xe2\x86\x92 track" : "Clip gain"),
+           opt.clipGain, true, H_GAIN,
+           "Click to switch: clip gain on the items (and clip automation as take envelopes) \xe2\x86\x92 clip gain folded into "
+           "the track volume envelope \xe2\x86\x92 off.") + 6;
   if (videoOk) {
     bool manual = s.video[0].manual;
     x = chip(st, g, x, t, !fileExists(s.video[0].foundPath) ? "Video (missing)" : "Video", opt.video, true, H_VIDEO,
@@ -612,6 +614,59 @@ void paintToolbar(State *st, const Gfx &g) {
   addHit(st, sb, mid - 16, sb + 26, mid + 16, H_TC_PLUS, 0, "Add the offset to the AAF's timecode.");
   addHit(st, sb + 26, mid - 16, sb + 52, mid + 16, H_TC_MINUS, 0, "Subtract the offset from the AAF's timecode.");
   g.text(st->fSec, kMute, "OFFSET", sb - 56, mid - 13, sb - 6, mid + 13, DT_RIGHT);
+}
+
+// volume (dB scale, -60 ... +12) and pan lines over a lane, as they would be imported
+double lerpEnv(const std::vector<GainPoint> &env, double t, double def) {
+  if (env.empty()) return def;
+  if (t <= env.front().time) return env.front().gain;
+  if (t >= env.back().time) return env.back().gain;
+  for (size_t i = 1; i < env.size(); i++)
+    if (t <= env[i].time) {
+      double a = env[i - 1].time, b = env[i].time;
+      double f = b > a ? (t - a) / (b - a) : 1.0;
+      return env[i - 1].gain + (env[i].gain - env[i - 1].gain) * f;
+    }
+  return def;
+}
+
+void paintAutomation(State *st, const Gfx &g, const Track &tr, double y, double spp) {
+  const ImportOptions &opt = *st->opt;
+  double top = y + 4, bot = y + kRowH - 5;
+  auto volY = [&](double gain) {
+    double db = gain > 1e-6 ? 20.0 * std::log10(gain) : -60.0;
+    double n = std::max(0.0, std::min(1.0, (db + 60.0) / 72.0));
+    return bot - n * (bot - top);
+  };
+  const COLORREF panC = RGB(0xD9, 0x82, 0x2B);
+  bool hasPan = !tr.panEnv.empty() || std::fabs(tr.pan) > 1e-4;
+  double px = -1, pv = 0, pp = 0;
+  for (double x = kTlx + 1; x <= kTlr - 1; x += 2) {
+    double t = st->viewStart + (x - kTlx) * spp;
+    double v = volY(st->imp->trackVolumeAt(tr, t, opt));
+    double pn = (top + bot) / 2 - lerpEnv(tr.panEnv, t, tr.pan) * (bot - top) / 2;
+    if (px >= 0) {
+      g.line(px, pv, x, v, kBlue);
+      if (hasPan) g.line(px, pp, x, pn, panC);
+    }
+    px = x;
+    pv = v;
+    pp = pn;
+  }
+  // clip automation that stays on the items: a thin line inside each clip
+  if (opt.clipGain && !opt.clipGainToTrack)
+    for (auto &c : tr.clips) {
+      if (c.excluded || c.gainEnv.empty()) continue;
+      double x0 = kTlx + (c.pos - st->viewStart) / spp, x1 = kTlx + (c.pos + c.len - st->viewStart) / spp;
+      double lx = -1, lv = 0;
+      for (double x = std::max(x0, kTlx + 1); x <= std::min(x1, kTlr - 1); x += 2) {
+        double t = st->viewStart + (x - kTlx) * spp - c.pos;
+        double v = volY(c.gain * lerpEnv(c.gainEnv, t, 1.0));
+        if (lx >= 0) g.line(lx, lv, x, v, kInk);
+        lx = x;
+        lv = v;
+      }
+    }
 }
 
 void paintArrange(State *st, const Gfx &g) {
@@ -666,6 +721,18 @@ void paintArrange(State *st, const Gfx &g) {
         g.text(st->fClip, kWhite, m.name, px + 3, ry + 17, std::min(px + w, kTlr), ry + 29, DT_LEFT);
       }
     }
+
+  // view switch: automation lines in the lanes (only what you see here, not the import)
+  {
+    const char *lab = "Automation";
+    double w = g.width(st->fSmall, lab) + 26;
+    if (w < 60 || w > 140) w = 92;
+    double ax = kTlr - w - 4, ay = ry + 3;
+    g.box(ax, ay, ax + w, ay + 13 + 0, opt.showAutomation ? kBlue : kLine, opt.showAutomation ? kBlueSoft : kPanel);
+    g.text(st->fClip, opt.showAutomation ? kBlue : kMute, lab, ax, ay, ax + w, ay + 13, DT_CENTER);
+    addHit(st, ax, ay, ax + w, ay + 13, H_SHOW_AUTO, 0,
+           "Show the volume (blue) and pan (orange) automation in the lanes. A view only, it changes nothing in the import.");
+  }
 
   // lanes
   int nrows = (int)st->rows.size();
@@ -807,6 +874,7 @@ void paintArrange(State *st, const Gfx &g) {
       h.id = c.id;
       st->clipHits.push_back(h);
     }
+    if (opt.showAutomation && on) paintAutomation(st, g, tr, y, spp);
   }
 
   // moving tracks: a line where they will land, and what is being carried
@@ -1485,7 +1553,15 @@ void click(State *st, int x, int y, bool shift) {
     break;
   }
   case H_FADES: opt.fades = !opt.fades; break;
-  case H_GAIN: opt.clipGain = !opt.clipGain; break;
+  case H_GAIN: // items -> track envelope -> off -> items
+    if (opt.clipGain && !opt.clipGainToTrack) opt.clipGainToTrack = true;
+    else if (opt.clipGain) {
+      opt.clipGain = false;
+      opt.clipGainToTrack = false;
+    } else
+      opt.clipGain = true;
+    break;
+  case H_SHOW_AUTO: opt.showAutomation = !opt.showAutomation; break;
   case H_VIDEO: opt.video = !opt.video; break;
   case H_VIDEO_CHOOSE: { // the AAF has no picture (or a chosen one is replaced): pick the file by hand
     std::string path;
@@ -1960,6 +2036,7 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
     if (tr[0].clips.size() > 3) tr[0].clips[3].mute = true;
     st.edited = true;
   }
+  if (getenv("OLAAF_SHOWAUTO")) opt.showAutomation = true;
   if (palTrack >= 0) {
     st.palTrack = palTrack;
     st.palX = 32;

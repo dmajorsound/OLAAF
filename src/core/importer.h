@@ -18,10 +18,12 @@ struct ImportOptions {
   bool mergeStereo = true;      // ".L" + ".R" tracks -> one stereo track
   bool fades = true;            // import fades and crossfades
   bool clipGain = true;         // import clip gain as take volume
+  bool clipGainToTrack = false; // ... or fold clip gain and its automation into the track volume envelope
+  bool showAutomation = false;  // dialog view: draw volume / pan automation in the lanes (no effect on the import)
   bool video = true;            // video reference from the AAF on its own track
   bool markers = true;          // AAF markers as REAPER markers
   bool folders = true;          // create the folder tracks in Session::folders
-  bool copyToSubdir = true;     // copy WAVs into <dest>/<subdir>; no = reference in place
+  bool copyToSubdir = false;    // copy WAVs into <dest>/<subdir>; no = reference in place
   std::string destDir;          // usually the REAPER project folder
   std::string subdir;           // default: AAF name + "_Audio"
   std::vector<std::string> searchFolders; // extra places to look for linked media
@@ -79,6 +81,10 @@ public:
   void reorderTracks(const std::vector<int> &newOrder);
   // Track color as imported: its own color, otherwise the color of its folder (when folders are on)
   uint32_t trackColor(const Track &t, const ImportOptions &opt) const;
+  // Track volume as imported at absolute time t (track automation x clip gain when folded into the track).
+  double trackVolumeAt(const Track &t, double time, const ImportOptions &opt) const;
+  // The track volume envelope as written: the track's own automation, with clip gain folded in when asked.
+  std::vector<GainPoint> trackVolumeEnvelope(const Track &t, const ImportOptions &opt) const;
 
   // Folder tracks. Tracks are sorted into DIALOG, FOLEY, FX, ATMO, MUSIC and OTHER by their names
   // (only when that gives at least two folders); the dialog can rename, add and remove folders.

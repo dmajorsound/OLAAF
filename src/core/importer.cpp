@@ -357,6 +357,53 @@ void Importer::reorderTracks(const std::vector<int> &newOrder) {
   s_.tracks = std::move(t);
 }
 
+// clip gain (constant x clip automation) of the clip that plays at t, 1 where nothing plays
+static double clipGainAt(const Track &t, double time) {
+  for (auto &c : t.clips) {
+    if (c.excluded || time < c.pos || time > c.pos + c.len) continue;
+    return c.gain * (c.gainEnv.empty() ? 1.0 : envAt(c.gainEnv, time - c.pos, 1.0));
+  }
+  return 1.0;
+}
+
+double Importer::trackVolumeAt(const Track &t, double time, const ImportOptions &opt) const {
+  double v = t.volEnv.empty() ? t.volume : envAt(t.volEnv, time, t.volume);
+  if (opt.clipGain && opt.clipGainToTrack) v *= clipGainAt(t, time);
+  return v;
+}
+
+std::vector<GainPoint> Importer::trackVolumeEnvelope(const Track &t, const ImportOptions &opt) const {
+  if (!(opt.clipGain && opt.clipGainToTrack)) return t.volEnv;
+  // every place where the volume changes: the track's own points, each clip's edges and its gain points
+  bool any = !t.volEnv.empty();
+  std::vector<double> times;
+  for (auto &p : t.volEnv) times.push_back(p.time);
+  const double e = 0.0005; // a hard step at a clip edge (half a millisecond)
+  for (auto &c : t.clips) {
+    if (c.excluded) continue;
+    if (std::fabs(c.gain - 1.0) > 1e-6 || !c.gainEnv.empty()) any = true;
+    times.push_back(c.pos - e);
+    times.push_back(c.pos);
+    for (auto &p : c.gainEnv) times.push_back(c.pos + p.time);
+    times.push_back(c.pos + c.len);
+    times.push_back(c.pos + c.len + e);
+  }
+  std::vector<GainPoint> out;
+  if (!any) return out;
+  std::sort(times.begin(), times.end());
+  double last = -1e18;
+  for (double tm : times) {
+    if (tm - last < 1e-7) continue;
+    last = tm;
+    double v = trackVolumeAt(t, tm, opt);
+    if (out.size() >= 2 && std::fabs(out.back().gain - v) < 1e-9 && std::fabs(out[out.size() - 2].gain - v) < 1e-9)
+      out.back().time = tm; // the same value three times: keep the line, drop the middle point
+    else
+      out.push_back({tm, v});
+  }
+  return out;
+}
+
 uint32_t Importer::trackColor(const Track &t, const ImportOptions &opt) const {
   if (t.color) return t.color;
   if (opt.folders && !t.group.empty())
@@ -708,9 +755,10 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
     c += "VOLPAN " + num(t.volume) + " " + num(t.pan) + " -1 -1 1\n";
     int nch = t.channels <= 2 ? 2 : (t.channels + 1) / 2 * 2;
     c += strprintf("NCHAN %d\n", nch);
-    if (!t.volEnv.empty()) {
+    std::vector<GainPoint> vol = trackVolumeEnvelope(t, opt);
+    if (!vol.empty()) {
       c += "<VOLENV2\nACT 1 -1\nVIS 1 1 1\nLANEHEIGHT 0 0\nARM 0\nDEFSHAPE 0 -1 -1\n";
-      for (auto &pt : t.volEnv) c += "PT " + num(pt.time + opt.tcOffset) + " " + num(pt.gain) + " 0\n";
+      for (auto &pt : vol) c += "PT " + num(pt.time + opt.tcOffset) + " " + num(pt.gain) + " 0\n";
       c += ">\n";
     }
     if (!t.panEnv.empty()) {
@@ -730,7 +778,8 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
       c += strprintf("FADEOUT %d %s 0\n", opt.fades ? k.fadeOut.shape : 0, num(fo).c_str());
       if (k.mute) c += "MUTE 1 0\n";
       c += "NAME " + q(k.name) + "\n";
-      c += "VOLPAN " + num(opt.clipGain ? k.gain : 1.0) + " 0 1 -1\n";
+      bool onItem = opt.clipGain && !opt.clipGainToTrack; // clip gain on the item, or folded into the track
+      c += "VOLPAN " + num(onItem ? k.gain : 1.0) + " 0 1 -1\n";
       c += "SOFFS " + num(k.srcOffset) + "\n";
       if (k.chanMode) c += strprintf("CHANMODE %d\n", k.chanMode);
       std::string f = k.outPath;
@@ -743,7 +792,7 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
       c += "<SOURCE " + type + "\n";
       c += "FILE " + q(f) + "\n";
       c += ">\n";
-      if (opt.clipGain && !k.gainEnv.empty()) {
+      if (onItem && !k.gainEnv.empty()) {
         // clip gain automation -> take volume envelope (times from item start, linear amplitude)
         c += "<VOLENV\nACT 1 -1\nVIS 1 1 1\nLANEHEIGHT 0 0\nARM 0\nDEFSHAPE 0 -1 -1\n";
         for (auto &pt : k.gainEnv) c += "PT " + num(pt.time) + " " + num(pt.gain) + " 0\n";

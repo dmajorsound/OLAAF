@@ -19,7 +19,7 @@ static void usage() {
          "usage: olaaf-cli [options] input.aaf output.rpp\n\n"
          "  --dest <dir>        where audio is written (default: folder of output.rpp)\n"
          "  --subdir <name>     subfolder name (default: <AAF name>_Audio)\n"
-         "  --no-copy           reference WAVs where they are (MXF/AIFF/embedded are still converted)\n"
+         "  --copy              copy WAVs into the subfolder (default: reference them where they are)\n"
          "  --media <dir>       extra folder to search for linked media (repeatable)\n"
          "  --offset <TC>       timecode offset, e.g. -10:00:00:00\n"
          "  --no-merge          keep .L/.R tracks separate\n"
@@ -40,11 +40,13 @@ int main(int argc, char **argv) {
     if (a == "--dest") opt.destDir = next();
     else if (a == "--subdir") opt.subdir = next();
     else if (a == "--no-copy") opt.copyToSubdir = false;
+    else if (a == "--copy") opt.copyToSubdir = true;
     else if (a == "--media") opt.searchFolders.push_back(next());
     else if (a == "--offset") offset = next();
     else if (a == "--no-merge") opt.mergeStereo = false;
     else if (a == "--no-fades") opt.fades = false;
     else if (a == "--no-gain") opt.clipGain = false;
+    else if (a == "--gain-to-track") opt.clipGainToTrack = true;
     else if (a == "--no-pt-fades") opt.read.proToolsTrueFades = false;
     else if (a == "--list") list = true;
     else if (a == "--relative") opt.relativeTo = "*";
