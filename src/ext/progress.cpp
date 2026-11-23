@@ -16,7 +16,7 @@
 #include "progress.h"
 #include "theme.h"
 #include "logo.h"
-#include "logo.h"
+#include "fonts.h"
 
 #ifndef _WIN32
 #include "../../third_party/reaper-sdk/WDL/swell/swell-dlggen.h"
@@ -99,13 +99,7 @@ const char *funLine(const std::string &detail, double t) {
 }
 
 HFONT makeFont(double px, bool bold, double scale) {
-#ifdef _WIN32
-  const char *face = "Segoe UI";
-#elif defined(__APPLE__)
-  const char *face = "Helvetica Neue";
-#else
-  const char *face = "Sans";
-#endif
+  const char *face = uiFontFace(false); // IBM Plex, embedded
   return CreateFont(-(int)std::lround(px * scale), 0, 0, 0, bold ? FW_BOLD : FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
                     OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH, face);
 }

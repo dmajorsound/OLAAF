@@ -13,7 +13,7 @@
 namespace olaaf { void dialogPaintTest(Importer &, ImportOptions &, HDC, int, const char *); }
 using namespace olaaf;
 
-struct Font { int h; bool bold; };
+struct Font { int h; bool bold; bool mono = false; };
 struct Obj { int kind; int col; Font f; };
 static std::string svg;
 static int curText = 0; static Font curFont{13, false}; static int curPen = 0; static int curBrush = 0;
@@ -24,7 +24,9 @@ static std::string esc(const char *s) { std::string o; for (; *s; s++) { if (*s=
 static HBRUSH mBrush(int c) { Obj *o = new Obj{1, c, {}}; return (HBRUSH)o; }
 static int penW = 1, curPenW = 1;
 static HPEN mPen(int, int w, int c) { Obj *o = new Obj{2, c, {w, false}}; return (HPEN)o; }
-static HFONT mFont(int h, int, int, int, int w, char, char, char, char, char, char, char, char, const char *) { Obj *o = new Obj{3, 0, {h < 0 ? -h : h, w >= 700}}; return (HFONT)o; }
+static HFONT mFont(int h, int, int, int, int w, char, char, char, char, char, char, char, char, const char *face) { Obj *o = new Obj{3, 0, {h < 0 ? -h : h, w >= 700, face && (strstr(face, "Mono") || strstr(face, "Menlo") || strstr(face, "Consolas"))}}; return (HFONT)o; }
+static std::string famSans() { const char *e = getenv("OLAAF_FONT"); return e ? e : "Helvetica, Arial, sans-serif"; }
+static std::string famMono() { const char *e = getenv("OLAAF_MONO"); return e ? e : "Menlo, monospace"; }
 static HGDIOBJ mSelect(HDC, HGDIOBJ g) { Obj *o = (Obj *)g; if (o && o->kind == 3) curFont = o->f; if (o && o->kind == 2) { curPen = o->col; curPenW = o->f.h; } if (o && o->kind == 1) curBrush = o->col; return g; }
 static void mDelete(HGDIOBJ) {}
 static void mFill(HDC, const RECT *r, HBRUSH b) { Obj *o = (Obj *)b; char t[256]; snprintf(t, 256, "<rect x='%ld' y='%ld' width='%ld' height='%ld' fill='%s'/>\n", r->left, r->top, r->right - r->left, r->bottom - r->top, hex(o->col).c_str()); svg += t; }
@@ -38,8 +40,8 @@ static int mDraw(HDC, const char *buf, int, RECT *r, int align) {
   char t[1024]; const char *anchor = (align & DT_CENTER) ? "middle" : (align & DT_RIGHT) ? "end" : "start";
   int x = (align & DT_CENTER) ? (r->left + r->right) / 2 : (align & DT_RIGHT) ? r->right : r->left;
   clipN++;
-  snprintf(t, 1024, "<clipPath id='c%d'><rect x='%ld' y='%ld' width='%ld' height='%ld'/></clipPath><text clip-path='url(#c%d)' x='%d' y='%ld' font-family='Helvetica, Arial, sans-serif' font-size='%d' font-weight='%s' fill='%s' text-anchor='%s' dominant-baseline='%s'>",
-           clipN, r->left, r->top, r->right - r->left, r->bottom - r->top, clipN, x, (align & DT_VCENTER) ? (r->top + r->bottom) / 2 : r->top + (long)(curFont.h * 0.95), curFont.h, curFont.bold ? "bold" : "normal", hex(curText).c_str(), anchor, (align & DT_VCENTER) ? "central" : "alphabetic");
+  snprintf(t, 1024, "<clipPath id='c%d'><rect x='%ld' y='%ld' width='%ld' height='%ld'/></clipPath><text clip-path='url(#c%d)' x='%d' y='%ld' font-family='%s' font-size='%d' font-weight='%s' fill='%s' text-anchor='%s' dominant-baseline='%s'>",
+           clipN, r->left, r->top, r->right - r->left, r->bottom - r->top, clipN, x, (align & DT_VCENTER) ? (r->top + r->bottom) / 2 : r->top + (long)(curFont.h * 0.95), (curFont.mono ? famMono() : famSans()).c_str(), curFont.h, curFont.bold ? "bold" : "normal", hex(curText).c_str(), anchor, (align & DT_VCENTER) ? "central" : "alphabetic");
   svg += t; svg += esc(buf); svg += "</text>\n"; return 0; }
 static void mPoly(HDC, POINT *p, int n) { svg += "<polygon points='"; char t[32]; for (int i = 0; i < n; i++) { snprintf(t, 32, "%ld,%ld ", p[i].x, p[i].y); svg += t; } svg += "' fill='" + hex(curBrush) + "'/>\n"; }
 static BOOL mTm(HDC, TEXTMETRIC *tm) { tm->tmHeight = (int)(curFont.h * 1.2); tm->tmInternalLeading = tm->tmHeight - curFont.h; tm->tmAscent = (int)(curFont.h * 0.95); tm->tmDescent = tm->tmHeight - tm->tmAscent; return 1; }

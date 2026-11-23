@@ -1,6 +1,9 @@
 # olAAF REAPER extension: reaper_olaaf.dll / .dylib / .so
 
-set(EXT_SRC main.cpp progress.cpp dialog.cpp theme.cpp logo.cpp)
+set(EXT_SRC main.cpp progress.cpp dialog.cpp theme.cpp logo.cpp fonts.cpp)
+if(WIN32 OR APPLE)
+  list(APPEND EXT_SRC fonts_data.cpp) # IBM Plex, embedded
+endif()
 set(SWELL ${PROJECT_SOURCE_DIR}/third_party/reaper-sdk/WDL/swell)
 if(APPLE)
   list(APPEND EXT_SRC ${SWELL}/swell-modstub.mm)
@@ -17,13 +20,13 @@ set_target_properties(reaper_olaaf PROPERTIES PREFIX "" CXX_VISIBILITY_PRESET hi
 if(NOT WIN32)
   target_compile_definitions(reaper_olaaf PRIVATE SWELL_PROVIDED_BY_APP)
 else()
-  target_link_libraries(reaper_olaaf PRIVATE shell32 ole32)
+  target_link_libraries(reaper_olaaf PRIVATE shell32 ole32 gdi32)
 endif()
 
 if(APPLE)
   set_target_properties(reaper_olaaf PROPERTIES SUFFIX ".dylib")
   target_link_options(reaper_olaaf PRIVATE -undefined dynamic_lookup)
-  target_link_libraries(reaper_olaaf PRIVATE "-framework AppKit")
+  target_link_libraries(reaper_olaaf PRIVATE "-framework AppKit" "-framework CoreText" "-framework CoreGraphics")
 elseif(UNIX)
   set_target_properties(reaper_olaaf PROPERTIES SUFFIX ".so")
   target_link_libraries(reaper_olaaf PRIVATE pthread dl)

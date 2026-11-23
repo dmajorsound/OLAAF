@@ -24,6 +24,7 @@
 #include "../core/util.h"
 #include "../core/audiofile.h"
 #include "../core/peaks.h"
+#include "fonts.h"
 
 
 #ifndef _WIN32
@@ -218,13 +219,7 @@ struct State {
 };
 
 HFONT makeFont(double px, bool bold, double scale, bool mono = false) {
-#ifdef _WIN32
-  const char *face = mono ? "Consolas" : "Segoe UI";
-#elif defined(__APPLE__)
-  const char *face = mono ? "Menlo" : "Helvetica Neue";
-#else
-  const char *face = mono ? "Monospace" : "Sans";
-#endif
+  const char *face = uiFontFace(mono); // IBM Plex, embedded
   return CreateFont(-(int)std::lround(px * scale), 0, 0, 0, bold ? FW_BOLD : FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
                     OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH, face);
 }
