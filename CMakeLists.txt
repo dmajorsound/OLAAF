@@ -34,8 +34,10 @@ add_library(olaaf_core STATIC
   src/core/aaf_reader.cpp
   src/core/audiofile.cpp
   src/core/importer.cpp
+  src/core/peaks.cpp
   src/core/util.cpp)
-target_link_libraries(olaaf_core PUBLIC aaf)
+find_package(Threads REQUIRED)
+target_link_libraries(olaaf_core PUBLIC aaf Threads::Threads)
 if(WIN32)
   target_compile_definitions(olaaf_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 endif()

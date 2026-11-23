@@ -22,14 +22,15 @@ static std::string hex(int c) { char b[8]; snprintf(b, 8, "#%06x", c & 0xffffff)
 static std::string esc(const char *s) { std::string o; for (; *s; s++) { if (*s=='&') o+="&amp;"; else if (*s=='<') o+="&lt;"; else if (*s=='>') o+="&gt;"; else o+=*s; } return o; }
 
 static HBRUSH mBrush(int c) { Obj *o = new Obj{1, c, {}}; return (HBRUSH)o; }
-static HPEN mPen(int, int, int c) { Obj *o = new Obj{2, c, {}}; return (HPEN)o; }
+static int penW = 1, curPenW = 1;
+static HPEN mPen(int, int w, int c) { Obj *o = new Obj{2, c, {w, false}}; return (HPEN)o; }
 static HFONT mFont(int h, int, int, int, int w, char, char, char, char, char, char, char, char, const char *) { Obj *o = new Obj{3, 0, {h < 0 ? -h : h, w >= 700}}; return (HFONT)o; }
-static HGDIOBJ mSelect(HDC, HGDIOBJ g) { Obj *o = (Obj *)g; if (o && o->kind == 3) curFont = o->f; if (o && o->kind == 2) curPen = o->col; if (o && o->kind == 1) curBrush = o->col; return g; }
+static HGDIOBJ mSelect(HDC, HGDIOBJ g) { Obj *o = (Obj *)g; if (o && o->kind == 3) curFont = o->f; if (o && o->kind == 2) { curPen = o->col; curPenW = o->f.h; } if (o && o->kind == 1) curBrush = o->col; return g; }
 static void mDelete(HGDIOBJ) {}
 static void mFill(HDC, const RECT *r, HBRUSH b) { Obj *o = (Obj *)b; char t[256]; snprintf(t, 256, "<rect x='%ld' y='%ld' width='%ld' height='%ld' fill='%s'/>\n", r->left, r->top, r->right - r->left, r->bottom - r->top, hex(o->col).c_str()); svg += t; }
 static int mx, my;
 static void mMove(HDC, int x, int y, POINT *) { mx = x; my = y; }
-static void mLine(HDC, int x, int y) { char t[256]; snprintf(t, 256, "<line x1='%d' y1='%d' x2='%d' y2='%d' stroke='%s' stroke-width='1'/>\n", mx, my, x, y, hex(curPen).c_str()); svg += t; mx = x; my = y; }
+static void mLine(HDC, int x, int y) { char t[256]; snprintf(t, 256, "<line x1='%d' y1='%d' x2='%d' y2='%d' stroke='%s' stroke-width='%d' stroke-linecap='square'/>\n", mx, my, x, y, hex(curPen).c_str(), curPenW); svg += t; mx = x; my = y; }
 static void mTextColor(HDC, int c) { curText = c; }
 static void mBk(HDC, int) {}
 static int mDraw(HDC, const char *buf, int, RECT *r, int align) {

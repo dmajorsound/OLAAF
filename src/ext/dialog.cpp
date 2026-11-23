@@ -23,6 +23,7 @@
 #include "logo.h"
 #include "../core/util.h"
 #include "../core/audiofile.h"
+#include "../core/peaks.h"
 
 
 #ifndef _WIN32
@@ -93,6 +94,7 @@ const int W = 1180, H = 800;
 #define kBlue (theme().blue)
 #define kBlueSoft (theme().blueSoft)
 #define kRed (theme().red)
+const int kPeakTimer = 7;
 const COLORREF kWhiteFixed = RGB(0xff, 0xff, 0xff);
 // text on the blue accent: white in light mode, near-black on the brighter dark-mode blue
 #define kWhite (olaaf::darkTheme() ? RGB(0x12, 0x1a, 0x26) : kWhiteFixed)
@@ -110,8 +112,8 @@ const double kL = 16, kR = W - 16;
 const double kHeadH = 56;
 const double kAT = 108;                       // arrange window top
 const double kHdr = 236;                      // lane header width
-const double kRuler = 30, kRowH = 32, kSb = 12;
-const int kRows = 15;
+const double kRuler = 30, kRowH = 36, kSb = 12;
+const int kRows = 13;
 const double kLT = kAT + 1 + kRuler;          // first lane
 const double kLB = kLT + kRows * kRowH;       // below the last lane
 const double kAB = kLB + kSb + 2;             // arrange window bottom
@@ -150,6 +152,8 @@ struct Row {
 };
 
 struct State {
+  PeakCache peaks;         // waveform overviews, read in the background
+  int peakSeen = -1;       // peaks.version() at the last paint
   Importer *imp = nullptr;
   ImportOptions *opt = nullptr;
   const DialogHost *host = nullptr;
@@ -305,13 +309,18 @@ struct Gfx {
     SelectObject(dc, old);
     return (rc.right - rc.left) / s;
   }
-  void line(double x1, double y1, double x2, double y2, COLORREF c) const {
-    HPEN p = CreatePen(PS_SOLID, 1, c);
+  void line(double x1, double y1, double x2, double y2, COLORREF c, double width = 1) const {
+    HPEN p = CreatePen(PS_SOLID, std::max(1, S(width)), c);
     HGDIOBJ old = SelectObject(dc, p);
     MoveToEx(dc, X(x1), Y(y1), NULL);
     LineTo(dc, X(x2), Y(y2));
     SelectObject(dc, old);
     DeleteObject(p);
+  }
+  // a check mark drawn as two strokes, centred in a 16 x 16 box at (x, y)
+  void check(double x, double y, COLORREF c) const {
+    line(x + 3.75, y + 8.25, x + 6.75, y + 11.25, c, 2);
+    line(x + 6.75, y + 11.25, x + 12.25, y + 4.75, c, 2);
   }
 };
 
@@ -332,7 +341,7 @@ void addHit(State *st, double l, double t, double r, double b, int id, int idx, 
 void checkbox(State *st, const Gfx &g, double x, double y, bool on, int id, int idx, const char *tip) {
   if (on) {
     g.box(x, y, x + 16, y + 16, kBlue, kBlue);
-    g.text(st->fCheck, kWhite, "\xe2\x9c\x93", x, y, x + 16, y + 16, DT_CENTER);
+    g.check(x, y, kWhite);
   } else
     g.box(x, y, x + 16, y + 16, theme().empty, kPanel);
   addHit(st, x - 4, y - 4, x + 20, y + 20, id, idx, tip);
@@ -360,7 +369,7 @@ double chip(State *st, const Gfx &g, double x, double t, const std::string &labe
   if (!enabled) g.box(x, cy, x + 16, cy + 16, kLine, kFace);
   else if (on) {
     g.fill(x, cy, x + 16, cy + 16, kBlue);
-    g.text(st->fCheck, kWhite, "\xe2\x9c\x93", x, cy, x + 16, cy + 16, DT_CENTER);
+    g.check(x, cy, kWhite);
   } else
     g.box(x, cy, x + 16, cy + 16, theme().empty, kPanel);
   g.text(st->fBody, enabled ? kInk : theme().empty, label, x + 23, t, x + w, t + 26, DT_LEFT);
@@ -675,7 +684,65 @@ void paintAutomation(State *st, const Gfx &g, const Track &tr, double y, double 
     }
 }
 
+COLORREF mixColor(COLORREF a, COLORREF b, double t) { // t = share of b
+  auto m = [&](int x, int y) { return (int)std::lround(x + (y - x) * t); };
+  return RGB(m(GetRValue(a), GetRValue(b)), m(GetGValue(a), GetGValue(b)), m(GetBValue(a), GetBValue(b)));
+}
+
+// The waveform of one event: one lane per channel for mono and stereo (two small waveforms for
+// L+R), multichannel events as one combined lane. Drawn as soon as the background reader has the file.
+void paintWave(State *st, const Gfx &g, const Clip &c, double l, double t, double r, double b, double clipX, double spp,
+               COLORREF col) {
+  if (r - l < 3 || b - t < 4) return;
+  struct Lane { int media, chan; };
+  std::vector<std::vector<Lane>> lanes; // each lane: the channels it shows (max of them)
+  for (auto &src : c.sources) {
+    if (src.media < 0) continue;
+    if (src.channel > 0) {
+      lanes.push_back({{src.media, src.channel - 1}});
+    } else {
+      int n = st->peaks.channels(src.media);
+      if (n <= 0) continue;
+      if (c.sources.size() == 1 && n == 2) {
+        if (c.chanMode == 3) lanes.push_back({{src.media, 0}});
+        else if (c.chanMode == 4) lanes.push_back({{src.media, 1}});
+        else {
+          lanes.push_back({{src.media, 0}});
+          lanes.push_back({{src.media, 1}});
+        }
+      } else {
+        std::vector<Lane> all;
+        for (int k = 0; k < n; k++) all.push_back({src.media, k});
+        lanes.push_back(all);
+      }
+    }
+  }
+  if (lanes.size() > 2) { // multichannel: one combined lane
+    std::vector<Lane> all;
+    for (auto &ln : lanes) all.insert(all.end(), ln.begin(), ln.end());
+    lanes.assign(1, all);
+  }
+  if (lanes.empty()) return;
+  double top = t + 1, laneH = (b - t - 2) / lanes.size();
+  double gain = std::max(0.0, c.gain);
+  double step = 1.0 / st->scale; // one device pixel
+  for (size_t i = 0; i < lanes.size(); i++) {
+    double mid = top + laneH * (i + 0.5), half = laneH / 2 - (lanes.size() > 1 ? 0.5 : 0);
+    if (lanes.size() > 1 && i > 0) g.fill(l + 2, top + laneH * i, r, top + laneH * i + std::max(step, 0.5), mixColor(col, kPanel, 0.6));
+    for (double x = l; x < r; x += step) {
+      double s0 = c.srcOffset + (x - clipX) * spp, s1 = s0 + step * spp;
+      float pk = -1;
+      for (auto &ln : lanes[i]) pk = std::max(pk, st->peaks.peak(ln.media, ln.chan, s0, s1));
+      if (pk < 0) return; // not read yet (or not a PCM file)
+      double a = std::sqrt(std::min(1.0, pk * gain)); // square root: quiet passages stay visible
+      double h = std::max(a * half, 0.5 * step);
+      g.fill(x, mid - h, x + step, mid + h, col);
+    }
+  }
+}
+
 void paintArrange(State *st, const Gfx &g) {
+  st->peakSeen = st->peaks.version();
   Session &s = st->imp->session();
   ImportOptions &opt = *st->opt;
   buildRows(st);
@@ -822,20 +889,20 @@ void paintArrange(State *st, const Gfx &g) {
     }
     if (tr.channels >= 2) {
       const char *badge = tr.channels == 2 ? (tr.mergedFrom.empty() ? "ST" : "L+R") : "MC";
-      g.box(nameR - 30, y + 9, nameR - 2, y + 23, theme().blueLine, kBlueSoft);
-      g.text(st->fClip, kBlue, badge, nameR - 30, y + 9, nameR - 2, y + 23, DT_CENTER);
+      g.box(nameR - 30, y + 11, nameR - 2, y + 25, theme().blueLine, kBlueSoft);
+      g.text(st->fClip, kBlue, badge, nameR - 30, y + 11, nameR - 2, y + 25, DT_CENTER);
       nameR -= 34;
     }
     COLORREF nameC = (on && !grabbed) ? kInk : kMute;
     if (st->editKind == 4 && st->editTrack == row.track) nameC = trSel ? kBlueSoft : kPanel; // the editor sits on top
     double nx = hx + 48;
     if (!tr.target.empty()) {
-      g.text(st->fBody, nameC, tr.name, nx, y + 1, nameR, y + 18, DT_LEFT);
+      g.text(st->fBody, nameC, tr.name, nx, y + 3, nameR, y + 20, DT_LEFT);
       g.text(st->fClip, kBlue, "\xe2\x86\x92 " + tr.targetName + (opt.overwriteEnvelopes ? "  (envelopes overwritten)" : ""), nx,
-             y + 16, nameR, y + kRowH - 2, DT_LEFT);
+             y + 19, nameR, y + kRowH - 3, DT_LEFT);
     } else if (!tr.mergedFrom.empty()) {
-      g.text(st->fBody, nameC, tr.name, nx, y + 1, nameR, y + 18, DT_LEFT);
-      g.text(st->fClip, kMute, tr.mergedFrom, nx, y + 16, nameR, y + kRowH - 2, DT_LEFT);
+      g.text(st->fBody, nameC, tr.name, nx, y + 3, nameR, y + 20, DT_LEFT);
+      g.text(st->fClip, kMute, tr.mergedFrom, nx, y + 19, nameR, y + kRowH - 3, DT_LEFT);
     } else
       g.text(st->fBody, nameC, tr.name, nx, y, nameR, y + kRowH, DT_LEFT);
     if (!on) g.fill(nx, y + kRowH / 2, std::min(nameR, nx + g.width(st->fBody, tr.name)), y + kRowH / 2 + 1, kMute);
@@ -858,34 +925,41 @@ void paintArrange(State *st, const Gfx &g) {
       x1 = std::min(x1, kTlr - 1);
       if (x1 - x0 < 1) x1 = x0 + 1;
       bool selected = st->sel.count(c.id) > 0;
-      double y0 = y + 5, y1 = y + kRowH - 6;
+      double y0 = y + 4, y1 = y + kRowH - 4;
+      double wy = (x1 - x0 > 30 && !c.name.empty()) ? y0 + 11 : y0; // waveform under the name
       if (selected && dragging) { // ghost where the event would land
         int tr2 = rowOfPos(st, st->dragFromPos + st->dragRows + (posOfTrack(st, row.track) - st->dragFromPos));
         int gv = tr2 - st->scrollRow;
         if (gv >= 0 && gv < kRows) {
           double gy = kLT + gv * kRowH;
-          g.box(x0, gy + 5, x1, gy + kRowH - 6, kBlue, kBlueSoft);
+          g.box(x0, gy + 4, x1, gy + kRowH - 4, kBlue, kBlueSoft);
         }
       }
       COLORREF cc = on ? tc : theme().off;
+      // a light tint of the track color, the waveform in a deeper shade of it
+      COLORREF tint = mixColor(cc, kPanel, olaaf::darkTheme() ? 0.55 : 0.72);
+      COLORREF wave = olaaf::darkTheme() ? mixColor(cc, RGB(255, 255, 255), 0.15) : mixColor(cc, RGB(0, 0, 0), 0.25);
+      double cx0 = kTlx + (c.pos - st->viewStart) / spp; // unclipped left edge, for the waveform time
       if (c.excluded) {
         g.box(x0, y0, x1, y1, selected ? kInk : kLine, kPanel);
         g.line(x0, y1, x1, y0, kLine);
       } else if (c.mute) {
         if (selected) g.fill(x0 - 2, y0 - 2, x1 + 2, y1 + 2, kInk);
         g.box(x0, y0, x1, y1, cc, kPanel);
-        if (x1 - x0 > 6) g.box(x0 + 1, y0 + 1, x1 - 1, y1 - 1, cc, kPanel);
+        paintWave(st, g, c, x0 + 1, std::max(wy, y0 + 1), x1 - 1, y1 - 1, cx0, spp, mixColor(cc, kPanel, 0.55));
       } else {
         if (selected) g.fill(x0 - 2, y0 - 2, x1 + 2, y1 + 2, kInk);
         if (selected) g.fill(x0 - 1, y0 - 1, x1 + 1, y1 + 1, kPanel);
-        g.fill(x0, y0, x1, y1, cc);
+        g.fill(x0, y0, x1, y1, tint);
+        paintWave(st, g, c, x0 + 2, wy, x1, y1, cx0, spp, wave);
+        g.fill(x0, y0, std::min(x1, x0 + 2), y1, cc); // the clip start
         double fi = c.fadeIn.len / spp, fo = c.fadeOut.len / spp;
         if (opt.fades && fi > 2) g.line(x0, y1, std::min(x1, x0 + fi), y0, kInk);
         if (opt.fades && fo > 2) g.line(std::max(x0, x1 - fo), y0, x1, y1, kInk);
       }
       if (x1 - x0 > 30 && !c.name.empty())
-        g.text(st->fClip, (c.excluded || c.mute || !on) ? kMute : kWhiteFixed, c.mute ? "M  " + c.name : c.name, x0 + 4, y0,
-               x1 - 3, y1, DT_LEFT);
+        g.text(st->fClip, (c.excluded || c.mute || !on) ? kMute : kInk, c.mute ? "M  " + c.name : c.name, x0 + 4, y0,
+               x1 - 3, y0 + 12, DT_LEFT);
       ClipHit h;
       h.r = devRect(st, x0, y0, x1, y1);
       h.id = c.id;
@@ -1721,6 +1795,8 @@ void click(State *st, int x, int y, bool shift) {
     if (pickFolder(st->hwnd, "OLAAF: choose the folder that holds the media", dirName(s.aafPath), &p)) {
       opt.searchFolders.insert(opt.searchFolders.begin(), p); // searched first, remembered for next time
       st->imp->locateMedia(opt);
+      st->peaks.start(s);
+      SetTimer(st->hwnd, kPeakTimer, 150, NULL);
     }
     break;
   }
@@ -1832,8 +1908,16 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     st->viewLen = (b - a) * 1.04;
     st->tcAbs = std::fabs(st->opt->tcOffset);
     st->tcMinus = st->opt->tcOffset < 0;
+    st->peaks.start(st->imp->session()); // waveforms fill in as the files are read
+    SetTimer(hwnd, kPeakTimer, 150, NULL);
     return 0;
   }
+  case WM_TIMER:
+    if (st && wp == kPeakTimer) {
+      if (st->peaks.version() != st->peakSeen) InvalidateRect(hwnd, NULL, FALSE);
+      if (!st->peaks.busy() && st->peaks.version() == st->peakSeen) KillTimer(hwnd, kPeakTimer);
+    }
+    return 0;
   case WM_ERASEBKGND: return 1;
   case WM_SIZE:
     if (st) {
@@ -2140,6 +2224,8 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       }
     }
     if (g_open == st) g_open = nullptr;
+    KillTimer(hwnd, kPeakTimer);
+    if (st) st->peaks.stop();
     if (st) {
       freeFonts(st);
       if (st->editBrush) DeleteObject(st->editBrush);
@@ -2175,6 +2261,7 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   st.hwnd = (HWND)1;
   st.merge = opt.mergeStereo;
   st.tip = tip;
+  st.peaks.runNow(imp.session());
   makeFonts(&st);
   double a, b;
   sessionRange(imp.session(), &a, &b);
