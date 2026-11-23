@@ -96,7 +96,7 @@ const int W = 1180, H = 716;
 #define kBlue (theme().blue)
 #define kBlueSoft (theme().blueSoft)
 #define kRed (theme().red)
-const int kPeakTimer = 7, kPlayTimer = 8;
+const int kPeakTimer = 7, kPlayTimer = 8, kTipTimer = 9, kUpdTimer = 10;
 const COLORREF kWhiteFixed = RGB(0xff, 0xff, 0xff);
 // text on the blue accent: white in light mode, near-black on the brighter dark-mode blue
 #define kWhite (olaaf::darkTheme() ? RGB(0x12, 0x1a, 0x26) : kWhiteFixed)
@@ -133,7 +133,7 @@ enum HitId {
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
   H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE,
-  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER
+  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE
 };
 
 struct Hit {
@@ -207,6 +207,11 @@ struct State {
   bool playTL = false;                   // listening to the whole timeline
   double playhead = -1;                  // timeline seconds (AAF time); -1 = where the AAF starts
   double playFrom = 0;                   // where timeline playback started (stop goes back there)
+  bool helpOpen = false;                 // the help and shortcut window
+  bool tipVisible = false;               // the tooltip shows after a short hover
+  double mouseLX = -1, mouseLY = -1;     // mouse, in layout units
+  std::string updTag, updUrl;            // a newer OLAAF on GitHub
+  int updPolls = 0;
   std::function<void(bool)> onClose;     // modeless: called after the window is gone
   // popovers
   int palTrack = -1;       // color popover for this track ...
@@ -227,7 +232,7 @@ struct State {
   HBRUSH editBrush = nullptr;
   HFONT fTheme = nullptr, fCheck = nullptr, fClip = nullptr, fTitle = nullptr, fTitleThin = nullptr, fTag = nullptr,
         fBody = nullptr, fBold = nullptr, fSmall = nullptr, fSec = nullptr, fMono = nullptr, fMonoBig = nullptr,
-        fMonoSmall = nullptr, fHead = nullptr;
+        fMonoSmall = nullptr, fHead = nullptr, fWord = nullptr, fKey = nullptr;
 };
 
 HFONT makeFont(double px, bool bold, double scale, bool mono = false) {
@@ -252,11 +257,13 @@ void makeFonts(State *st) {
   st->fMonoBig = makeFont(21, false, s, true);
   st->fMonoSmall = makeFont(10.5, false, s, true);
   st->fHead = makeFont(15, true, s);
+  st->fWord = makeFont(20, true, s);
+  st->fKey = makeFont(11.5, true, s, true);
 }
 
 void freeFonts(State *st) {
   HFONT *fs[] = {&st->fTheme, &st->fCheck, &st->fClip, &st->fTitle, &st->fTitleThin, &st->fTag, &st->fBody,
-                 &st->fBold, &st->fSmall, &st->fSec, &st->fMono, &st->fMonoBig, &st->fMonoSmall, &st->fHead};
+                 &st->fBold, &st->fSmall, &st->fSec, &st->fMono, &st->fMonoBig, &st->fMonoSmall, &st->fHead, &st->fWord, &st->fKey};
   for (HFONT *f : fs) {
     if (*f) DeleteObject(*f);
     *f = nullptr;
@@ -659,7 +666,10 @@ void paintTopBar(State *st, const Gfx &g) {
   g.fill(23, mid - 7, 33, mid - 3.5, kWhiteFixed);
   g.fill(27, mid - 1.6, 39, mid + 1.9, kWhiteFixed);
   g.fill(23, mid + 3.8, 30, mid + 7.3, kWhiteFixed);
-  addHit(st, 16, mid - 15, 46, mid + 15, H_NONE, 0, "OLAAF \xe2\x80\x93 AAF import for REAPER. V 0.6 beta, developed with AI assistance. dmajorsound.com");
+  g.text(st->fWord, kInk, "OLAAF", 56, mid - 16, 140, mid + 16, DT_LEFT);
+  double wordR = 56 + std::max(60.0, std::min(90.0, g.width(st->fWord, "OLAAF")));
+  addHit(st, 16, mid - 15, wordR, mid + 15, H_NONE, 0, "OLAAF \xe2\x80\x93 AAF import for REAPER. V 0.6 beta, developed with AI assistance. dmajorsound.com");
+  g.fill(wordR + 14, mid - 16, wordR + 15, mid + 16, kLine);
 
   // right side, right to left: Import, Cancel, Options, | Edit cursor, where it lands
   double r = kR;
@@ -672,6 +682,8 @@ void paintTopBar(State *st, const Gfx &g) {
   g.text(st->fBody, kMute, "Cancel", r - cw, mid - 16, r, mid + 16, DT_CENTER);
   addHit(st, r - cw, mid - 16, r, mid + 16, H_CANCEL, 0, "Close without importing (Esc).");
   r -= cw + 6;
+  button(st, g, r - 30, mid - 15, r, mid + 15, "?", H_HELP, 0, "Help and keyboard shortcuts (H).", false, true, st->helpOpen);
+  r -= 36;
   double ow = std::max(90.0, g.width(st->fBody, "Options") + 40);
   st->optsBtn = {r - ow, mid - 15, r, mid + 15};
   button(st, g, r - ow, mid - 15, r, mid + 15, "", H_OPTS, 0, "Fades, stereo, markers, folders, clip gain, video and where the audio goes.",
@@ -692,20 +704,33 @@ void paintTopBar(State *st, const Gfx &g) {
   if (st->editKind != 1) g.text(st->fMonoBig, kBlue, land, r - tw, mid - 7, r, mid + 18, DT_RIGHT);
   for (double dx = r - 3; dx > r - tw + 30; dx -= 6) g.fill(dx - 3, mid + 19, dx, mid + 20, theme().empty);
   st->tcRc = devRect(st, r - tw + 20, mid - 6, r, mid + 18);
-  addHit(st, r - tw, mid - 22, r, mid + 21, H_TC_VALUE, 0,
-         "Type where the AAF starts in REAPER: HH:MM:SS:FF or just the digits. Return applies, Esc cancels.");
+  static std::string tcTip;
+  tcTip = "Where the AAF lands in REAPER. In the AAF it starts at " + formatTC(s.firstClip(), s.fps) +
+          ". Click and type HH:MM:SS:FF or just the digits; Return applies, Esc cancels.";
+  addHit(st, r - tw, mid - 22, r, mid + 21, H_TC_VALUE, 0, tcTip.c_str());
   double infoR = r - tw - 16;
 
   // left: the AAF and what it is
-  double x = 58;
+  double x = wordR + 30;
   std::string name = baseName(s.aafPath);
-  g.text(st->fHead, kInk, name, x, mid - 20, infoR, mid + 1, DT_LEFT);
+  double nmW = std::min(infoR - x, g.width(st->fHead, name) + 4);
+  g.text(st->fHead, kInk, name, x, mid - 20, x + nmW, mid + 1, DT_LEFT);
+  if (!st->updTag.empty()) { // a newer OLAAF is out
+    std::string u = "Update " + st->updTag;
+    double uw = g.width(st->fSmall, u) + 20, ux = x + nmW + 10;
+    if (ux + uw < infoR) {
+      g.rfill(ux, mid - 19, ux + uw, mid - 1, 9, kBlue);
+      g.text(st->fSmall, kWhite, u, ux, mid - 19, ux + uw, mid - 1, DT_CENTER);
+      static std::string uTip;
+      uTip = "OLAAF " + st->updTag + " is out. Click to open the download page.";
+      addHit(st, ux, mid - 20, ux + uw, mid, H_UPDATE, 0, uTip.c_str());
+    }
+  }
   double proj = 0;
   bool fpsBad = fpsMismatch(st, &proj);
   std::string a = s.product.empty() ? std::string() : s.product + " \xc2\xb7 ";
   std::string f = fpsText(s);
-  std::string b = strprintf(" \xc2\xb7 %g kHz / %d bit \xc2\xb7 starts %s \xc2\xb7 ", s.sampleRate / 1000.0, s.bits,
-                            formatTC(s.firstClip(), s.fps).c_str());
+  std::string b = strprintf(" \xc2\xb7 %g kHz / %d bit \xc2\xb7 ", s.sampleRate / 1000.0, s.bits);
   double y0 = mid + 2, y1 = mid + 19;
   auto seg = [&](const std::string &t, COLORREF c) {
     double w = g.width(st->fSmall, t);
@@ -1214,7 +1239,7 @@ void paintEventBar(State *st, const Gfx &g) {
   }
   double x = kL;
   if (ids.empty()) {
-    g.text(st->fBody, kMute, st->tip ? st->tip : "Click an event to mute, remove or move it. Shift-click selects more.", x, t,
+    g.text(st->fBody, kMute, "Click an event to select it, Space plays. Hover over anything for a hint, H for help.", x, t,
            right, b, DT_LEFT);
     return;
   }
@@ -1237,8 +1262,7 @@ void paintEventBar(State *st, const Gfx &g) {
   }
   double nw = std::min(220.0, g.width(st->fBold, nm) + 10);
   g.text(st->fBold, kInk, nm, x, t, std::min(x + nw, right - 6), b, DT_LEFT);
-  if (st->tip) g.text(st->fSmall, kMute, st->tip, x + nw + 4, t, right - 8, b, DT_LEFT);
-  else g.text(st->fMonoSmall, kMute, det, x + nw + 4, t, right - 8, b, DT_LEFT);
+  g.text(st->fMonoSmall, kMute, det, x + nw + 4, t, right - 8, b, DT_LEFT);
 }
 
 // ------------------------------------------------------------------ options
@@ -1363,6 +1387,119 @@ void paintOptions(State *st, const Gfx &g) {
   g.fill(px + 16, y, px + kOpW - 16, y + 1, kLine);
   g.text(st->fTag, kMute, "V 0.6 beta developed with AI assistance \xc2\xb7 dmajorsound.com", px + 16, y + 4, px + kOpW - 16,
          y + 24, DT_LEFT);
+}
+
+// ------------------------------------------------------------------ help and shortcuts
+
+void keyCap(State *st, const Gfx &g, double &x, double y, const std::string &k) {
+  double w = std::max(24.0, g.width(st->fKey, k) + 14);
+  g.rbox(x, y, x + w, y + 22, 5, kLine, mixColor(kPanel, kInk, 0.08));
+  g.text(st->fKey, kInk, k, x, y, x + w, y + 22, DT_CENTER);
+  x += w + 4;
+}
+
+void paintHelp(State *st, const Gfx &g) {
+  double w = 820, h = 500;
+  double l = (W - w) / 2, t = kTopH + 14;
+  g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 16, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
+  g.rbox(l, t, l + w, t + h, 16, kLine, kPop);
+  addHit(st, l, t, l + w, t + h, H_HELP_BG, 0, nullptr);
+  g.text(st->fHead, kInk, "Help and keyboard shortcuts", l + 24, t + 16, l + w - 60, t + 40, DT_LEFT);
+  g.text(st->fSmall, kMute, "The same keys on Mac and Windows. Hover over anything in OLAAF for a short hint.", l + 24, t + 40,
+         l + w - 60, t + 58, DT_LEFT);
+  button(st, g, l + w - 44, t + 14, l + w - 16, t + 42, "\xc3\x97", H_HELP_CLOSE, 0, "Close (Esc).");
+
+  struct Row { const char *keys; const char *what; };
+  // keys separated by '|', several ways by '/'
+  const Row play[] = {{"Space", "Play / stop from the playhead"},
+                      {"P", "Play / stop the selected event"},
+                      {"Click ruler", "Move the playhead"}};
+  const Row view[] = {{"+/\xe2\x88\x92", "Zoom in / out"},
+                      {"Alt|Wheel", "Zoom (Option on the Mac)"},
+                      {"Shift|Wheel", "Move through time"},
+                      {"F", "Show the whole AAF"},
+                      {"A", "Show automation in the lanes"}};
+  const Row ev[] = {{"Click", "Select an event (Shift-click: more)"},
+                    {"\xe2\x86\x91/\xe2\x86\x93", "Move the selection one track up / down"},
+                    {"M", "Mute / unmute"},
+                    {"Delete/Backspace", "Remove / restore"},
+                    {"Drag names", "Order tracks, put them in folders"},
+                    {"Double-click", "Rename a track"}};
+  const Row win[] = {{"Return", "Import"},
+                     {"O", "Options"},
+                     {"H", "This help"},
+                     {"Esc", "Close a panel, then the window"}};
+  auto block = [&](double x, double &y, const char *head, const Row *rows, int n) {
+    g.text(st->fSmall, kMute, head, x, y, x + 380, y + 20, DT_LEFT);
+    y += 24;
+    for (int i = 0; i < n; i++) {
+      double kx = x;
+      std::string keys = rows[i].keys;
+      size_t a = 0;
+      while (a <= keys.size()) {
+        size_t b = keys.find_first_of("|/", a);
+        std::string k = keys.substr(a, b == std::string::npos ? std::string::npos : b - a);
+        keyCap(st, g, kx, y + 2, k);
+        if (b == std::string::npos) break;
+        if (keys[b] == '|') {
+          g.text(st->fSmall, kMute, "+", kx - 2, y, kx + 8, y + 26, DT_CENTER);
+          kx += 10;
+        } else
+          kx += 2;
+        a = b + 1;
+      }
+      g.text(st->fBody, kInk, rows[i].what, x + 150, y, x + 380, y + 26, DT_LEFT);
+      y += 30;
+    }
+    y += 10;
+  };
+  double y1 = t + 74, y2 = t + 74;
+  block(l + 24, y1, "Listening", play, 3);
+  block(l + 24, y1, "View", view, 5);
+  block(l + 424, y2, "Events and tracks", ev, 6);
+  block(l + 424, y2, "Window", win, 4);
+  double y = std::max(y1, y2) + 2;
+  g.fill(l + 24, y, l + w - 24, y + 1, kLine);
+  g.text(st->fSmall, kMute,
+         "Set where the AAF starts in REAPER on top, choose what comes along under Options, then Import. "
+         "Clip gain, fades, folders and video",
+         l + 24, y + 8, l + w - 24, y + 26, DT_LEFT);
+  g.text(st->fSmall, kMute, "come into REAPER as you see them here. V 0.6 beta \xc2\xb7 dmajorsound.com", l + 24, y + 26,
+         l + w - 24, y + 44, DT_LEFT);
+}
+
+// a short hint next to the mouse, after it rests a moment
+void paintTooltip(State *st, const Gfx &g) {
+  if (!st->tip || !st->tipVisible || st->mouseLX < 0) return;
+  std::string text = st->tip;
+  // wrap at about 320 units
+  std::vector<std::string> lines;
+  std::string cur;
+  size_t i = 0;
+  while (i <= text.size()) {
+    size_t sp = text.find(' ', i);
+    std::string word = text.substr(i, sp == std::string::npos ? std::string::npos : sp - i);
+    std::string tryLine = cur.empty() ? word : cur + " " + word;
+    if (!cur.empty() && g.width(st->fSmall, tryLine) > 320) {
+      lines.push_back(cur);
+      cur = word;
+    } else
+      cur = tryLine;
+    if (sp == std::string::npos) break;
+    i = sp + 1;
+  }
+  if (!cur.empty()) lines.push_back(cur);
+  double w = 0;
+  for (auto &ln : lines) w = std::max(w, g.width(st->fSmall, ln));
+  w = std::min(340.0, w + 20);
+  double h = lines.size() * 16 + 12;
+  double x = st->mouseLX + 14, y = st->mouseLY + 20;
+  if (x + w > W - 8) x = W - 8 - w;
+  if (y + h > H - 6) y = st->mouseLY - h - 10;
+  g.rfill(x + 1, y + 2, x + w + 2, y + h + 3, 8, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
+  g.rbox(x, y, x + w, y + h, 8, kLine, kPop);
+  for (size_t k = 0; k < lines.size(); k++)
+    g.text(st->fSmall, kInk, lines[k], x + 10, y + 6 + k * 16, x + w - 8, y + 22 + k * 16, DT_LEFT);
 }
 
 // ------------------------------------------------------------------ frame rate warning
@@ -1552,6 +1689,8 @@ void paint(State *st, HDC dc) {
   if (st->destTrack >= 0) paintDestPopover(st, g);
   if (st->palTrack >= 0 || !st->palFolder.empty()) paintPalette(st, g);
   if (st->optsOpen) paintOptions(st, g);
+  if (st->helpOpen) paintHelp(st, g);
+  paintTooltip(st, g);
 }
 
 // ------------------------------------------------------------------ input
@@ -1772,6 +1911,11 @@ void click(State *st, int x, int y, bool shift) {
   bool inOpts = id == H_OPTS_BG || id == H_FADES || id == H_MERGE || id == H_MARKERS || id == H_FOLDERS || id == H_GAIN_ITEMS ||
                 id == H_GAIN_TRACK || id == H_GAIN_OFF || id == H_VIDEO || id == H_VIDEO_CHOOSE || id == H_COPY_YES ||
                 id == H_COPY_NO || id == H_SUBDIR || id == H_DEST_CHOOSE || id == H_LOCATE;
+  if (st->helpOpen && id != H_HELP_BG && id != H_HELP) { // a click anywhere else closes the help
+    st->helpOpen = false;
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    return;
+  }
   if (st->optsOpen && !inOpts && id != H_OPTS) {
     st->optsOpen = false;
     InvalidateRect(st->hwnd, NULL, FALSE);
@@ -2004,6 +2148,12 @@ void click(State *st, int x, int y, bool shift) {
   case H_SHOW_AUTO: opt.showAutomation = !opt.showAutomation; break;
   case H_OPTS: st->optsOpen = !st->optsOpen; st->folderTrack = st->destTrack = st->palTrack = -1; st->palFolder.clear(); break;
   case H_OPTS_BG: return;
+  case H_HELP: st->helpOpen = !st->helpOpen; st->optsOpen = false; break;
+  case H_HELP_BG: return;
+  case H_HELP_CLOSE: st->helpOpen = false; break;
+  case H_UPDATE:
+    if (st->host && st->host->openUrl && !st->updUrl.empty()) st->host->openUrl(st->updUrl);
+    return;
   case H_GAIN_ITEMS: opt.clipGain = true; opt.clipGainToTrack = false; break;
   case H_GAIN_TRACK: opt.clipGain = true; opt.clipGainToTrack = true; break;
   case H_GAIN_OFF: opt.clipGain = false; break;
@@ -2221,6 +2371,36 @@ bool handleKey(State *st, int vk) {
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
   }
+  if (vk == 'H' || vk == VK_F1) {
+    st->helpOpen = !st->helpOpen;
+    st->optsOpen = false;
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    return true;
+  }
+  if (vk == 'O') {
+    st->optsOpen = !st->optsOpen;
+    st->helpOpen = false;
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    return true;
+  }
+  if (vk == 'F') {
+    double a, b;
+    sessionRange(st->imp->session(), &a, &b);
+    st->viewStart = a - (b - a) * 0.02;
+    st->viewLen = (b - a) * 1.04;
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    return true;
+  }
+  if (vk == 'A') {
+    st->opt->showAutomation = !st->opt->showAutomation;
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    return true;
+  }
+  if (vk == VK_RETURN) {
+    st->opt->tcOffset = tcOffset(st);
+    closeDialog(st, true);
+    return true;
+  }
   if (vk == VK_SPACE || vk == 'P' || vk == 'p') { // Space: the timeline, P: the selected event
     if (vk == VK_SPACE) toggleTimeline(st);
     else togglePlay(st);
@@ -2281,9 +2461,29 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     st->tcMinus = st->opt->tcOffset < 0;
     st->peaks.start(st->imp->session()); // waveforms fill in as the files are read
     SetTimer(hwnd, kPeakTimer, 150, NULL);
+    SetTimer(hwnd, kUpdTimer, 1000, NULL); // is there a newer OLAAF?
     return 0;
   }
   case WM_TIMER:
+    if (st && wp == kTipTimer) {
+      KillTimer(hwnd, kTipTimer);
+      if (st->tip) {
+        st->tipVisible = true;
+        InvalidateRect(hwnd, NULL, FALSE);
+      }
+      return 0;
+    }
+    if (st && wp == kUpdTimer) { // the update check runs in the background; stop asking after a while
+      std::string tag, url;
+      int u = st->host && st->host->updateState ? st->host->updateState(&tag, &url) : 2;
+      if (u == 1) {
+        st->updTag = tag;
+        st->updUrl = url;
+        InvalidateRect(hwnd, NULL, FALSE);
+      }
+      if (u != 0 || ++st->updPolls > 20) KillTimer(hwnd, kUpdTimer);
+      return 0;
+    }
     if (st && wp == kPlayTimer) {
       double p = st->host && st->host->previewPos ? st->host->previewPos() : -1;
       if (p < 0) stopPlay(st);
@@ -2536,9 +2736,15 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     const char *tip = h ? h->tip : nullptr;
     double lx = (mx - st->ox) / st->scale;
     int hr = (lx >= kL && lx < kL + kHdr && !st->optsOpen) ? rowAtY(st, my) : -1;
+    st->mouseLX = (mx - st->ox) / st->scale;
+    st->mouseLY = (my - st->oy) / st->scale;
     if (tip != st->tip || hr != st->hoverRow) {
+      bool wasShown = st->tipVisible;
       st->tip = tip;
       st->hoverRow = hr;
+      st->tipVisible = false;
+      KillTimer(hwnd, kTipTimer);
+      if (tip) SetTimer(hwnd, kTipTimer, wasShown ? 120 : 550, NULL); // quick once tips are showing
       InvalidateRect(hwnd, NULL, FALSE);
     }
     return 0;
@@ -2612,6 +2818,8 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     if (g_open == st) g_open = nullptr;
     KillTimer(hwnd, kPeakTimer);
+    KillTimer(hwnd, kTipTimer);
+    KillTimer(hwnd, kUpdTimer);
     if (st) stopPlay(st);
     if (st) st->peaks.stop();
     if (st) {
@@ -2665,6 +2873,14 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   }
   if (getenv("OLAAF_SHOWAUTO")) opt.showAutomation = true;
   if (getenv("OLAAF_OPTS")) st.optsOpen = true;
+  if (getenv("OLAAF_HELP")) st.helpOpen = true;
+  if (getenv("OLAAF_UPD")) st.updTag = "v0.7.0";
+  if (getenv("OLAAF_TIP")) {
+    st.tip = "Where the AAF lands in REAPER. In the AAF it starts at 00:00:00:00. Click and type HH:MM:SS:FF or just the digits; Return applies, Esc cancels.";
+    st.tipVisible = true;
+    st.mouseLX = 640;
+    st.mouseLY = 40;
+  }
   host.playTimeline = [](const std::vector<MixEvent> &, double, double) { return false; };
   host.playPreview = [](const std::vector<PreviewPart> &) { return false; };
   st.playhead = imp.session().firstClip() + 9.5;
@@ -2719,8 +2935,8 @@ int dialogTranslateKey(MSG *msg) {
     return -1;
   }
   if (msg->message == WM_KEYDOWN && msg->wParam == VK_ESCAPE) {
-    if (st->optsOpen || st->folderTrack >= 0 || st->destTrack >= 0 || st->palTrack >= 0 || !st->palFolder.empty()) {
-      st->optsOpen = false; // Esc closes an open panel first
+    if (st->helpOpen || st->optsOpen || st->folderTrack >= 0 || st->destTrack >= 0 || st->palTrack >= 0 || !st->palFolder.empty()) {
+      st->optsOpen = st->helpOpen = false; // Esc closes an open panel first
       st->folderTrack = st->destTrack = st->palTrack = -1;
       st->palFolder.clear();
       InvalidateRect(st->hwnd, NULL, FALSE);

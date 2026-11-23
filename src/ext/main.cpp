@@ -12,6 +12,7 @@
 #include "progress.h"
 #include "dialog.h"
 #include "theme.h"
+#include "update.h"
 
 #include <cmath>
 #include <cstring>
@@ -410,6 +411,8 @@ static DialogHost makeHost() {
   h.stopPreview = []() { preview::stop(); };
   h.previewPos = []() { return preview::pos(); };
   h.playTimeline = [](const std::vector<MixEvent> &e, double a, double b) { return preview::playTimeline(e, a, b); };
+  h.updateState = [](std::string *tag, std::string *url) { return updateCheckState(tag, url); };
+  h.openUrl = [](const std::string &url) { openWebPage(url); };
   h.getSetting = [](const char *key) {
     const char *v = GetExtState("olAAF", key);
     return std::string(v ? v : "");
@@ -434,6 +437,7 @@ static DialogHost makeHost() {
 // step 1: read the AAF and find its media (progress window), then the remembered settings
 static bool loadForImport(const std::string &aaf, ImportOptions &opt, Importer &imp, std::string &err,
                           std::string &defaultDest) {
+  updateCheckStart(); // is there a newer OLAAF? (once per session, in the background)
   // OLAAF wears the REAPER theme that is loaded right now
   setThemeFromReaper([](const char *key) { return GetThemeColor(key, 0); });
   bool cancelled = false;

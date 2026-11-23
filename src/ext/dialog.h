@@ -56,6 +56,9 @@ struct DialogHost {
   // listening to the timeline: every event mixed, from `start` (timeline seconds); previewPos then
   // returns the timeline position
   std::function<bool(const std::vector<MixEvent> &events, double start, double end)> playTimeline;
+  // update check on GitHub: 0 still asking, 1 a newer release (tag, page), 2 nothing newer or no answer
+  std::function<int(std::string *tag, std::string *url)> updateState;
+  std::function<void(const std::string &url)> openUrl;
 };
 
 // Shows the dialog. Returns true when the user pressed Import; `opt` and the session's
