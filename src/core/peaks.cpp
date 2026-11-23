@@ -4,6 +4,7 @@
 #include "peaks.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -177,6 +178,71 @@ std::shared_ptr<PeakCache::Peaks> PeakCache::scan(const Job &j, const std::atomi
       d = std::max(d, p->fine[b * in.channels + c]);
     }
   return p;
+}
+
+bool PcmReader::open(const std::string &path) {
+  if (f_ && path == path_) return true;
+  close();
+  PcmInfo in;
+  std::string ext = path.size() > 4 ? path.substr(path.size() - 4) : "";
+  for (auto &ch : ext) ch = (char)tolower((unsigned char)ch);
+  bool ok = ext == ".mxf"   ? readMxfInfo(path, &in)
+            : (ext == "aiff" || ext == ".aif" || ext == "aifc") ? readAiffInfo(path, &in)
+                                                                 : readWavInfo(path, &in);
+  if (!ok || in.channels <= 0 || in.rate <= 0 || in.bits < 8 || in.bits > 64) return false;
+  FILE *f = openUtf8(path, "rb");
+  if (!f) return false;
+  f_ = f;
+  path_ = path;
+  channels_ = in.channels;
+  rate_ = in.rate;
+  bits_ = in.bits;
+  float_ = in.isFloat;
+  big_ = in.bigEndian;
+  aiff8_ = in.bigEndian && in.bits == 8;
+  offset_ = in.dataOffset;
+  frames_ = in.frames();
+  return true;
+}
+
+void PcmReader::close() {
+  if (f_) fclose((FILE *)f_);
+  f_ = nullptr;
+  path_.clear();
+}
+
+void PcmReader::read(double time, int channel, int n, std::vector<float> &out) {
+  out.assign((size_t)std::max(0, n), 0.0f);
+  if (!f_ || n <= 0 || channel < 0 || channel >= channels_) return;
+  int bps = bits_ / 8, fb = bps * channels_;
+  int64_t a = (int64_t)std::floor(time * rate_);
+  int64_t s0 = std::max<int64_t>(0, a), s1 = std::min<int64_t>(frames_, a + n);
+  if (s1 <= s0) return;
+  buf_.resize((size_t)((s1 - s0) * fb));
+  if (fseek64((FILE *)f_, (int64_t)offset_ + s0 * fb, SEEK_SET)) return;
+  size_t got = fread(buf_.data(), 1, buf_.size(), (FILE *)f_) / (size_t)fb;
+  for (size_t i = 0; i < got; i++) {
+    const unsigned char *p = buf_.data() + i * fb + channel * bps;
+    unsigned char b[8];
+    if (big_)
+      for (int k = 0; k < bps; k++) b[k] = p[bps - 1 - k];
+    else
+      memcpy(b, p, (size_t)bps);
+    float v = 0;
+    if (float_) {
+      if (bits_ == 32) memcpy(&v, b, 4);
+      else {
+        double d;
+        memcpy(&d, b, 8);
+        v = (float)d;
+      }
+    } else if (bits_ == 8) v = aiff8_ ? (int8_t)b[0] / 128.0f : (b[0] - 128) / 128.0f;
+    else if (bits_ == 16) v = (int16_t)(b[0] | b[1] << 8) / 32768.0f;
+    else if (bits_ == 24) v = ((int32_t)((uint32_t)b[0] << 8 | (uint32_t)b[1] << 16 | (uint32_t)b[2] << 24) >> 8) / 8388608.0f;
+    else if (bits_ == 32)
+      v = (int32_t)((uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24) / 2147483648.0f;
+    out[(size_t)(s0 - a) + i] = v;
+  }
 }
 
 int PeakCache::channels(int media) const {

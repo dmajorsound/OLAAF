@@ -565,12 +565,19 @@ bool Importer::prepareMedia(const ImportOptions &opt, MediaReport *rep, const Pr
       if (c.excluded) continue;
       c.chanMode = 0;
       if (c.sources.empty() || c.sources[0].media < 0) continue;
+      // left and right exchanged: an L / R pair is interleaved the other way round (this is the
+      // last step before the session is written, so the clip can be changed here)
+      if (c.swapLR && c.sources.size() == 2) {
+        std::swap(c.sources[0], c.sources[1]);
+        c.swapLR = false;
+      }
       const Media &m0 = s_.media[(size_t)c.sources[0].media];
       if (c.sources.size() == 1) {
         c.outPath = m0.outPath;
         int ch = c.sources[0].channel;
         if (ch > 0 && m0.channels == 2) c.chanMode = ch == 1 ? 3 : 4;
         else if (ch > 0 && m0.channels > 2) c.chanMode = 2 + ch; // REAPER: 3+ = mono channel n-2
+        else if (ch == 0 && m0.channels == 2 && c.swapLR) c.chanMode = 1; // REAPER: reverse stereo
         continue;
       }
       // several sources

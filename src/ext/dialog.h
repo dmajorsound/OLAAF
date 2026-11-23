@@ -25,7 +25,7 @@ struct PreviewPart {
   std::string path;
   double offset = 0, length = 0; // seconds in the file
   double gain = 1.0;
-  int side = 0;                  // 0 both, 1 left only, 2 right only (mono file of an L / R pair)
+  int side = 0;                  // 0 both, 1 left only, 2 right only (mono file of an L / R pair), 3 stereo reversed
 };
 
 // one event for listening to the whole timeline

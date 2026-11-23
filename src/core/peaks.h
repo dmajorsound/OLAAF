@@ -7,6 +7,7 @@
 
 #pragma once
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -16,6 +17,31 @@
 namespace olaaf {
 
 struct Session;
+
+// Reads short stretches of a PCM file (WAV, AIFF, MXF) as floats, for the stereo meter.
+class PcmReader {
+public:
+  PcmReader() = default;
+  PcmReader(const PcmReader &) = delete;
+  PcmReader &operator=(const PcmReader &) = delete;
+  ~PcmReader() { close(); }
+  bool open(const std::string &path);
+  void close();
+  bool isOpen() const { return f_ != nullptr; }
+  int channels() const { return channels_; }
+  int rate() const { return rate_; }
+  // n frames of one channel (0-based) from `time` seconds; silence outside the file
+  void read(double time, int channel, int n, std::vector<float> &out);
+
+private:
+  void *f_ = nullptr;
+  std::string path_;
+  int channels_ = 0, rate_ = 0, bits_ = 0;
+  bool float_ = false, big_ = false, aiff8_ = false;
+  uint64_t offset_ = 0;
+  int64_t frames_ = 0;
+  std::vector<unsigned char> buf_;
+};
 
 class PeakCache {
 public:

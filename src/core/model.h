@@ -62,6 +62,7 @@ struct Clip {
   int id = 0;              // unique within the session (selection in the dialog)
   int home = 0;            // uid of the AAF track it came from (to send it back from a deleted new track)
   bool excluded = false;   // removed from the import in the dialog
+  bool swapLR = false;     // stereo: left and right channels exchanged on import
 };
 
 struct VideoClip {

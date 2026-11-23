@@ -249,6 +249,7 @@ public:
         double l, r;
         if (e.side == 1) l = in[0], r = 0;
         else if (e.side == 2) l = 0, r = in[0];
+        else if (e.side == 3 && cn >= 2) l = in[1], r = in[0]; // left and right exchanged
         else if (cn == 1) l = r = in[0];
         else l = in[0], r = in[1];
         ReaSample *out = b->samples + (size_t)(a + f) * nch;
@@ -303,29 +304,42 @@ static void stop() {
   }
 }
 
-static bool play(const std::vector<PreviewPart> &parts) {
+static bool playMix(TimelineSource *mix, double start, bool timeline) {
   stop();
-  int n = 0;
-  for (auto &p : parts) {
-    if (n >= 2) break;
-    PCM_source *src = PCM_Source_CreateFromFileEx(p.path.c_str(), true);
-    if (!src) continue;
-    Voice &v = g_voice[n];
-    lockInit(v.reg);
-    v.reg.src = src;
-    v.reg.m_out_chan = p.side == 1 ? (0 | 1024) : p.side == 2 ? (1 | 1024) : 0;
-    v.reg.curpos = p.offset;
-    v.reg.loop = false;
-    v.reg.volume = p.gain;
-    v.on = true;
-    n++;
+  if (mix->empty()) {
+    delete mix;
+    return false;
   }
-  if (!n) return false;
-  g_timeline = false;
-  g_start = parts[0].offset;
-  g_len = parts[0].length;
-  for (int i = 0; i < n; i++) PlayPreview(&g_voice[i].reg); // started together
+  Voice &v = g_voice[0];
+  lockInit(v.reg);
+  v.reg.src = mix;
+  v.reg.m_out_chan = 0;
+  v.reg.curpos = start;
+  v.reg.loop = false;
+  v.reg.volume = 1.0;
+  v.on = true;
+  g_timeline = timeline;
+  PlayPreview(&v.reg);
   return true;
+}
+
+// one event: its parts (one file, or the two files of an L / R pair) as a little mix from 0
+static bool play(const std::vector<PreviewPart> &parts) {
+  if (parts.empty()) return false;
+  std::vector<MixEvent> evs;
+  for (auto &p : parts) {
+    MixEvent e;
+    e.path = p.path;
+    e.pos = 0;
+    e.len = p.length;
+    e.offset = p.offset;
+    e.gain = p.gain;
+    e.side = p.side;
+    evs.push_back(e);
+  }
+  g_start = 0;
+  g_len = parts[0].length;
+  return playMix(new TimelineSource(evs, parts[0].length), 0, false);
 }
 
 // seconds played, -1 when stopped (at the end of the event it stops by itself)
@@ -361,23 +375,7 @@ static double pos() {
   return std::max(0.0, played);
 }
 static bool playTimeline(const std::vector<MixEvent> &events, double start, double end) {
-  stop();
-  auto *mix = new TimelineSource(events, end);
-  if (mix->empty()) {
-    delete mix;
-    return false;
-  }
-  Voice &v = g_voice[0];
-  lockInit(v.reg);
-  v.reg.src = mix;
-  v.reg.m_out_chan = 0;
-  v.reg.curpos = start;
-  v.reg.loop = false;
-  v.reg.volume = 1.0;
-  v.on = true;
-  g_timeline = true;
-  PlayPreview(&v.reg);
-  return true;
+  return playMix(new TimelineSource(events, end), start, true);
 }
 } // namespace preview
 

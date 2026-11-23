@@ -133,7 +133,7 @@ enum HitId {
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
   H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE,
-  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE
+  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG
 };
 
 struct Hit {
@@ -212,6 +212,14 @@ struct State {
   double mouseLX = -1, mouseLY = -1;     // mouse, in layout units
   std::string updTag, updUrl;            // a newer OLAAF on GitHub
   int updPolls = 0;
+  // the stereo meter while a stereo event plays
+  bool gonioOpen = false;
+  PcmReader rdL, rdR;                    // the files the meter reads (one stereo file: both the same)
+  int rdChL = 0, rdChR = 1;
+  bool rdSwap = false;
+  double rdOffset = 0;                   // file time where the event starts
+  double corr = 0;                       // smoothed correlation
+  std::vector<std::pair<float, float>> gonio; // the latest points (L, R)
   std::function<void(bool)> onClose;     // modeless: called after the window is gone
   // popovers
   int palTrack = -1;       // color popover for this track ...
@@ -817,6 +825,121 @@ COLORREF mixColor(COLORREF a, COLORREF b, double t) { // t = share of b
   return RGB(m(GetRValue(a), GetRValue(b)), m(GetGValue(a), GetGValue(b)), m(GetBValue(a), GetBValue(b)));
 }
 
+// ------------------------------------------------------------------ stereo meter
+
+bool clipIsStereo(State *st, const Clip &c) {
+  const Session &s = st->imp->session();
+  if (c.sources.size() == 2) return true;
+  if (c.sources.size() == 1 && c.sources[0].channel == 0 && c.sources[0].media >= 0)
+    return s.media[(size_t)c.sources[0].media].channels == 2;
+  return false;
+}
+
+// open the files of a stereo event for the meter
+void gonioStart(State *st, const Clip &c) {
+  const Session &s = st->imp->session();
+  st->rdL.close();
+  st->rdR.close();
+  st->gonio.clear();
+  st->corr = 0;
+  if (!clipIsStereo(st, c)) return;
+  const Media &a = s.media[(size_t)c.sources[0].media];
+  if (c.sources.size() == 2 && c.sources[1].media >= 0) {
+    const Media &b = s.media[(size_t)c.sources[1].media];
+    if (!st->rdL.open(a.foundPath) || !st->rdR.open(b.foundPath)) return;
+    st->rdChL = std::max(0, c.sources[0].channel - 1);
+    st->rdChR = std::max(0, c.sources[1].channel - 1);
+  } else {
+    if (!st->rdL.open(a.foundPath) || !st->rdR.open(a.foundPath)) return;
+    st->rdChL = 0;
+    st->rdChR = 1;
+  }
+  st->rdSwap = c.swapLR;
+  st->rdOffset = c.srcOffset;
+  st->gonioOpen = true;
+}
+
+// the stretch just played: correlation (smoothed) and points for the goniometer
+void gonioUpdate(State *st) {
+  if (!st->rdL.isOpen() || !st->rdR.isOpen() || st->playPos < 0) return;
+  const int n = 2048;
+  double t = st->rdOffset + st->playPos - (double)n / std::max(1, st->rdL.rate());
+  static std::vector<float> l, r;
+  st->rdL.read(t, st->rdChL, n, l);
+  st->rdR.read(t, st->rdChR, n, r);
+  if (st->rdSwap) std::swap(l, r); // shown as it will be imported
+  double lr = 0, ll = 0, rr = 0;
+  for (int i = 0; i < n; i++) {
+    lr += (double)l[(size_t)i] * r[(size_t)i];
+    ll += (double)l[(size_t)i] * l[(size_t)i];
+    rr += (double)r[(size_t)i] * r[(size_t)i];
+  }
+  if (ll > 1e-9 && rr > 1e-9) {
+    double c = lr / std::sqrt(ll * rr);
+    st->corr = st->corr * 0.7 + c * 0.3; // a little smoothing, like a meter
+  }
+  st->gonio.clear();
+  for (int i = 0; i < n; i += 4) st->gonio.push_back({l[(size_t)i], r[(size_t)i]});
+}
+
+void paintGonio(State *st, const Gfx &g) {
+  if (!st->gonioOpen) return;
+  double w = 236, h = 300;
+  double l = kR - w - 14, t = kLB - h - 10;
+  g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 14, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
+  g.rbox(l, t, l + w, t + h, 14, kLine, kPop);
+  addHit(st, l, t, l + w, t + h, H_GONIO_BG, 0,
+         "Goniometer and correlation of the event that plays. Up = mono, sideways = wide, a flat line or red = "
+         "one channel inverted.");
+  g.text(st->fBold, kInk, "Stereo", l + 16, t + 10, l + w - 40, t + 32, DT_LEFT);
+  button(st, g, l + w - 36, t + 9, l + w - 12, t + 33, "\xc3\x97", H_GONIO_CLOSE, 0, "Close the stereo meter.");
+  // goniometer: a diamond, M up, S sideways, L and R on the diagonals
+  double cx = l + w / 2, cy = t + 40 + 92, rad = 84;
+  COLORREF grid = mixColor(kPop, kInk, 0.15);
+  g.line(cx, cy - rad, cx + rad, cy, grid);
+  g.line(cx + rad, cy, cx, cy + rad, grid);
+  g.line(cx, cy + rad, cx - rad, cy, grid);
+  g.line(cx - rad, cy, cx, cy - rad, grid);
+  g.line(cx, cy - rad, cx, cy + rad, grid);
+  g.line(cx - rad, cy, cx + rad, cy, grid);
+  g.line(cx - rad / 2, cy - rad / 2, cx + rad / 2, cy + rad / 2, grid);
+  g.line(cx + rad / 2, cy - rad / 2, cx - rad / 2, cy + rad / 2, grid);
+  g.text(st->fSmall, kMute, "M", cx - 10, cy - rad - 18, cx + 10, cy - rad - 2, DT_CENTER);
+  g.text(st->fSmall, kMute, "L", cx - rad / 2 - 22, cy - rad / 2 - 18, cx - rad / 2 - 4, cy - rad / 2 - 2, DT_CENTER);
+  g.text(st->fSmall, kMute, "R", cx + rad / 2 + 4, cy - rad / 2 - 18, cx + rad / 2 + 22, cy - rad / 2 - 2, DT_CENTER);
+  g.text(st->fSmall, kMute, "\xe2\x88\x92S", cx - rad - 22, cy - 8, cx - rad - 2, cy + 8, DT_CENTER);
+  g.text(st->fSmall, kMute, "+S", cx + rad + 2, cy - 8, cx + rad + 22, cy + 8, DT_CENTER);
+  // points: scaled so a loud signal fills the diamond
+  float pk = 0.05f;
+  for (auto &p : st->gonio) pk = std::max(pk, std::max(std::fabs(p.first), std::fabs(p.second)));
+  double k = rad / (pk * 1.414);
+  double dot = 1.6 / g.s;
+  for (auto &p : st->gonio) {
+    double m = (p.first + p.second) * 0.7071, sd = (p.second - p.first) * 0.7071;
+    double x = cx + sd * k, y = cy - m * k;
+    if (std::fabs(x - cx) + std::fabs(y - cy) > rad) continue;
+    g.fill(x - dot, y - dot, x + dot, y + dot, kBlue);
+  }
+  // correlation: -1 ... 0 ... +1
+  double by = cy + rad + 22, bl = l + 22, br = l + w - 22;
+  g.rfill(bl, by, br, by + 8, 4, mixColor(kPop, kInk, 0.12));
+  double mid = (bl + br) / 2;
+  g.fill(mid - 0.5, by - 3, mid + 0.5, by + 11, kMute);
+  double c = std::max(-1.0, std::min(1.0, st->corr));
+  COLORREF cc = c < 0 ? kRed : c < 0.3 ? kWarn : theme().green;
+  double px = mid + c * (br - bl) / 2;
+  if (px > mid) g.rfill(mid, by, px, by + 8, 4, cc);
+  else g.rfill(px, by, mid, by + 8, 4, cc);
+  g.text(st->fSmall, kMute, "\xe2\x88\x92" "1", bl - 4, by + 10, bl + 20, by + 26, DT_LEFT);
+  g.text(st->fSmall, kMute, "+1", br - 20, by + 10, br + 4, by + 26, DT_RIGHT);
+  g.text(st->fMonoSmall, cc, strprintf("%+.2f", c), mid - 30, by + 10, mid + 30, by + 26, DT_CENTER);
+  const char *what = st->playClip == 0 ? "Play a stereo event (P) to measure."
+                     : c < 0         ? "Out of phase: one channel may be inverted."
+                     : c < 0.3       ? "Wide or barely related channels."
+                                     : "Coherent.";
+  g.text(st->fSmall, kMute, what, l + 16, by + 26, l + w - 12, by + 44, DT_LEFT);
+}
+
 // The waveform of one event: one lane per channel for mono and stereo (two small waveforms for
 // L+R), multichannel events as one combined lane. Drawn as soon as the background reader has the file.
 void paintWave(State *st, const Gfx &g, const Clip &c, double l, double t, double r, double b, double clipX, double spp,
@@ -845,6 +968,7 @@ void paintWave(State *st, const Gfx &g, const Clip &c, double l, double t, doubl
       }
     }
   }
+  if (c.swapLR && lanes.size() == 2) std::swap(lanes[0], lanes[1]); // shown as it will be imported
   if (lanes.size() > 2) { // multichannel: one combined lane
     std::vector<Lane> all;
     for (auto &ln : lanes) all.insert(all.end(), ln.begin(), ln.end());
@@ -1041,9 +1165,15 @@ void paintArrange(State *st, const Gfx &g) {
       nameR -= 18;
     }
     if (tr.channels >= 2) {
-      const char *badge = tr.channels == 2 ? (tr.mergedFrom.empty() ? "ST" : "L+R") : "MC";
-      g.rbox(nameR - 30, y + 11, nameR - 2, y + 25, 4, theme().blueLine, kBlueSoft);
-      g.text(st->fClip, kBlue, badge, nameR - 30, y + 11, nameR - 2, y + 25, DT_CENTER);
+      bool sw = false;
+      for (auto &c : tr.clips) sw = sw || c.swapLR;
+      const char *badge = tr.channels == 2 ? (tr.mergedFrom.empty() ? (sw ? "R/L" : "ST") : (sw ? "R+L" : "L+R")) : "MC";
+      g.rbox(nameR - 30, y + 11, nameR - 2, y + 25, 4, sw ? kWarn : theme().blueLine, sw ? mixColor(kWarn, kPanel, 0.8) : kBlueSoft);
+      g.text(st->fClip, sw ? kWarn : kBlue, badge, nameR - 30, y + 11, nameR - 2, y + 25, DT_CENTER);
+      if (tr.channels == 2)
+        addHit(st, nameR - 30, y + 9, nameR - 2, y + 27, H_TRACK_SWAP, row.track,
+               sw ? "Left and right are exchanged on import. Click to put them back." :
+                    "Click to exchange left and right for every event on this track (on import and when listening).");
       nameR -= 34;
     }
     COLORREF nameC = (on && !grabbed) ? kInk : kMute;
@@ -1226,6 +1356,24 @@ void paintEventBar(State *st, const Gfx &g) {
     double mw = g.width(st->fBody, ml) + 26;
     button(st, g, right - mw, mid - 15, right, mid + 15, ml, H_EV_MUTE, 0, "Imports the selected events as muted items (M).");
     right -= mw + 6;
+    {
+      bool any = false, all = true;
+      for (int sid : ids)
+        if (Clip *k = st->imp->findClip(sid))
+          if (clipIsStereo(st, *k)) {
+            any = true;
+            all = all && k->swapLR;
+          }
+      if (any) {
+        const char *sl = "Swap L/R";
+        double sw = g.width(st->fBody, sl) + 26;
+        button(st, g, right - sw, mid - 15, right, mid + 15, sl, H_EV_SWAP, 0,
+               all ? "Left and right are exchanged on import. Click to put them back."
+                   : "Exchange left and right of the selected stereo events (on import and when listening).",
+               false, true, all);
+        right -= sw + 6;
+      }
+    }
     if (st->host && st->host->playPreview) {
       bool pl = st->playClip != 0;
       button(st, g, right - 34, mid - 15, right, mid + 15, pl ? "\xe2\x96\xa0" : "\xe2\x96\xb6", H_EV_PLAY, 0,
@@ -1689,6 +1837,7 @@ void paint(State *st, HDC dc) {
   if (st->destTrack >= 0) paintDestPopover(st, g);
   if (st->palTrack >= 0 || !st->palFolder.empty()) paintPalette(st, g);
   if (st->optsOpen) paintOptions(st, g);
+  paintGonio(st, g);
   if (st->helpOpen) paintHelp(st, g);
   paintTooltip(st, g);
 }
@@ -2150,6 +2299,36 @@ void click(State *st, int x, int y, bool shift) {
   case H_OPTS_BG: return;
   case H_HELP: st->helpOpen = !st->helpOpen; st->optsOpen = false; break;
   case H_HELP_BG: return;
+  case H_GONIO_BG: return;
+  case H_GONIO_CLOSE: st->gonioOpen = false; break;
+  case H_EV_SWAP: {
+    bool any = false, all = true;
+    for (int sid : st->sel)
+      if (Clip *k = st->imp->findClip(sid))
+        if (clipIsStereo(st, *k)) {
+          any = true;
+          all = all && k->swapLR;
+        }
+    if (!any) break;
+    for (int sid : st->sel)
+      if (Clip *k = st->imp->findClip(sid))
+        if (clipIsStereo(st, *k)) k->swapLR = !all;
+    st->edited = true;
+    if (st->playClip) stopPlay(st);
+    break;
+  }
+  case H_TRACK_SWAP: {
+    int idx = h ? h->idx : -1;
+    if (idx < 0 || idx >= (int)s.tracks.size()) break;
+    bool all = true;
+    for (auto &c : s.tracks[(size_t)idx].clips)
+      if (clipIsStereo(st, c)) all = all && c.swapLR;
+    for (auto &c : s.tracks[(size_t)idx].clips)
+      if (clipIsStereo(st, c)) c.swapLR = !all;
+    st->edited = true;
+    if (st->playClip || st->playTL) stopPlay(st);
+    break;
+  }
   case H_HELP_CLOSE: st->helpOpen = false; break;
   case H_UPDATE:
     if (st->host && st->host->openUrl && !st->updUrl.empty()) st->host->openUrl(st->updUrl);
@@ -2240,7 +2419,7 @@ void click(State *st, int x, int y, bool shift) {
   case H_EV_RESET:
     keepTrackChoices(st, [&]() { st->imp->setMergeStereo(st->merge); });
     for (auto &t : s.tracks)
-      for (auto &c : t.clips) c.mute = false;
+      for (auto &c : t.clips) c.mute = c.swapLR = false;
     st->sel.clear();
     st->edited = false;
     break;
@@ -2263,6 +2442,7 @@ int posAtY(State *st, int y) {
 }
 
 // keys for the open dialog: + / - zoom; arrows, M and Delete act on the selected events
+void stopPlay(State *st);
 void stopPlay(State *st) {
   if ((st->playClip || st->playTL) && st->host && st->host->stopPreview) st->host->stopPreview();
   if (st->playTL) st->playhead = st->playFrom; // back to where it started, as in REAPER
@@ -2304,6 +2484,8 @@ void toggleTimeline(State *st) {
           e.fadeOut = c.fadeOut.len;
         }
         e.side = pair ? (int)i + 1 : (c.chanMode == 3 ? 1 : c.chanMode == 4 ? 2 : 0);
+        if (pair && c.swapLR) e.side = 3 - e.side;
+        if (!pair && c.swapLR) e.side = 3;
         evs.push_back(e);
         end = std::max(end, c.pos + c.len);
       }
@@ -2343,6 +2525,8 @@ void togglePlay(State *st) {
     p.length = c->len;
     p.gain = std::max(0.0, c->gain);
     p.side = pair ? (int)i + 1 : (c->chanMode == 3 ? 1 : c->chanMode == 4 ? 2 : 0);
+    if (pair && c->swapLR) p.side = 3 - p.side;
+    if (!pair && c->swapLR) p.side = 3; // one stereo file, reversed
     parts.push_back(p);
   }
   if (parts.empty()) {
@@ -2355,6 +2539,7 @@ void togglePlay(State *st) {
   }
   st->playClip = c->id;
   st->playPos = 0;
+  gonioStart(st, *c); // stereo: the meter opens
   SetTimer(st->hwnd, kPlayTimer, 30, NULL);
 }
 
@@ -2489,6 +2674,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       if (p < 0) stopPlay(st);
       else {
         st->playPos = p;
+        if (st->playClip) gonioUpdate(st);
         if (st->playTL) { // the playhead moves; the view follows when it runs off the right
           st->playhead = p;
           if (p > st->viewStart + st->viewLen * 0.95) st->viewStart = p - st->viewLen * 0.05;
@@ -2874,6 +3060,20 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   if (getenv("OLAAF_SHOWAUTO")) opt.showAutomation = true;
   if (getenv("OLAAF_OPTS")) st.optsOpen = true;
   if (getenv("OLAAF_HELP")) st.helpOpen = true;
+  if (getenv("OLAAF_GONIO")) // the MUSIC pair, 20 s in
+    for (auto &tr : imp.session().tracks)
+      for (auto &c : tr.clips)
+        if (!st.gonioOpen && c.sources.size() == 2) {
+          if (getenv("OLAAF_SWAP")) c.swapLR = true;
+          gonioStart(&st, c);
+          st.playClip = c.id;
+          st.sel.clear();
+          st.sel.insert(c.id);
+          for (int k = 0; k < 8; k++) {
+            st.playPos = 20 + k * 0.03;
+            gonioUpdate(&st);
+          }
+        }
   if (getenv("OLAAF_UPD")) st.updTag = "v0.7.0";
   if (getenv("OLAAF_TIP")) {
     st.tip = "Where the AAF lands in REAPER. In the AAF it starts at 00:00:00:00. Click and type HH:MM:SS:FF or just the digits; Return applies, Esc cancels.";
