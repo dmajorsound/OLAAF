@@ -631,18 +631,26 @@ void paintToolbar(State *st, const Gfx &g) {
            opt.clipGain, true, H_GAIN,
            "Click to switch: clip gain on the items (and clip automation as take envelopes) \xe2\x86\x92 clip gain folded into "
            "the track volume envelope \xe2\x86\x92 off.") + 6;
-  if (videoOk) {
+  bool videoFound = videoOk && fileExists(s.video[0].foundPath);
+  if (videoFound) {
     bool manual = s.video[0].manual;
-    x = chip(st, g, x, t, !fileExists(s.video[0].foundPath) ? "Video (missing)" : "Video", opt.video, true, H_VIDEO,
+    x = chip(st, g, x, t, "Video", opt.video, true, H_VIDEO,
              manual ? "The picture you chose, on a VIDEO track at the top, at its own timecode (or where the AAF starts)."
-                    : "The picture the AAF points to, on a VIDEO track at the top.") + 2;
-    if (manual) // choose another file
-      x = chip(st, g, x, t, "\xe2\x80\xa6", false, true, H_VIDEO_CHOOSE, "Choose another video file.") + 6;
-    else
-      x += 4;
-  } else
-    x = chip(st, g, x, t, "Video\xe2\x80\xa6", false, true, H_VIDEO_CHOOSE,
-             "This AAF has no video. Choose the picture: it goes on a VIDEO track at the top, at its own timecode (or where the AAF starts).") + 6;
+                    : "The picture the AAF points to, on a VIDEO track at the top.") - 6;
+    button(st, g, x, t + 2, x + 26, t + 24, "\xe2\x80\xa6", H_VIDEO_CHOOSE, 0, "Choose another video file.");
+    x += 26 + 14;
+  } else { // no picture in the AAF, or the one it points to isn't found: a plain button
+    static std::string vTip;
+    vTip = videoOk ? "The AAF points to \"" + s.video[0].name +
+                         "\", which isn't found. Choose the file: it goes on a VIDEO track at the top, where the AAF puts it."
+                   : "This AAF has no video. Choose the picture: it goes on a VIDEO track at the top, at its own timecode "
+                     "(or where the AAF starts).";
+    const char *vl = "Search for video\xe2\x80\xa6";
+    double bw = g.width(st->fBody, vl) + 24;
+    if (bw < 60 || bw > 260) bw = 140;
+    button(st, g, x, t + 1, x + bw, t + 25, vl, H_VIDEO_CHOOSE, 0, vTip.c_str());
+    x += bw + 14;
+  }
   x = chip(st, g, x, t, mLabel, opt.markers && !s.markers.empty(), !s.markers.empty(), H_MARKERS,
            s.markers.empty() ? "This AAF has no markers." : "Markers from the edit become REAPER markers.") + 6;
   chip(st, g, x, t, "Folders", opt.folders, true, H_FOLDERS,
@@ -1806,6 +1814,14 @@ void click(State *st, int x, int y, bool shift) {
   case H_VIDEO_CHOOSE: { // the AAF has no picture (or a chosen one is replaced): pick the file by hand
     std::string path;
     if (st->host->pickFile && st->host->pickFile("OLAAF: choose the video for this AAF", &path) && !path.empty()) {
+      if (!s.video.empty() && !s.video[0].manual) { // the AAF's own (missing) picture: keep its place
+        s.video[0].foundPath = path;
+        opt.video = true;
+        static std::string tipLinked;
+        tipLinked = "Video found: " + baseName(path) + ", placed where the AAF puts it.";
+        st->tip = tipLinked.c_str();
+        break;
+      }
       VideoClip v;
       v.foundPath = path;
       v.name = baseName(path);
