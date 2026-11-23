@@ -1,6 +1,6 @@
 # olAAF REAPER extension: reaper_olaaf.dll / .dylib / .so
 
-set(EXT_SRC main.cpp progress.cpp dialog.cpp theme.cpp logo.cpp fonts.cpp)
+set(EXT_SRC main.cpp progress.cpp dialog.cpp theme.cpp logo.cpp fonts.cpp round.cpp)
 if(WIN32 OR APPLE)
   list(APPEND EXT_SRC fonts_data.cpp) # IBM Plex, embedded
 endif()
@@ -20,7 +20,7 @@ set_target_properties(reaper_olaaf PROPERTIES PREFIX "" CXX_VISIBILITY_PRESET hi
 if(NOT WIN32)
   target_compile_definitions(reaper_olaaf PRIVATE SWELL_PROVIDED_BY_APP)
 else()
-  target_link_libraries(reaper_olaaf PRIVATE shell32 ole32 gdi32)
+  target_link_libraries(reaper_olaaf PRIVATE shell32 ole32 gdi32 gdiplus)
 endif()
 
 if(APPLE)

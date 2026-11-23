@@ -1,8 +1,7 @@
 // olAAF - AAF import for REAPER
 // Copyright (C) 2026 dmajorsound. Licensed under the GNU GPL v2 or later.
 //
-// Light and dark colors shared by the dialog and the progress window
-// (same palette as the other dmajorsound plugins).
+// Colors shared by the dialog and the progress window, taken from the REAPER theme.
 
 #pragma once
 #ifdef _WIN32
@@ -53,8 +52,12 @@ struct Theme {
   COLORREF face, panel, line, soft, track, mute, ink, blue, blueSoft, blueLine, red, green, thumb, empty, off;
 };
 
+// The colors follow REAPER's current theme: get(key) returns REAPER's color for a theme key
+// (GetThemeColor) or -1. Missing keys fall back to REAPER 7's default theme.
+void setThemeFromReaper(int (*get)(const char *key));
+// tests: false = a light theme, true = REAPER 7's default theme
 void setDarkTheme(bool dark);
-bool darkTheme();
+bool darkTheme(); // dark background (text and tints follow it)
 const Theme &theme();
 
 } // namespace olaaf

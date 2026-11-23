@@ -20,6 +20,22 @@
 namespace olaaf {
 
 // REAPER services the dialog needs (provided by main.cpp, which owns the REAPER API)
+// one file to listen to: part of it, at a gain, to the left, the right or both outputs
+struct PreviewPart {
+  std::string path;
+  double offset = 0, length = 0; // seconds in the file
+  double gain = 1.0;
+  int side = 0;                  // 0 both, 1 left only, 2 right only (mono file of an L / R pair)
+};
+
+// one event for listening to the whole timeline
+struct MixEvent {
+  std::string path;
+  double pos = 0, len = 0, offset = 0; // on the timeline, and where in the file
+  double gain = 1.0, fadeIn = 0, fadeOut = 0;
+  int side = 0;                        // as PreviewPart
+};
+
 struct DialogHost {
   std::function<bool(const char *title, const char *caption, std::string *value)> askText;
   std::function<bool(HWND parent, uint32_t *rgb)> pickColor; // 0xRRGGBB
@@ -30,6 +46,16 @@ struct DialogHost {
   // small settings kept between imports (window size)
   std::function<std::string(const char *key)> getSetting;
   std::function<void(const char *key, const std::string &value)> setSetting;
+  // frame rate of the REAPER project (and whether it is drop frame); empty = unknown
+  std::function<double(bool *dropFrame)> projectFps;
+  // listening through REAPER's preview: start (false if REAPER can't read the file), stop,
+  // and how far it got in seconds (-1 when it has stopped)
+  std::function<bool(const std::vector<PreviewPart> &parts)> playPreview;
+  std::function<void()> stopPreview;
+  std::function<double()> previewPos;
+  // listening to the timeline: every event mixed, from `start` (timeline seconds); previewPos then
+  // returns the timeline position
+  std::function<bool(const std::vector<MixEvent> &events, double start, double end)> playTimeline;
 };
 
 // Shows the dialog. Returns true when the user pressed Import; `opt` and the session's

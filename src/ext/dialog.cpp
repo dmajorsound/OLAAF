@@ -25,6 +25,7 @@
 #include "../core/audiofile.h"
 #include "../core/peaks.h"
 #include "fonts.h"
+#include "round.h"
 
 
 #ifndef _WIN32
@@ -84,7 +85,7 @@ static void *g_hInst = nullptr;
 void dialogSetInstance(void *h) { g_hInst = h; }
 namespace {
 
-const int W = 1180, H = 800;
+const int W = 1180, H = 716;
 
 #define kFace (theme().face)
 #define kPanel (theme().panel)
@@ -95,10 +96,13 @@ const int W = 1180, H = 800;
 #define kBlue (theme().blue)
 #define kBlueSoft (theme().blueSoft)
 #define kRed (theme().red)
-const int kPeakTimer = 7;
+const int kPeakTimer = 7, kPlayTimer = 8;
 const COLORREF kWhiteFixed = RGB(0xff, 0xff, 0xff);
 // text on the blue accent: white in light mode, near-black on the brighter dark-mode blue
 #define kWhite (olaaf::darkTheme() ? RGB(0x12, 0x1a, 0x26) : kWhiteFixed)
+#define kWarn (olaaf::darkTheme() ? RGB(0xf0, 0xb2, 0x4a) : RGB(0xc7, 0x7c, 0x0e))
+#define kPop (mixColor(kPanel, kInk, 0.05))
+COLORREF mixColor(COLORREF a, COLORREF b, double t);
 #define kCounterBg kPanel
 #define kCounterInk kBlue
 
@@ -110,19 +114,17 @@ COLORREF rgbToRef(uint32_t c) { return RGB((c >> 16) & 255, (c >> 8) & 255, c & 
 // ------------------------------------------------------------------ geometry (layout pixels)
 // header 0-56, toolbar 56-108, arrange window 108-633, event bar, media bar, footer
 const double kL = 16, kR = W - 16;
-const double kHeadH = 56;
-const double kAT = 108;                       // arrange window top
-const double kHdr = 236;                      // lane header width
+const double kTopH = 64;                      // the bar on top
+const double kAT = kTopH + 12;                // arrange window top
+const double kHdr = 220;                      // lane header width
 const double kRuler = 30, kRowH = 36, kSb = 12;
-const int kRows = 13;
+const int kRows = 15;
 const double kLT = kAT + 1 + kRuler;          // first lane
 const double kLB = kLT + kRows * kRowH;       // below the last lane
 const double kAB = kLB + kSb + 2;             // arrange window bottom
 const double kTlx = kL + kHdr + 1;            // timeline left
 const double kTlr = kR - 1 - kSb;             // timeline right (vertical scrollbar beside it)
-const double kEvT = kAB + 10, kEvB = kEvT + 44;   // event bar
-const double kMdT = kEvB + 8, kMdB = kMdT + 52;   // media bar
-const double kFootY = kMdB + 10;                  // footer divider
+const double kEvT = kAB + 4, kEvB = H - 4;       // the bar under the arrange view
 
 enum HitId {
   H_NONE, H_THEME, H_VIDEO, H_MARKERS, H_FOLDERS, H_ZOOM_FIT, H_TRACK_CHECK, H_TRACK_COLOR,
@@ -130,7 +132,8 @@ enum HitId {
   H_CANCEL, H_IMPORT, H_TC_PLUS, H_TC_MINUS, H_TC_VALUE, H_TC_CURSOR, H_PAL, H_PAL_CUSTOM, H_PAL_NONE,
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
-  H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE
+  H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE,
+  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER
 };
 
 struct Hit {
@@ -195,6 +198,15 @@ struct State {
   bool merge = true;
   bool accepted = false;
   bool modeless = false;                 // REAPER stays usable while the window is open
+  bool optsOpen = false;                 // the Options panel
+  struct { double l, t, r, b; } optsBtn{0, 0, 0, 0};
+  bool fpsDismissed = false;             // the frame rate warning was closed
+  int hoverRow = -1;                     // row under the mouse (its track icons show)
+  int playClip = 0;                      // the event being listened to (0 = none)
+  double playPos = -1;                   // seconds into it
+  bool playTL = false;                   // listening to the whole timeline
+  double playhead = -1;                  // timeline seconds (AAF time); -1 = where the AAF starts
+  double playFrom = 0;                   // where timeline playback started (stop goes back there)
   std::function<void(bool)> onClose;     // modeless: called after the window is gone
   // popovers
   int palTrack = -1;       // color popover for this track ...
@@ -215,7 +227,7 @@ struct State {
   HBRUSH editBrush = nullptr;
   HFONT fTheme = nullptr, fCheck = nullptr, fClip = nullptr, fTitle = nullptr, fTitleThin = nullptr, fTag = nullptr,
         fBody = nullptr, fBold = nullptr, fSmall = nullptr, fSec = nullptr, fMono = nullptr, fMonoBig = nullptr,
-        fMonoSmall = nullptr;
+        fMonoSmall = nullptr, fHead = nullptr;
 };
 
 HFONT makeFont(double px, bool bold, double scale, bool mono = false) {
@@ -239,11 +251,12 @@ void makeFonts(State *st) {
   st->fMono = makeFont(14, true, s, true);
   st->fMonoBig = makeFont(21, false, s, true);
   st->fMonoSmall = makeFont(10.5, false, s, true);
+  st->fHead = makeFont(15, true, s);
 }
 
 void freeFonts(State *st) {
   HFONT *fs[] = {&st->fTheme, &st->fCheck, &st->fClip, &st->fTitle, &st->fTitleThin, &st->fTag, &st->fBody,
-                 &st->fBold, &st->fSmall, &st->fSec, &st->fMono, &st->fMonoBig, &st->fMonoSmall};
+                 &st->fBold, &st->fSmall, &st->fSec, &st->fMono, &st->fMonoBig, &st->fMonoSmall, &st->fHead};
   for (HFONT *f : fs) {
     if (*f) DeleteObject(*f);
     *f = nullptr;
@@ -314,6 +327,15 @@ struct Gfx {
     SelectObject(dc, old);
     DeleteObject(p);
   }
+  // rounded rectangles (smooth on Windows and macOS)
+  void rfill(double l, double t, double r, double b, double rad, COLORREF c) const {
+    olRoundFill(dc, l * s + ox, t * s + oy, r * s + ox, b * s + oy, rad * s, c);
+  }
+  void rbox(double l, double t, double r, double b, double rad, COLORREF line, COLORREF in) const {
+    rfill(l, t, r, b, rad, line);
+    double i = 1.0 / s;
+    rfill(l + i, t + i, r - i, b - i, std::max(0.0, rad - i), in);
+  }
   void poly(const std::vector<std::pair<double, double>> &pts, COLORREF c) const {
     std::vector<POINT> p;
     for (auto &q : pts) p.push_back({(LONG)X(q.first), (LONG)Y(q.second)});
@@ -338,6 +360,10 @@ struct Gfx {
       poly({{cx - 4, cy - 2}, {cx + 4, cy - 2}, {cx, cy + 2.5}}, c);
     } else if (glyph == "\xe2\x96\xbc") { // down
       poly({{cx - 5, cy - 3}, {cx + 5, cy - 3}, {cx, cy + 4}}, c);
+    } else if (glyph == "\xe2\x96\xb6") { // play
+      poly({{cx - 4, cy - 6}, {cx + 6, cy}, {cx - 4, cy + 6}}, c);
+    } else if (glyph == "\xe2\x96\xa0") { // stop
+      fill(cx - 5, cy - 5, cx + 5, cy + 5, c);
     } else if (glyph == "\xe2\x96\xb2") { // up
       poly({{cx - 5, cy + 3}, {cx + 5, cy + 3}, {cx, cy - 4}}, c);
     } else if (glyph == "\xe2\x9c\x8e") { // pencil: body, then the tip
@@ -384,20 +410,21 @@ void addHit(State *st, double l, double t, double r, double b, int id, int idx, 
 
 void checkbox(State *st, const Gfx &g, double x, double y, bool on, int id, int idx, const char *tip) {
   if (on) {
-    g.box(x, y, x + 16, y + 16, kBlue, kBlue);
+    g.rfill(x, y, x + 16, y + 16, 4, kBlue);
     g.check(x, y, kWhite);
   } else
-    g.box(x, y, x + 16, y + 16, theme().empty, kPanel);
+    g.rbox(x, y, x + 16, y + 16, 4, theme().empty, kPanel);
   addHit(st, x - 4, y - 4, x + 20, y + 20, id, idx, tip);
 }
 
 void button(State *st, const Gfx &g, double l, double t, double r, double b, const std::string &label, int id,
-            int idx, const char *tip, bool primary = false, bool enabled = true) {
+            int idx, const char *tip, bool primary = false, bool enabled = true, bool active = false) {
+  double rad = std::min(8.0, (b - t) / 2);
   if (primary) {
-    g.fill(l, t, r, b, enabled ? kBlue : kLine);
-    g.text(st->fBold, kWhite, label, l, t, r, b, DT_CENTER);
+    g.rfill(l, t, r, b, rad, enabled ? kBlue : kLine);
+    g.text(st->fBold, enabled ? kWhite : kMute, label, l, t, r, b, DT_CENTER);
   } else {
-    g.box(l, t, r, b, kLine, kPanel);
+    g.rbox(l, t, r, b, rad, active ? kBlue : kLine, active ? kBlueSoft : kPanel);
     if (!g.icon(label, (l + r) / 2, (t + b) / 2, enabled ? kInk : kMute, kPanel))
       g.text(st->fBody, enabled ? kInk : kMute, label, l, t, r, b, DT_CENTER);
   }
@@ -576,112 +603,135 @@ int rowAtY(const State *st, int y) {
 
 // ------------------------------------------------------------------ painting
 
-void paintHeader(State *st, const Gfx &g) {
-  Session &s = st->imp->session();
-  g.fill(0, 0, W, kHeadH, kPanel);
-  g.fill(0, kHeadH - 1, W, kHeadH, kLine);
-  g.fill(16, 13, 46, 43, kBlue);
-  g.fill(23, 21, 33, 24.5, kWhiteFixed);
-  g.fill(27, 26.4, 39, 29.9, kWhiteFixed);
-  g.fill(23, 31.8, 30, 35.3, kWhiteFixed);
-  g.text(st->fTitle, kInk, "OLAAF", 56, 6, 300, 32, DT_LEFT);
-  double tw = g.width(st->fTitle, "OLAAF");
-  if (tw < 20 || tw > 200) tw = 55;
-  g.text(st->fTitleThin, kMute, "\xe2\x80\x93 AAF Import for Reaper", 56 + tw + 5, 6, 360, 32, DT_LEFT);
-  g.text(st->fTag, kMute, "Do you wanna build a Reaper Session?", 56, 30, 360, 45, DT_LEFT);
-
-  double x = 352;
-  g.fill(x, 13, x + 1, 43, kLine);
-  x += 14;
-  int events = 0;
-  for (auto &t : s.tracks) events += (int)t.clips.size();
-  std::string name = baseName(s.aafPath);
-  std::string meta = strprintf("%s \xc2\xb7 %g kHz \xc2\xb7 %d bit \xc2\xb7 %zu tracks \xc2\xb7 %d events", s.product.c_str(),
-                               s.sampleRate / 1000.0, s.bits, s.tracks.size(), events);
-  double nw = std::max(g.width(st->fBold, name), g.width(st->fSmall, meta));
-  nw = std::min(std::max(nw, 120.0), 330.0);
-  g.text(st->fBold, kInk, name, x, 11, x + nw, 29, DT_LEFT);
-  g.text(st->fSmall, kMute, meta, x, 28, x + nw, 44, DT_LEFT);
-  x += nw + 16;
-  struct Stat { const char *k; std::string v; } stats[2] = {{"Frame rate", fpsText(s)},
-                                                           {"AAF starts at", formatTC(s.firstClip(), s.fps)}};
-  for (auto &stt : stats) {
-    double w = std::max(g.width(st->fMono, stt.v), g.width(st->fSec, stt.k)) + 26;
-    if (w < 60 || w > 220) w = 130;
-    g.fill(x, 13, x + 1, 43, kLine);
-    g.text(st->fSec, kMute, stt.k, x + 12, 11, x + w, 25, DT_LEFT);
-    g.text(st->fMono, kInk, stt.v, x + 12, 24, x + w, 44, DT_LEFT);
-    x += w;
-  }
-  addHit(st, 366, 8, x, 48, H_NONE, 0, "The AAF as it comes in: frame rate and where its timeline starts.");
-  drawDmajorLogo(g.dc, g.X(W - 16), g.Y(28), g.S(30), kInk, kMute, st->fSmall);
+// the AAF's frame rate against the REAPER project's (0 when unknown or equal)
+bool fpsMismatch(State *st, double *projFps = nullptr) {
+  if (!st->host || !st->host->projectFps) return false;
+  const Session &s = st->imp->session();
+  bool drop = false;
+  double pf = st->host->projectFps(&drop);
+  if (projFps) *projFps = pf;
+  if (pf <= 0 || s.fps <= 0) return false;
+  return std::fabs(pf - s.fps) > 0.01 || (drop != s.dropFrame && std::fabs(s.fps - 29.97) < 0.02);
 }
 
-void paintToolbar(State *st, const Gfx &g) {
-  Session &s = st->imp->session();
-  ImportOptions &opt = *st->opt;
-  double t = 69, mid = 82;
-  double x = kL;
-  std::string mLabel = s.markers.empty() ? "Markers" : strprintf("Markers %zu", s.markers.size());
-  bool videoOk = !s.video.empty();
-  x = chip(st, g, x, t, "Combine .L / .R", st->merge, true, H_MERGE,
-           "Combines two mono tracks named .L and .R whose clips line up into one stereo track.") + 6;
-  x = chip(st, g, x, t, "Fades", opt.fades, true, H_FADES, "Fade ins, fade outs and crossfades from the AAF.") + 6;
-  x = chip(st, g, x, t, !opt.clipGain ? "Clip gain" : (opt.clipGainToTrack ? "Clip gain \xe2\x86\x92 track" : "Clip gain"),
-           opt.clipGain, true, H_GAIN,
-           "Click to switch: clip gain on the items (and clip automation as take envelopes) \xe2\x86\x92 clip gain folded into "
-           "the track volume envelope \xe2\x86\x92 off.") + 6;
-  bool videoFound = videoOk && fileExists(s.video[0].foundPath);
-  if (videoFound) {
-    bool manual = s.video[0].manual;
-    x = chip(st, g, x, t, "Video", opt.video, true, H_VIDEO,
-             manual ? "The picture you chose, on a VIDEO track at the top, at its own timecode (or where the AAF starts)."
-                    : "The picture the AAF points to, on a VIDEO track at the top.") - 6;
-    button(st, g, x, t + 2, x + 26, t + 24, "\xe2\x80\xa6", H_VIDEO_CHOOSE, 0, "Choose another video file.");
-    x += 26 + 14;
-  } else { // no picture in the AAF, or the one it points to isn't found: a plain button
-    static std::string vTip;
-    vTip = videoOk ? "The AAF points to \"" + s.video[0].name +
-                         "\", which isn't found. Choose the file: it goes on a VIDEO track at the top, where the AAF puts it."
-                   : "This AAF has no video. Choose the picture: it goes on a VIDEO track at the top, at its own timecode "
-                     "(or where the AAF starts).";
-    const char *vl = "Search for video\xe2\x80\xa6";
-    double bw = g.width(st->fBody, vl) + 24;
-    if (bw < 60 || bw > 260) bw = 140;
-    button(st, g, x, t + 1, x + bw, t + 25, vl, H_VIDEO_CHOOSE, 0, vTip.c_str());
-    x += bw + 14;
-  }
-  x = chip(st, g, x, t, mLabel, opt.markers && !s.markers.empty(), !s.markers.empty(), H_MARKERS,
-           s.markers.empty() ? "This AAF has no markers." : "Markers from the edit become REAPER markers.") + 6;
-  chip(st, g, x, t, "Folders", opt.folders, true, H_FOLDERS,
-       "Folder tracks. Click a track name to choose its folder; the pencil renames a folder.");
+std::string fpsShort(double f) {
+  if (std::fabs(f - std::lround(f)) < 0.001) return strprintf("%d", (int)std::lround(f));
+  return strprintf("%.3f", f);
+}
 
-  // timecode offset: + / -, counter, where it lands in REAPER, edit cursor
+// media the import needs that are not there
+void mediaCount(State *st, int *ok, int *total) {
+  Session &s = st->imp->session();
+  std::set<int> used;
+  for (auto &tr : s.tracks)
+    if (tr.import)
+      for (auto &c : tr.clips)
+        if (!c.excluded)
+          for (auto &src : c.sources)
+            if (src.media >= 0) used.insert(src.media);
+  *ok = *total = 0;
+  for (int mi : used) {
+    (*total)++;
+    const Media &m = s.media[(size_t)mi];
+    if (m.kind == MediaKind::Embedded || fileExists(m.foundPath)) (*ok)++;
+  }
+}
+
+int tracksToImport(State *st) {
+  int ntr = 0;
+  for (auto &tr : st->imp->session().tracks) {
+    if (!tr.import) continue;
+    bool any = !tr.created;
+    for (auto &c : tr.clips) any = any || !c.excluded;
+    ntr += any;
+  }
+  return ntr;
+}
+
+// One bar on top: the AAF, where it lands in REAPER, options, import.
+void paintTopBar(State *st, const Gfx &g) {
+  Session &s = st->imp->session();
+  g.fill(0, 0, W, kTopH, kFace);
+  g.fill(0, kTopH - 1, W, kTopH, kLine);
+  double mid = kTopH / 2;
+  // OLAAF mark
+  g.rfill(16, mid - 15, 46, mid + 15, 8, kBlue);
+  g.fill(23, mid - 7, 33, mid - 3.5, kWhiteFixed);
+  g.fill(27, mid - 1.6, 39, mid + 1.9, kWhiteFixed);
+  g.fill(23, mid + 3.8, 30, mid + 7.3, kWhiteFixed);
+  addHit(st, 16, mid - 15, 46, mid + 15, H_NONE, 0, "OLAAF \xe2\x80\x93 AAF import for REAPER. V 0.6 beta, developed with AI assistance. dmajorsound.com");
+
+  // right side, right to left: Import, Cancel, Options, | Edit cursor, where it lands
   double r = kR;
-  double ecW = 96;
-  button(st, g, r - ecW, mid - 17, r, mid + 17, "Edit cursor", H_TC_CURSOR, 0,
-         "Sets the offset so the AAF lands at the REAPER edit cursor.");
-  r -= ecW + 8;
-  double landW = 96;
-  g.text(st->fSmall, kMute, "in REAPER at", r - landW, mid - 16, r, mid, DT_LEFT);
-  g.text(st->fMonoSmall, kInk, formatTC(s.firstClip() + tcOffset(st), s.fps), r - landW, mid, r, mid + 16, DT_LEFT);
-  r -= landW + 8;
-  double cw = 176;
-  if (st->editKind != 1) g.text(st->fMonoBig, kBlue, formatTC(st->tcAbs, s.fps), r - cw, mid - 17, r, mid + 15, DT_CENTER);
-  for (double dx = r - cw + 8; dx < r - 8; dx += 6) g.fill(dx, mid + 15, dx + 3, mid + 16, theme().empty); // click to type
-  st->tcRc = devRect(st, r - cw + 10, mid - 11, r - 10, mid + 11);
-  addHit(st, r - cw, mid - 17, r, mid + 17, H_TC_VALUE, 0,
-         "Type the offset: HH:MM:SS:FF or just the digits (1000 = 10 seconds). Return applies, Esc cancels.");
+  int ntr = tracksToImport(st);
+  std::string imp = strprintf("Import %d track%s", ntr, ntr == 1 ? "" : "s");
+  double iw = std::max(120.0, g.width(st->fBold, imp) + 36);
+  button(st, g, r - iw, mid - 16, r, mid + 16, imp, H_IMPORT, 0, "Build the session in REAPER (Return).", true, ntr > 0);
+  r -= iw + 6;
+  double cw = std::max(60.0, g.width(st->fBody, "Cancel") + 24);
+  g.text(st->fBody, kMute, "Cancel", r - cw, mid - 16, r, mid + 16, DT_CENTER);
+  addHit(st, r - cw, mid - 16, r, mid + 16, H_CANCEL, 0, "Close without importing (Esc).");
   r -= cw + 6;
-  // + / -
-  double sb = r - 52;
-  g.box(sb, mid - 16, sb + 26, mid + 16, kLine, st->tcMinus ? kPanel : kBlue);
-  g.text(st->fBold, st->tcMinus ? kInk : kWhite, "+", sb, mid - 16, sb + 26, mid + 16, DT_CENTER);
-  g.box(sb + 26, mid - 16, sb + 52, mid + 16, kLine, st->tcMinus ? kBlue : kPanel);
-  g.text(st->fBold, st->tcMinus ? kWhite : kInk, "\xe2\x88\x92", sb + 26, mid - 16, sb + 52, mid + 16, DT_CENTER);
-  addHit(st, sb, mid - 16, sb + 26, mid + 16, H_TC_PLUS, 0, "Add the offset to the AAF's timecode.");
-  addHit(st, sb + 26, mid - 16, sb + 52, mid + 16, H_TC_MINUS, 0, "Subtract the offset from the AAF's timecode.");
-  g.text(st->fSec, kMute, "Offset", sb - 56, mid - 13, sb - 6, mid + 13, DT_RIGHT);
+  double ow = std::max(90.0, g.width(st->fBody, "Options") + 40);
+  st->optsBtn = {r - ow, mid - 15, r, mid + 15};
+  button(st, g, r - ow, mid - 15, r, mid + 15, "", H_OPTS, 0, "Fades, stereo, markers, folders, clip gain, video and where the audio goes.",
+         false, true, st->optsOpen);
+  g.text(st->fBody, kInk, "Options", r - ow + 12, mid - 15, r - 22, mid + 15, DT_LEFT);
+  g.icon("\xe2\x96\xbe", r - 14, mid + 0.5, kInk, kPanel);
+  r -= ow + 14;
+  g.fill(r, mid - 15, r + 1, mid + 15, kLine);
+  r -= 14;
+  double ew = std::max(90.0, g.width(st->fBody, "Edit cursor") + 24);
+  button(st, g, r - ew, mid - 15, r, mid + 15, "Edit cursor", H_TC_CURSOR, 0,
+         "The AAF starts at REAPER's edit cursor.");
+  r -= ew + 12;
+  // where the AAF starts in REAPER: one timecode, click to type
+  double tw = 168;
+  std::string land = formatTC(s.firstClip() + tcOffset(st), s.fps);
+  g.text(st->fSmall, kMute, "Starts in REAPER at", r - tw, mid - 22, r, mid - 6, DT_RIGHT);
+  if (st->editKind != 1) g.text(st->fMonoBig, kBlue, land, r - tw, mid - 7, r, mid + 18, DT_RIGHT);
+  for (double dx = r - 3; dx > r - tw + 30; dx -= 6) g.fill(dx - 3, mid + 19, dx, mid + 20, theme().empty);
+  st->tcRc = devRect(st, r - tw + 20, mid - 6, r, mid + 18);
+  addHit(st, r - tw, mid - 22, r, mid + 21, H_TC_VALUE, 0,
+         "Type where the AAF starts in REAPER: HH:MM:SS:FF or just the digits. Return applies, Esc cancels.");
+  double infoR = r - tw - 16;
+
+  // left: the AAF and what it is
+  double x = 58;
+  std::string name = baseName(s.aafPath);
+  g.text(st->fHead, kInk, name, x, mid - 20, infoR, mid + 1, DT_LEFT);
+  double proj = 0;
+  bool fpsBad = fpsMismatch(st, &proj);
+  std::string a = s.product.empty() ? std::string() : s.product + " \xc2\xb7 ";
+  std::string f = fpsText(s);
+  std::string b = strprintf(" \xc2\xb7 %g kHz / %d bit \xc2\xb7 starts %s \xc2\xb7 ", s.sampleRate / 1000.0, s.bits,
+                            formatTC(s.firstClip(), s.fps).c_str());
+  double y0 = mid + 2, y1 = mid + 19;
+  auto seg = [&](const std::string &t, COLORREF c) {
+    double w = g.width(st->fSmall, t);
+    if (x < infoR) g.text(st->fSmall, c, t, x, y0, infoR, y1, DT_LEFT);
+    double x0 = x;
+    x += w;
+    return x0;
+  };
+  seg(a, kMute);
+  double fx = seg(f, fpsBad ? kWarn : kMute);
+  if (fpsBad) {
+    static std::string fTip;
+    fTip = strprintf("The REAPER project runs at %s fps, the AAF at %s.", fpsShort(proj).c_str(), fpsText(s).c_str());
+    addHit(st, fx, y0, x, y1, H_FPS_SHOW, 0, fTip.c_str());
+  }
+  seg(b, kMute);
+  int ok = 0, total = 0;
+  mediaCount(st, &ok, &total);
+  if (ok == total) {
+    double mx = seg(strprintf("%d / %d media found", ok, total), theme().green);
+    addHit(st, mx, y0, x, y1, H_NONE, 0, "Every audio file the AAF needs is there (embedded audio counts).");
+  } else {
+    double mx = seg(strprintf("%d of %d media missing \xe2\x80\x93 Locate\xe2\x80\xa6", total - ok, total), kRed);
+    addHit(st, mx, y0, x, y1, H_LOCATE, 0,
+           "Choose the folder that holds the media. All its subfolders are searched, and OLAAF remembers it for the next import.");
+  }
 }
 
 // volume (dB scale, -60 ... +12) and pan lines over a lane, as they would be imported
@@ -799,7 +849,7 @@ void paintArrange(State *st, const Gfx &g) {
   Session &s = st->imp->session();
   ImportOptions &opt = *st->opt;
   buildRows(st);
-  g.box(kL, kAT, kR, kAB, kLine, kPanel);
+  g.fill(kL, kAT, kR, kAB, kPanel); // square here; the rounded corners are put on at the end
 
   // header corner
   double ry = kAT + 1;
@@ -808,14 +858,15 @@ void paintArrange(State *st, const Gfx &g) {
   int real = 0;
   for (auto &t : s.tracks) real += !t.created;
   g.fill(kL + kHdr, ry, kL + kHdr + 1, kAB - 1, kLine);
-  g.text(st->fSmall, kMute, strprintf("%d / %d", nsel, real), kL + 8, ry, kL + 60, ry + kRuler, DT_LEFT);
-  addHit(st, kL + 4, ry, kL + 60, ry + kRuler, H_NONE, 0, "Tracks that will be imported / tracks in the AAF.");
-  button(st, g, kL + 62, ry + 5, kL + 136, ry + 25, "+ Folder", H_NEW_FOLDER, 0,
-         "Add a folder (with the selected tracks in it). Drag track names onto a folder to put them in.");
-  double bx = kL + kHdr - 8;
-  button(st, g, bx - 22, ry + 5, bx, ry + 25, "+", H_ZOOM_IN, 0, "Zoom in (+ key, or Alt / Option + mouse wheel). Shift + mouse wheel moves through time.");
-  button(st, g, bx - 46, ry + 5, bx - 24, ry + 25, "\xe2\x88\x92", H_ZOOM_OUT, 0, "Zoom out (- key, or Alt / Option + mouse wheel).");
-  button(st, g, bx - 82, ry + 5, bx - 48, ry + 25, "Fit", H_ZOOM_FIT, 0, "Show the whole AAF.");
+  g.text(st->fSmall, kMute, strprintf("%d of %d tracks", nsel, real), kL + 12, ry, kL + 120, ry + kRuler, DT_LEFT);
+  addHit(st, kL + 4, ry, kL + 110, ry + kRuler, H_NONE, 0, "Tracks that will be imported, of the tracks in the AAF.");
+  {
+    const char *fl = "+ Folder";
+    double fw = g.width(st->fBody, fl);
+    g.text(st->fBody, kBlue, fl, kL + kHdr - 12 - fw, ry, kL + kHdr - 10, ry + kRuler, DT_RIGHT);
+    addHit(st, kL + kHdr - 18 - fw, ry + 4, kL + kHdr - 6, ry + kRuler - 4, H_NEW_FOLDER, 0,
+           "Add a folder (with the selected tracks in it). Drag track names onto a folder to put them in.");
+  }
 
   // ruler
   double a, b;
@@ -848,15 +899,38 @@ void paintArrange(State *st, const Gfx &g) {
       }
     }
 
-  // view switch: automation lines in the lanes (only what you see here, not the import)
+  // the ruler: click puts the playhead there
+  addHit(st, kTlx, ry, kR - 360, kLT, H_RULER, 0, "Click to put the playhead here. Space plays from the playhead.");
+  // at the right end of the ruler: play, automation view and zoom
   {
+    double bx = kR - 8, by0 = ry + 5, by1 = ry + kRuler - 5;
+    double cw = 0;
+    g.fill(kR - 356, ry, kR - 1, kLT - 1, theme().track);
+    {
+      bool pl = st->playTL;
+      double phT = st->playhead < 0 ? s.firstClip() : st->playhead;
+      std::string tc = formatTC(phT + tcOffset(st), s.fps);
+      double px0 = kR - 350;
+      if (st->host && st->host->playTimeline) {
+        button(st, g, px0, by0, px0 + 30, by1, pl ? "\xe2\x96\xa0" : "\xe2\x96\xb6", H_TL_PLAY, 0,
+               pl ? "Stop (Space)." : "Play the timeline from the playhead (Space). P plays the selected event.", false, true, pl);
+        g.text(st->fMonoSmall, pl ? kBlue : kInk, tc, px0 + 36, ry, px0 + 120, ry + kRuler, DT_LEFT);
+      }
+    }
+    button(st, g, bx - 22, by0, bx, by1, "+", H_ZOOM_IN, 0, "Zoom in (+ key, or Alt / Option + mouse wheel). Shift + mouse wheel moves through time.");
+    button(st, g, bx - 58, by0, bx - 26, by1, "Fit", H_ZOOM_FIT, 0, "Show the whole AAF.");
+    button(st, g, bx - 84, by0, bx - 62, by1, "\xe2\x88\x92", H_ZOOM_OUT, 0, "Zoom out (- key, or Alt / Option + mouse wheel).");
     const char *lab = "Automation";
-    double w = g.width(st->fSmall, lab) + 26;
-    if (w < 60 || w > 140) w = 92;
-    double ax = kTlr - w - 4, ay = ry + 3;
-    g.box(ax, ay, ax + w, ay + 13 + 0, opt.showAutomation ? kBlue : kLine, opt.showAutomation ? kBlueSoft : kPanel);
-    g.text(st->fClip, opt.showAutomation ? kBlue : kMute, lab, ax, ay, ax + w, ay + 13, DT_CENTER);
-    addHit(st, ax, ay, ax + w, ay + 13, H_SHOW_AUTO, 0,
+    cw = g.width(st->fSmall, lab);
+    double ax = bx - 96 - cw - 20;
+    double cy = (by0 + by1) / 2;
+    if (opt.showAutomation) {
+      g.rfill(ax, cy - 7, ax + 14, cy + 7, 4, kBlue);
+      g.check(ax - 1, cy - 8, kWhite);
+    } else
+      g.rbox(ax, cy - 7, ax + 14, cy + 7, 4, theme().empty, kPanel);
+    g.text(st->fSmall, kInk, lab, ax + 20, ry, ax + 24 + cw, ry + kRuler, DT_LEFT);
+    addHit(st, ax - 4, by0, ax + 24 + cw, by1, H_SHOW_AUTO, 0,
            "Show the volume (blue) and pan (orange) automation in the lanes. A view only, it changes nothing in the import.");
   }
 
@@ -922,27 +996,28 @@ void paintArrange(State *st, const Gfx &g) {
            "Set the track color. Without one, a track takes the color of its folder.");
     double cy = y + (kRowH - 18) / 2;
     if (on) {
-      g.fill(hx + 20, cy, hx + 38, cy + 18, kBlue);
-      g.fill(hx + 26, cy + 6, hx + 32, cy + 12, kWhite);
+      g.rfill(hx + 20, cy + 1, hx + 36, cy + 17, 4, kBlue);
+      g.check(hx + 20, cy + 1, kWhite);
     } else
-      g.box(hx + 20, cy, hx + 38, cy + 18, theme().empty, kPanel);
+      g.rbox(hx + 20, cy + 1, hx + 36, cy + 17, 4, theme().empty, kPanel);
     addHit(st, hx + 16, y + 2, hx + 42, y + kRowH - 2, H_TRACK_CHECK, row.track, "Import this track or leave it out.");
-    double nameR = kL + kHdr - 34;
+    double nameR = tr.created ? kL + kHdr - 34 : kL + kHdr - 8;
+    bool hot = st->hoverRow == ri || trSel; // the track's tools show under the mouse
     if (st->host && st->host->projectTracks) { // put the events on an existing REAPER track
       bool matched = !tr.target.empty();
-      g.icon("\xe2\x87\xa5", nameR - 9, y + kRowH / 2.0, matched ? kBlue : kMute, kPanel);
+      if (hot || matched) g.icon("\xe2\x87\xa5", nameR - 9, y + kRowH / 2.0, matched ? kBlue : kMute, kPanel);
       addHit(st, nameR - 18, y + 4, nameR, y + kRowH - 4, H_TRACK_DEST, row.track,
              "Put this track on a track that is already in your REAPER project (or on a new one).");
       nameR -= 18;
     }
     if (opt.folders) {
-      g.icon("\xe2\x96\xbe", nameR - 9, y + kRowH / 2.0, kMute, kPanel);
+      if (hot) g.icon("\xe2\x96\xbe", nameR - 9, y + kRowH / 2.0, kMute, kPanel);
       addHit(st, nameR - 18, y + 4, nameR, y + kRowH - 4, H_TRACK_FOLDERMENU, row.track, "Choose the folder for this track.");
       nameR -= 18;
     }
     if (tr.channels >= 2) {
       const char *badge = tr.channels == 2 ? (tr.mergedFrom.empty() ? "ST" : "L+R") : "MC";
-      g.box(nameR - 30, y + 11, nameR - 2, y + 25, theme().blueLine, kBlueSoft);
+      g.rbox(nameR - 30, y + 11, nameR - 2, y + 25, 4, theme().blueLine, kBlueSoft);
       g.text(st->fClip, kBlue, badge, nameR - 30, y + 11, nameR - 2, y + 25, DT_CENTER);
       nameR -= 34;
     }
@@ -962,13 +1037,10 @@ void paintArrange(State *st, const Gfx &g) {
     if (grabbed) g.fill(kL + kHdr - 3, y, kL + kHdr, y + kRowH - 1, kBlue); // picked up
     addHit(st, hx + 44, y + 2, nameR, y + kRowH - 2, H_TRACK_NAME, row.track,
            "Click selects, Shift or Cmd / Ctrl-click adds, double-click renames. Drag over names to select several, drag selected names to move them.");
-    int active = 0;
-    for (auto &c : tr.clips) active += !c.excluded;
     if (tr.created) { // a track added here can be deleted again; AAF tracks cannot
-      button(st, g, kL + kHdr - 26, y + 7, kL + kHdr - 8, y + kRowH - 7, "\xc3\x97", H_TRACK_DELETE, row.track,
+      button(st, g, kL + kHdr - 28, y + 8, kL + kHdr - 8, y + kRowH - 8, "\xc3\x97", H_TRACK_DELETE, row.track,
              "Delete this new track. Its events go back to the AAF tracks they came from.");
-    } else
-      g.text(st->fSmall, kMute, std::to_string(active), kL + kHdr - 34, y, kL + kHdr - 8, y + kRowH, DT_RIGHT);
+    }
 
     // events
     for (auto &c : tr.clips) {
@@ -1001,11 +1073,15 @@ void paintArrange(State *st, const Gfx &g) {
         g.box(x0, y0, x1, y1, cc, kPanel);
         paintWave(st, g, c, x0 + 1, std::max(wy, y0 + 1), x1 - 1, y1 - 1, cx0, spp, mixColor(cc, kPanel, 0.55));
       } else {
-        if (selected) g.fill(x0 - 2, y0 - 2, x1 + 2, y1 + 2, kInk);
-        if (selected) g.fill(x0 - 1, y0 - 1, x1 + 1, y1 + 1, kPanel);
-        g.fill(x0, y0, x1, y1, tint);
-        paintWave(st, g, c, x0 + 2, wy, x1, y1, cx0, spp, wave);
-        g.fill(x0, y0, std::min(x1, x0 + 2), y1, cc); // the clip start
+        if (selected) g.rfill(x0 - 2, y0 - 2, x1 + 2, y1 + 2, 6, kInk);
+        if (selected) g.rfill(x0 - 1, y0 - 1, x1 + 1, y1 + 1, 5, kPanel);
+        if (x1 - x0 > 8) {
+          g.rfill(x0, y0, x1, y1, 4, cc);            // the clip start shows as a colored left edge
+          g.rfill(x0 + 2, y0, x1, y1, 4, tint);
+          g.fill(x0 + 2, y0, std::min(x1, x0 + 6), y1, tint);
+        } else
+          g.fill(x0, y0, x1, y1, tint);
+        paintWave(st, g, c, x0 + 2, wy, x1 - 1, y1, cx0, spp, wave);
         double fi = c.fadeIn.len / spp, fo = c.fadeOut.len / spp;
         if (opt.fades && fi > 2) g.line(x0, y1, std::min(x1, x0 + fi), y0, kInk);
         if (opt.fades && fo > 2) g.line(std::max(x0, x1 - fo), y0, x1, y1, kInk);
@@ -1020,6 +1096,26 @@ void paintArrange(State *st, const Gfx &g) {
     }
     if (opt.showAutomation && on) paintAutomation(st, g, tr, y, spp);
   }
+
+  // the timeline playhead
+  {
+    double phT = st->playhead < 0 ? s.firstClip() : st->playhead;
+    double px = kTlx + (phT - st->viewStart) / spp;
+    if (px >= kTlx && px <= kTlr && !st->playClip) {
+      COLORREF pc = st->playTL ? kBlue : kMute;
+      g.fill(px - (st->playTL ? 1 : 0.5), kLT, px + (st->playTL ? 1 : 0.5), kLB, pc);
+      g.poly({{px - 5, kLT - 8}, {px + 5, kLT - 8}, {px, kLT - 1}}, pc);
+    }
+  }
+  // listening: a line moving through the event
+  if (st->playClip && st->playPos >= 0)
+    if (Clip *pc = st->imp->findClip(st->playClip)) {
+      double px = kTlx + (pc->pos + st->playPos - st->viewStart) / spp;
+      if (px >= kTlx && px <= kTlr) {
+        g.fill(px - 1, kLT, px + 1, kLB, kBlue);
+        g.poly({{px - 5, kLT - 7}, {px + 5, kLT - 7}, {px, kLT}}, kBlue);
+      }
+    }
 
   // moving tracks: a line where they will land, and what is being carried
   if (st->drag == 4 && st->dragMoved && st->dropRow >= 0) {
@@ -1064,15 +1160,17 @@ void paintArrange(State *st, const Gfx &g) {
   st->hTrack = devRect(st, hl, ht, hr, hb);
   st->hThumb = devRect(st, tx, ht, tx + tw, hb);
   addHit(st, hl, ht, hr, hb, H_NONE, 0, "Drag to move through time, or use + and \xe2\x88\x92 to zoom.");
+  olRoundCorners(g.dc, g.X(kL), g.Y(kAT), g.X(kR), g.Y(kAB), 12 * g.s, kFace, kLine);
 }
 
+// The bar under the arrange view: the selected events and what to do with them, or the help line.
 void paintEventBar(State *st, const Gfx &g) {
   Session &s = st->imp->session();
   double t = kEvT, b = kEvB, mid = (t + b) / 2;
-  g.box(kL, t, kR, b, kLine, kPanel);
-  g.text(st->fSec, kMute, "Event", kL + 12, t, kL + 60, b, DT_LEFT);
   std::vector<int> ids(st->sel.begin(), st->sel.end());
-  double right = kR - 10;
+  // right: dmajorsound
+  drawDmajorLogo(g.dc, g.X(kR), g.Y(mid), g.S(20), kMute, kMute, st->fSmall);
+  double right = kR - 160;
   if (!ids.empty()) {
     bool anyIn = false, allMuted = true;
     for (int id : ids)
@@ -1080,140 +1178,218 @@ void paintEventBar(State *st, const Gfx &g) {
         anyIn = anyIn || !k->excluded;
         allMuted = allMuted && k->mute;
       }
-    // right to left: automation, down, up, remove, mute
-    double aw = 128;
+    double aw = 136;
     checkbox(st, g, right - aw, mid - 8, st->moveAutomation, H_EV_AUTOMATION, 0,
              "Volume and pan automation under a moved event goes with it to the new track.");
     g.text(st->fBody, kInk, "Automation along", right - aw + 22, t, right, b, DT_LEFT);
-    right -= aw + 10;
-    button(st, g, right - 30, mid - 14, right, mid + 14, "\xe2\x96\xbc", H_EV_DOWN, 0,
+    right -= aw + 12;
+    if (st->edited) {
+      button(st, g, right - 70, mid - 15, right, mid + 15, "Reset", H_EV_RESET, 0, "Undo every remove, mute and move made here.");
+      right -= 78;
+    }
+    button(st, g, right - 32, mid - 15, right, mid + 15, "\xe2\x96\xbc", H_EV_DOWN, 0,
            "One track down (arrow down). Below the last track a new track is added.");
-    button(st, g, right - 62, mid - 14, right - 32, mid + 14, "\xe2\x96\xb2", H_EV_UP, 0, "One track up (arrow up).");
-    right -= 70;
-    button(st, g, right - 84, mid - 14, right, mid + 14, anyIn ? "Remove" : "Restore", anyIn ? H_EV_REMOVE : H_EV_RESTORE, 0,
+    button(st, g, right - 68, mid - 15, right - 36, mid + 15, "\xe2\x96\xb2", H_EV_UP, 0, "One track up (arrow up).");
+    right -= 76;
+    const char *rl = anyIn ? "Remove" : "Restore";
+    double rw = g.width(st->fBody, rl) + 26;
+    button(st, g, right - rw, mid - 15, right, mid + 15, rl, anyIn ? H_EV_REMOVE : H_EV_RESTORE, 0,
            anyIn ? "Leaves the selected events out (Delete). They stay visible and can be restored." :
                    "Puts the selected events back into the import (Delete).");
-    right -= 92;
-    button(st, g, right - 70, mid - 14, right, mid + 14, allMuted ? "Unmute" : "Mute", H_EV_MUTE, 0,
-           "Imports the selected events as muted items (M).");
-    right -= 78;
+    right -= rw + 6;
+    const char *ml = allMuted ? "Unmute" : "Mute";
+    double mw = g.width(st->fBody, ml) + 26;
+    button(st, g, right - mw, mid - 15, right, mid + 15, ml, H_EV_MUTE, 0, "Imports the selected events as muted items (M).");
+    right -= mw + 6;
+    if (st->host && st->host->playPreview) {
+      bool pl = st->playClip != 0;
+      button(st, g, right - 34, mid - 15, right, mid + 15, pl ? "\xe2\x96\xa0" : "\xe2\x96\xb6", H_EV_PLAY, 0,
+             pl ? "Stop (P)." : "Listen to this event (P).", false, true, pl);
+      right -= 48;
+    }
+
+  } else if (st->edited) {
+    button(st, g, right - 96, mid - 15, right, mid + 15, "Reset edits", H_EV_RESET, 0, "Undo every remove, mute and move made here.");
+    right -= 110;
   }
-  if (st->edited) {
-    button(st, g, right - 90, mid - 14, right, mid + 14, "Reset edits", H_EV_RESET, 0,
-           "Undo every remove, mute and move made here.");
-    right -= 100;
-  }
-  double x = kL + 64;
+  double x = kL;
   if (ids.empty()) {
-    g.text(st->fBody, kMute, "Click an event to select it. Shift-click selects more.", x, t, right, b, DT_LEFT);
+    g.text(st->fBody, kMute, st->tip ? st->tip : "Click an event to mute, remove or move it. Shift-click selects more.", x, t,
+           right, b, DT_LEFT);
     return;
   }
   int ti = -1;
   Clip *c = st->imp->findClip(ids[0], &ti);
+  std::string nm, det;
   if (c && ids.size() == 1) {
-    std::string nm = c->name.empty() ? "(no name)" : c->name;
-    double nw = std::min(240.0, g.width(st->fBold, nm) + 10);
-    g.text(st->fBold, kInk, nm, x, t, x + nw, b, DT_LEFT);
-    std::string det = strprintf("%s \xc2\xb7 %s \xc2\xb7 %s \xc2\xb7 %s%s \xc2\xb7 fades %.2f / %.2f s%s",
-                                ti >= 0 ? s.tracks[(size_t)ti].name.c_str() : "-",
-                                formatTC(c->pos + tcOffset(st), s.fps).c_str(), formatTC(c->len, s.fps).c_str(),
-                                dbText(c->gain).c_str(), c->gainEnv.empty() ? "" : " + curve", c->fadeIn.len,
-                                c->fadeOut.len, c->excluded ? " \xc2\xb7 removed" : (c->mute ? " \xc2\xb7 muted" : ""));
-    g.text(st->fSmall, kMute, det, x + nw + 6, t, right - 6, b, DT_LEFT);
+    nm = c->name.empty() ? "(no name)" : c->name;
+    det = strprintf("%s \xc2\xb7 %s \xc2\xb7 %s \xc2\xb7 %s%s%s", ti >= 0 ? s.tracks[(size_t)ti].name.c_str() : "-",
+                    formatTC(c->pos + tcOffset(st), s.fps).c_str(), formatTC(c->len, s.fps).c_str(), dbText(c->gain).c_str(),
+                    c->gainEnv.empty() ? "" : " + curve",
+                    c->excluded ? " \xc2\xb7 removed" : (c->mute ? " \xc2\xb7 muted" : ""));
   } else {
     std::set<int> trs;
     for (int id : ids) {
       int k = -1;
       if (st->imp->findClip(id, &k)) trs.insert(k);
     }
-    g.text(st->fBold, kInk, strprintf("%zu events on %zu track%s", ids.size(), trs.size(), trs.size() == 1 ? "" : "s"), x,
-           t, right - 6, b, DT_LEFT);
+    nm = strprintf("%zu events on %zu track%s", ids.size(), trs.size(), trs.size() == 1 ? "" : "s");
   }
+  double nw = std::min(220.0, g.width(st->fBold, nm) + 10);
+  g.text(st->fBold, kInk, nm, x, t, std::min(x + nw, right - 6), b, DT_LEFT);
+  if (st->tip) g.text(st->fSmall, kMute, st->tip, x + nw + 4, t, right - 8, b, DT_LEFT);
+  else g.text(st->fMonoSmall, kMute, det, x + nw + 4, t, right - 8, b, DT_LEFT);
 }
 
-void paintMediaBar(State *st, const Gfx &g) {
+// ------------------------------------------------------------------ options
+
+const double kOpW = 380;
+
+void optRow(State *st, const Gfx &g, double px, double &y, const std::string &label, bool on, bool enabled, int id,
+            const char *tip) {
+  if (!enabled) g.rbox(px + 16, y + 6, px + 32, y + 22, 4, kLine, kPanel);
+  else if (on) {
+    g.rfill(px + 16, y + 6, px + 32, y + 22, 4, kBlue);
+    g.check(px + 16, y + 6, kWhite);
+  } else
+    g.rbox(px + 16, y + 6, px + 32, y + 22, 4, theme().empty, kPanel);
+  g.text(st->fBody, enabled ? kInk : kMute, label, px + 42, y, px + kOpW - 16, y + 28, DT_LEFT);
+  addHit(st, px + 10, y + 1, px + kOpW - 10, y + 27, enabled ? id : H_OPTS_BG, 0, tip);
+  y += 28;
+}
+
+void optHead(State *st, const Gfx &g, double px, double &y, const char *t) {
+  y += 8;
+  g.text(st->fSmall, kMute, t, px + 16, y, px + kOpW - 16, y + 20, DT_LEFT);
+  y += 20;
+}
+
+void paintOptions(State *st, const Gfx &g) {
   Session &s = st->imp->session();
   ImportOptions &opt = *st->opt;
-  double t = kMdT, b = kMdB, mid = (t + b) / 2;
-  g.text(st->fSec, kMute, "Media", kL, t, kL + 50, b, DT_LEFT);
-  int total = 0, ok = 0;
-  std::set<int> used;
-  for (auto &tr : s.tracks)
-    if (tr.import)
-      for (auto &c : tr.clips)
-        if (!c.excluded)
-          for (auto &src : c.sources)
-            if (src.media >= 0) used.insert(src.media);
-  for (int mi : used) {
-    total++;
-    const Media &m = s.media[(size_t)mi];
-    if (m.kind == MediaKind::Embedded || fileExists(m.foundPath)) ok++;
+  double px = std::min(st->optsBtn.r - 60, kR - kOpW), py = kTopH - 6;
+  double ph = 398;
+  // shadow, then the panel
+  g.rfill(px - 1, py + 1, px + kOpW + 3, py + ph + 5, 12, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
+  g.rbox(px, py, px + kOpW, py + ph, 12, kLine, kPop);
+  addHit(st, px, py, px + kOpW, py + ph, H_OPTS_BG, 0, nullptr);
+  double y = py + 4;
+  optHead(st, g, px, y, "Import");
+  optRow(st, g, px, y, "Fades and crossfades", opt.fades, true, H_FADES, "Fade ins, fade outs and crossfades from the AAF.");
+  optRow(st, g, px, y, "Combine .L / .R tracks into stereo", st->merge, true, H_MERGE,
+         "Combines two mono tracks named .L and .R whose clips line up into one stereo track.");
+  std::string mLabel = s.markers.empty() ? "Markers (none in this AAF)" : strprintf("Markers (%zu)", s.markers.size());
+  optRow(st, g, px, y, mLabel, opt.markers && !s.markers.empty(), !s.markers.empty(), H_MARKERS,
+         "Markers from the edit become REAPER markers.");
+  optRow(st, g, px, y, "Folder tracks", opt.folders, true, H_FOLDERS,
+         "Folder tracks. Click a track name to choose its folder; the pencil renames a folder.");
+  // clip gain: three ways
+  {
+    double sy = y + 4, sl = px + 96, sr = px + kOpW - 16;
+    g.text(st->fBody, kInk, "Clip gain", px + 16, y, sl, y + 32, DT_LEFT);
+    const char *lab[3] = {"On the items", "On the track", "Off"};
+    int cur = !opt.clipGain ? 2 : (opt.clipGainToTrack ? 1 : 0);
+    int ids[3] = {H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF};
+    const char *tips[3] = {"Clip gain on the items, clip automation as take envelopes.",
+                           "Clip gain folded into the track's volume envelope.", "No clip gain."};
+    g.rbox(sl, sy, sr, sy + 26, 8, kLine, kPanel);
+    double sw = (sr - sl) / 3;
+    for (int i = 0; i < 3; i++) {
+      double a = sl + i * sw, b2 = a + sw;
+      if (i == cur) g.rfill(a + 1, sy + 1, b2 - 1, sy + 25, 7, kBlue);
+      else if (i > 0 && i - 1 != cur) g.fill(a, sy + 5, a + 1, sy + 21, kLine);
+      g.text(st->fSmall, i == cur ? kWhite : kInk, lab[i], a, sy, b2, sy + 26, DT_CENTER);
+      addHit(st, a, sy, b2, sy + 26, ids[i], 0, tips[i]);
+    }
+    y += 34;
   }
-  double x = kL + 52;
-  if (ok == total) {
-    std::string txt = strprintf("%d / %d found", ok, total);
-    double w = g.width(st->fBody, txt) + 8;
-    g.text(st->fBody, theme().green, txt, x, t, x + w, b, DT_LEFT);
-    addHit(st, x, t + 8, x + w, b - 8, H_NONE, 0, "Every audio file the AAF needs is there (embedded audio counts).");
-    x += w + 8;
+  // video
+  optHead(st, g, px, y, "Video");
+  bool videoOk = !s.video.empty();
+  bool videoFound = videoOk && fileExists(s.video[0].foundPath);
+  if (videoFound) {
+    bool manual = s.video[0].manual;
+    std::string vl = "Video: " + baseName(s.video[0].foundPath);
+    double save = y;
+    optRow(st, g, px, y, vl, opt.video, true, H_VIDEO,
+           manual ? "The picture you chose, on a VIDEO track at the top, at its own timecode (or where the AAF starts)."
+                  : "The picture the AAF points to, on a VIDEO track at the top.");
+    button(st, g, px + kOpW - 96, save + 1, px + kOpW - 16, save + 27, "Change\xe2\x80\xa6", H_VIDEO_CHOOSE, 0,
+           "Choose another video file.");
   } else {
-    std::string txt = strprintf("%d missing", total - ok);
-    double w = g.width(st->fBody, txt) + 8;
-    g.text(st->fBody, kRed, txt, x, t, x + w, b, DT_LEFT);
-    x += w + 4;
-    button(st, g, x, mid - 15, x + 78, mid + 15, "Locate\xe2\x80\xa6", H_LOCATE, 0,
-           "Choose the folder that holds the media. All its subfolders are searched, and OLAAF remembers it for the next import.");
-    x += 86;
+    static std::string vTip;
+    vTip = videoOk ? "The AAF points to \"" + s.video[0].name +
+                         "\", which isn't found. Choose the file: it goes on a VIDEO track at the top, where the AAF puts it."
+                   : "Choose the picture: it goes on a VIDEO track at the top, at its own timecode (or where the AAF starts).";
+    g.text(st->fBody, kMute, videoOk ? "The AAF's video isn't found." : "This AAF has no video.", px + 16, y, px + 220, y + 28,
+           DT_LEFT);
+    button(st, g, px + kOpW - 150, y + 1, px + kOpW - 16, y + 27, "Search for video\xe2\x80\xa6", H_VIDEO_CHOOSE, 0, vTip.c_str());
+    y += 28;
   }
-  // copy: one plain checkbox, off by default
-  x = chip(st, g, x, mid - 13, "Copy audio into a subfolder", opt.copyToSubdir, true, opt.copyToSubdir ? H_COPY_NO : H_COPY_YES,
-           "On: WAV files are copied into the audio subfolder. Off: they stay where they are. MXF, AIFF and embedded audio "
-           "always become Broadcast WAV in the subfolder.");
-  x += 8;
-
-  // where it goes
-  double cancelW = 84, buildW = 190;
-  double pr = kR - buildW - cancelW - 16 - 86;
-  std::string sub = opt.subdir.empty() ? defaultSubdir(s) : opt.subdir;
-  std::string dest = opt.destDir;
-  if (!dest.empty() && dest.back() != '/' && dest.back() != '\\') dest += "/";
-  g.box(x, mid - 18, pr, mid + 18, kLine, kPanel);
-  g.text(st->fSec, kMute, opt.copyToSubdir ? "Audio goes to" : "Converted audio goes to", x + 8, mid - 16, pr - 8, mid - 2, DT_LEFT);
-  // the folder it goes into, shortened from the left so the subfolder name always shows
-  size_t maxc = (size_t)std::max(24.0, (pr - x - 16) / 6.2);
-  std::string subShown = sub.size() > maxc / 2 ? utf8Head(sub, maxc / 2 - 1) + "\xe2\x80\xa6" : sub;
-  std::string shown = shortPath(dest, std::max<size_t>(12, maxc - subShown.size())) + subShown;
-  if (st->editKind != 3) g.text(st->fSmall, kInk, shown, x + 8, mid - 2, pr - 8, mid + 15, DT_LEFT);
-  st->subRc = devRect(st, x + 6, mid - 2, pr - 6, mid + 15);
-  addHit(st, x, mid - 18, pr, mid + 18, H_SUBDIR, 0, "Click to rename the audio subfolder.");
-  button(st, g, pr + 6, mid - 15, pr + 80, mid + 15, "Choose\xe2\x80\xa6", H_DEST_CHOOSE, 0,
-         "Choose the folder the audio subfolder goes into.");
-
-  int ntr = 0;
-  for (auto &tr : s.tracks) {
-    if (!tr.import) continue;
-    bool any = !tr.created;
-    for (auto &c : tr.clips) any = any || !c.excluded;
-    ntr += any;
+  // audio
+  optHead(st, g, px, y, "Audio files");
+  optRow(st, g, px, y, "Copy audio into a subfolder", opt.copyToSubdir, true, opt.copyToSubdir ? H_COPY_NO : H_COPY_YES,
+         "On: WAV files are copied into the audio subfolder. Off: they stay where they are. MXF, AIFF and embedded audio "
+         "always become Broadcast WAV in the subfolder.");
+  {
+    double bl = px + 16, br = px + kOpW - 104, bt = y + 4, bb = y + 44;
+    std::string sub = opt.subdir.empty() ? defaultSubdir(s) : opt.subdir;
+    std::string dest = opt.destDir;
+    if (!dest.empty() && dest.back() != '/' && dest.back() != '\\') dest += "/";
+    g.rbox(bl, bt, br, bb, 8, kLine, kPanel);
+    g.text(st->fSmall, kMute, opt.copyToSubdir ? "Audio goes to" : "Converted audio goes to", bl + 8, bt + 3, br - 8, bt + 19,
+           DT_LEFT);
+    size_t maxc = (size_t)std::max(24.0, (br - bl - 16) / 6.2);
+    std::string subShown = sub.size() > maxc / 2 ? utf8Head(sub, maxc / 2 - 1) + "\xe2\x80\xa6" : sub;
+    std::string shown = shortPath(dest, std::max<size_t>(12, maxc - subShown.size())) + subShown;
+    if (st->editKind != 3) g.text(st->fSmall, kInk, shown, bl + 8, bt + 19, br - 8, bb - 3, DT_LEFT);
+    st->subRc = devRect(st, bl + 6, bt + 19, br - 6, bb - 3);
+    addHit(st, bl, bt, br, bb, H_SUBDIR, 0, "Click to rename the audio subfolder.");
+    button(st, g, br + 8, bt + 5, px + kOpW - 16, bb - 5, "Choose\xe2\x80\xa6", H_DEST_CHOOSE, 0,
+           "Choose the folder the audio subfolder goes into.");
+    y += 52;
   }
-  button(st, g, kR - buildW - 8 - cancelW, mid - 18, kR - buildW - 8, mid + 18, "Cancel", H_CANCEL, 0, "Close without importing.");
-  button(st, g, kR - buildW, mid - 18, kR, mid + 18, strprintf("Build session \xc2\xb7 %d track%s", ntr, ntr == 1 ? "" : "s"),
-         H_IMPORT, 0, "Import the tracks into REAPER.", true, ntr > 0);
+  int ok = 0, total = 0;
+  mediaCount(st, &ok, &total);
+  g.text(st->fSmall, ok == total ? theme().green : kRed,
+         ok == total ? strprintf("All %d media files found", total) : strprintf("%d of %d media files missing", total - ok, total),
+         px + 16, y, px + 220, y + 24, DT_LEFT);
+  const char *ll = "Search another folder\xe2\x80\xa6";
+  double lw = g.width(st->fSmall, ll);
+  g.text(st->fSmall, kBlue, ll, px + kOpW - 16 - lw, y, px + kOpW - 16, y + 24, DT_RIGHT);
+  addHit(st, px + kOpW - 20 - lw, y, px + kOpW - 12, y + 24, H_LOCATE, 0,
+         "Choose a folder that holds media. All its subfolders are searched, and OLAAF remembers it for the next import.");
+  y += 28;
+  g.fill(px + 16, y, px + kOpW - 16, y + 1, kLine);
+  g.text(st->fTag, kMute, "V 0.6 beta developed with AI assistance \xc2\xb7 dmajorsound.com", px + 16, y + 4, px + kOpW - 16,
+         y + 24, DT_LEFT);
 }
 
-void paintFooter(State *st, const Gfx &g) {
-  g.fill(kL, kFootY, kR, kFootY + 1, kLine);
-  double t = kFootY + 3, b = H - 6;
-  const char *v = "V 0.6 beta developed with AI assistance";
-  double vw = g.width(st->fTag, v) + 10;
-  if (vw < 100 || vw > 400) vw = 240;
-  g.box(kR - 22, t + 2, kR, b - 2, kLine, kPanel);
-  g.icon(darkTheme() ? "\xe2\x98\xbe" : "\xe2\x98\x80", kR - 11, (t + b) / 2, kInk, kPanel);
-  addHit(st, kR - 22, t + 2, kR, b - 2, H_THEME, 0, "Light or dark interface.");
-  g.text(st->fTag, kMute, v, kR - 30 - vw, t, kR - 30, b, DT_RIGHT);
-  g.text(st->fTag, kMute,
-         st->tip ? st->tip : "The square leaves a track out. Drag track names onto a folder, drag events (or use the arrow keys) to move them to another track.",
-         kL, t, kR - 40 - vw, b, DT_LEFT);
+// ------------------------------------------------------------------ frame rate warning
+
+void paintFpsWarning(State *st, const Gfx &g) {
+  double proj = 0;
+  if (st->fpsDismissed || !fpsMismatch(st, &proj)) return;
+  Session &s = st->imp->session();
+  double w = 470, h = 150;
+  double cx = (kTlx + kTlr) / 2 - 40, cy = (kLT + kLB) / 2;
+  double l = cx - w / 2, t = cy - h / 2;
+  g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 14, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
+  g.rbox(l, t, l + w, t + h, 14, kWarn, kPop);
+  addHit(st, l, t, l + w, t + h, H_OPTS_BG, 0, nullptr);
+  // the triangle
+  double tx = l + 44, ty = t + 46;
+  g.poly({{tx, ty - 22}, {tx + 24, ty + 18}, {tx - 24, ty + 18}}, kWarn);
+  g.fill(tx - 1.6, ty - 8, tx + 1.6, ty + 6, kPop);
+  g.fill(tx - 1.6, ty + 9, tx + 1.6, ty + 12.5, kPop);
+  g.text(st->fHead, kInk, "Frame rate mismatch", l + 84, t + 18, l + w - 16, t + 40, DT_LEFT);
+  std::string line1 = strprintf("The AAF runs at %s, this REAPER project at %s fps.", fpsText(s).c_str(), fpsShort(proj).c_str());
+  g.text(st->fBody, kInk, line1, l + 84, t + 44, l + w - 16, t + 64, DT_LEFT);
+  g.text(st->fSmall, kMute, "Timecode and frame edges won't line up. Set the project's frame rate", l + 84, t + 66, l + w - 16,
+         t + 84, DT_LEFT);
+  g.text(st->fSmall, kMute, "in File \xe2\x80\xba Project settings \xe2\x80\xba Video, or export the AAF again.", l + 84, t + 82,
+         l + w - 16, t + 100, DT_LEFT);
+  button(st, g, l + w - 116, t + h - 44, l + w - 16, t + h - 14, "Got it", H_FPS_OK, 0, "Hide this warning.", true);
 }
 
 // ------------------------------------------------------------------ popovers
@@ -1244,7 +1420,7 @@ void paintFolderPopover(State *st, const Gfx &g) {
   int n = (int)s.folders.size();
   double px, py, ph;
   folderPopoverRect(st, &px, &py, &ph);
-  g.box(px, py, px + pw, py + ph, kLine, kPanel);
+  g.rbox(px, py, px + pw, py + ph, 10, kLine, kPop);
   addHit(st, px, py, px + pw, py + ph, H_FOLD_POP, 0, nullptr);
   g.text(st->fSec, kMute, "Folder \xc2\xb7 " + tr.name, px + 10, py + 4, px + pw - 10, py + 26, DT_LEFT);
   double y = py + 30;
@@ -1285,7 +1461,7 @@ void paintDestPopover(State *st, const Gfx &g) {
   double px = std::min(st->dpX, (double)W - 16 - kDpW), py = st->dpY;
   if (py + ph > H - 20) py = st->dpY0 - ph;
   py = std::max(py, 60.0);
-  g.box(px, py, px + kDpW, py + ph, kLine, kPanel);
+  g.rbox(px, py, px + kDpW, py + ph, 10, kLine, kPop);
   addHit(st, px, py, px + kDpW, py + ph, H_DEST_POP, 0, nullptr);
   g.text(st->fSec, kMute, "Put on \xc2\xb7 " + tr.name, px + 10, py + 4, px + kDpW - 10, py + 26, DT_LEFT);
   double y = py + 30;
@@ -1346,7 +1522,7 @@ void paintPalette(State *st, const Gfx &g) {
   double px = std::min(st->palX, (double)W - 16 - pw);
   double py = st->palY + 4;
   if (py + ph > H - 20) py = st->palY0 - 4 - ph;
-  g.box(px, py, px + pw, py + ph, kLine, kPanel);
+  g.rbox(px, py, px + pw, py + ph, 10, kLine, kPop);
   addHit(st, px, py, px + pw, py + ph, H_PAL_BG, 0, nullptr);
   g.text(st->fSec, kMute, "Color \xc2\xb7 " + title, px + 10, py + 4, px + 170, py + 24, DT_LEFT);
   for (int i = 0; i < 10; i++) {
@@ -1368,15 +1544,14 @@ void paint(State *st, HDC dc) {
     FillRect(dc, &cr, br);
     DeleteObject(br);
   }
-  paintHeader(st, g);
-  paintToolbar(st, g);
+  paintTopBar(st, g);
   paintArrange(st, g);
   paintEventBar(st, g);
-  paintMediaBar(st, g);
-  paintFooter(st, g);
+  paintFpsWarning(st, g);
   if (st->folderTrack >= 0 && st->opt->folders) paintFolderPopover(st, g);
   if (st->destTrack >= 0) paintDestPopover(st, g);
   if (st->palTrack >= 0 || !st->palFolder.empty()) paintPalette(st, g);
+  if (st->optsOpen) paintOptions(st, g);
 }
 
 // ------------------------------------------------------------------ input
@@ -1528,10 +1703,10 @@ void endEdit(State *st, bool apply) {
   while (!v.empty() && (v[0] == ' ' || v[0] == '\t')) v.erase(0, 1);
   if (apply && kind == 1) {
     double sec;
-    if (parseTC(v, st->imp->session().fps, &sec)) {
-      st->tcAbs = std::fabs(sec);
-      if (v.find('-') != std::string::npos) st->tcMinus = true;
-      else if (v.find('+') != std::string::npos) st->tcMinus = false;
+    if (parseTC(v, st->imp->session().fps, &sec) && sec >= 0) { // where the AAF starts in REAPER
+      double d = sec - st->imp->session().firstClip();
+      st->tcAbs = std::fabs(d);
+      st->tcMinus = d < 0;
       st->tip = nullptr;
     } else
       st->tip = "That is not a timecode. Use HH:MM:SS:FF or just the digits.";
@@ -1574,6 +1749,10 @@ bool shiftDown() { return (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0; }
 bool altDown() { return (GetAsyncKeyState(VK_MENU) & 0x8000) != 0; } // Option on macOS
 bool ctrlDown() { return (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0; } // Cmd on macOS
 
+void stopPlay(State *st);
+void togglePlay(State *st);
+void toggleTimeline(State *st);
+
 void click(State *st, int x, int y, bool shift) {
   Session &s = st->imp->session();
   ImportOptions &opt = *st->opt;
@@ -1590,6 +1769,14 @@ void click(State *st, int x, int y, bool shift) {
     InvalidateRect(st->hwnd, NULL, FALSE);
     if (id == H_LANES || id == H_NONE || id == H_FOLD_POP) return;
   }
+  bool inOpts = id == H_OPTS_BG || id == H_FADES || id == H_MERGE || id == H_MARKERS || id == H_FOLDERS || id == H_GAIN_ITEMS ||
+                id == H_GAIN_TRACK || id == H_GAIN_OFF || id == H_VIDEO || id == H_VIDEO_CHOOSE || id == H_COPY_YES ||
+                id == H_COPY_NO || id == H_SUBDIR || id == H_DEST_CHOOSE || id == H_LOCATE;
+  if (st->optsOpen && !inOpts && id != H_OPTS) {
+    st->optsOpen = false;
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    if (id == H_LANES || id == H_NONE) return;
+  }
   bool inDest = id == H_DEST_NEW || id == H_DEST_MATCHALL || id == H_DEST_PICK || id == H_DEST_POP || id == H_DEST_OVERWRITE;
   if (st->destTrack >= 0 && !inDest && id != H_TRACK_DEST) {
     st->destTrack = -1;
@@ -1604,6 +1791,11 @@ void click(State *st, int x, int y, bool shift) {
   switch (id) {
   case H_LANES: {
     const ClipHit *c = clipAt(st, x, y);
+    if (st->playClip && (!c || c->id != st->playClip)) stopPlay(st);
+    if (!st->playTL && !shift && c == nullptr) { // a click on empty lane space puts the playhead there
+      double spp = st->viewLen / (kTlr - kTlx);
+      st->playhead = std::max(0.0, st->viewStart + ((x - st->ox) / st->scale - kTlx) * spp);
+    }
     if (!c) {
       if (!shift) st->sel.clear();
     } else if (shift) {
@@ -1810,6 +2002,13 @@ void click(State *st, int x, int y, bool shift) {
       opt.clipGain = true;
     break;
   case H_SHOW_AUTO: opt.showAutomation = !opt.showAutomation; break;
+  case H_OPTS: st->optsOpen = !st->optsOpen; st->folderTrack = st->destTrack = st->palTrack = -1; st->palFolder.clear(); break;
+  case H_OPTS_BG: return;
+  case H_GAIN_ITEMS: opt.clipGain = true; opt.clipGainToTrack = false; break;
+  case H_GAIN_TRACK: opt.clipGain = true; opt.clipGainToTrack = true; break;
+  case H_GAIN_OFF: opt.clipGain = false; break;
+  case H_FPS_OK: st->fpsDismissed = true; break;
+  case H_FPS_SHOW: st->fpsDismissed = false; break;
   case H_VIDEO: opt.video = !opt.video; break;
   case H_VIDEO_CHOOSE: { // the AAF has no picture (or a chosen one is replaced): pick the file by hand
     std::string path;
@@ -1842,7 +2041,6 @@ void click(State *st, int x, int y, bool shift) {
   }
   case H_MARKERS: opt.markers = !opt.markers; break;
   case H_FOLDERS: opt.folders = !opt.folders; st->folderTrack = -1; break;
-  case H_THEME: setDarkTheme(!darkTheme()); break;
   case H_COPY_YES: opt.copyToSubdir = true; break;
   case H_COPY_NO: opt.copyToSubdir = false; break;
   case H_SUBDIR: startEdit(st, 3, st->subRc, opt.subdir.empty() ? defaultSubdir(s) : opt.subdir); return;
@@ -1863,7 +2061,7 @@ void click(State *st, int x, int y, bool shift) {
   }
   case H_TC_PLUS: st->tcMinus = false; break;
   case H_TC_MINUS: st->tcMinus = true; break;
-  case H_TC_VALUE: startEdit(st, 1, st->tcRc, formatTC(st->tcAbs, s.fps)); return;
+  case H_TC_VALUE: startEdit(st, 1, st->tcRc, formatTC(s.firstClip() + tcOffset(st), s.fps)); return;
   case H_TC_CURSOR: {
     if (st->host->editCursor) {
       double d = st->host->editCursor() - s.firstClip();
@@ -1875,6 +2073,17 @@ void click(State *st, int x, int y, bool shift) {
   case H_EV_REMOVE: st->imp->setExcluded(selection(st), true); st->edited = true; break;
   case H_EV_RESTORE: st->imp->setExcluded(selection(st), false); st->edited = true; break;
   case H_EV_MUTE: toggleMute(st); break;
+  case H_EV_PLAY: togglePlay(st); break;
+  case H_TL_PLAY: toggleTimeline(st); break;
+  case H_RULER: {
+    double spp = st->viewLen / (kTlr - kTlx);
+    double lx = (x - st->ox) / st->scale;
+    bool was = st->playTL;
+    if (was) stopPlay(st);
+    st->playhead = std::max(0.0, st->viewStart + (lx - kTlx) * spp);
+    if (was) toggleTimeline(st);
+    break;
+  }
   case H_EV_UP: moveSelectionBy(st, -1); break;
   case H_EV_DOWN: moveSelectionBy(st, 1); break;
   case H_EV_AUTOMATION: st->moveAutomation = !st->moveAutomation; break;
@@ -1904,6 +2113,101 @@ int posAtY(State *st, int y) {
 }
 
 // keys for the open dialog: + / - zoom; arrows, M and Delete act on the selected events
+void stopPlay(State *st) {
+  if ((st->playClip || st->playTL) && st->host && st->host->stopPreview) st->host->stopPreview();
+  if (st->playTL) st->playhead = st->playFrom; // back to where it started, as in REAPER
+  st->playClip = 0;
+  st->playTL = false;
+  st->playPos = -1;
+  if (st->hwnd && st->hwnd != (HWND)1) KillTimer(st->hwnd, kPlayTimer);
+}
+
+// listen to the timeline from the playhead: every imported event, mixed
+void toggleTimeline(State *st) {
+  if (st->playClip || st->playTL) {
+    stopPlay(st);
+    return;
+  }
+  if (!st->host || !st->host->playTimeline) return;
+  Session &s = st->imp->session();
+  ImportOptions &opt = *st->opt;
+  std::vector<MixEvent> evs;
+  double end = 0;
+  for (auto &tr : s.tracks) {
+    if (!tr.import) continue;
+    for (auto &c : tr.clips) {
+      if (c.excluded || c.mute) continue;
+      bool pair = c.sources.size() == 2;
+      for (size_t i = 0; i < c.sources.size() && i < 2; i++) {
+        const Source &src = c.sources[i];
+        if (src.media < 0) continue;
+        const Media &m = s.media[(size_t)src.media];
+        if (m.foundPath.empty() || !fileExists(m.foundPath)) continue;
+        MixEvent e;
+        e.path = m.foundPath;
+        e.pos = c.pos;
+        e.len = c.len;
+        e.offset = c.srcOffset;
+        e.gain = opt.clipGain ? std::max(0.0, c.gain) : 1.0;
+        if (opt.fades) {
+          e.fadeIn = c.fadeIn.len;
+          e.fadeOut = c.fadeOut.len;
+        }
+        e.side = pair ? (int)i + 1 : (c.chanMode == 3 ? 1 : c.chanMode == 4 ? 2 : 0);
+        evs.push_back(e);
+        end = std::max(end, c.pos + c.len);
+      }
+    }
+  }
+  if (st->playhead < 0) st->playhead = s.firstClip();
+  if (evs.empty() || !st->host->playTimeline(evs, st->playhead, end)) {
+    st->tip = "Nothing to play here: the audio isn't found, or REAPER can't read it directly (it is converted on import).";
+    return;
+  }
+  st->playTL = true;
+  st->playFrom = st->playhead;
+  st->playPos = st->playhead;
+  SetTimer(st->hwnd, kPlayTimer, 30, NULL);
+}
+
+// listen to the selected event (both files of an L / R pair)
+void togglePlay(State *st) {
+  if (st->playClip || st->playTL) {
+    stopPlay(st);
+    return;
+  }
+  if (st->sel.empty() || !st->host || !st->host->playPreview) return;
+  Session &s = st->imp->session();
+  Clip *c = st->imp->findClip(*st->sel.begin());
+  if (!c) return;
+  std::vector<PreviewPart> parts;
+  bool pair = c->sources.size() == 2;
+  for (size_t i = 0; i < c->sources.size() && i < 2; i++) {
+    const Source &src = c->sources[i];
+    if (src.media < 0) continue;
+    const Media &m = s.media[(size_t)src.media];
+    if (m.foundPath.empty() || !fileExists(m.foundPath)) continue;
+    PreviewPart p;
+    p.path = m.foundPath;
+    p.offset = c->srcOffset;
+    p.length = c->len;
+    p.gain = std::max(0.0, c->gain);
+    p.side = pair ? (int)i + 1 : (c->chanMode == 3 ? 1 : c->chanMode == 4 ? 2 : 0);
+    parts.push_back(p);
+  }
+  if (parts.empty()) {
+    st->tip = "This event's audio isn't there (or is embedded in the AAF), so it can't be played here.";
+    return;
+  }
+  if (!st->host->playPreview(parts)) {
+    st->tip = "REAPER can't play this file directly. It is converted to Broadcast WAV when you import.";
+    return;
+  }
+  st->playClip = c->id;
+  st->playPos = 0;
+  SetTimer(st->hwnd, kPlayTimer, 30, NULL);
+}
+
 bool handleKey(State *st, int vk) {
   if (!st || st->editKind) return false;
   bool in = vk == VK_ADD || vk == 0xBB /* VK_OEM_PLUS */;
@@ -1914,6 +2218,12 @@ bool handleKey(State *st, int vk) {
 #endif
   if (in || out) {
     zoomBy(st, in ? 0.5 : 2.0, (kTlx + kTlr) / 2);
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    return true;
+  }
+  if (vk == VK_SPACE || vk == 'P' || vk == 'p') { // Space: the timeline, P: the selected event
+    if (vk == VK_SPACE) toggleTimeline(st);
+    else togglePlay(st);
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
   }
@@ -1974,6 +2284,19 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return 0;
   }
   case WM_TIMER:
+    if (st && wp == kPlayTimer) {
+      double p = st->host && st->host->previewPos ? st->host->previewPos() : -1;
+      if (p < 0) stopPlay(st);
+      else {
+        st->playPos = p;
+        if (st->playTL) { // the playhead moves; the view follows when it runs off the right
+          st->playhead = p;
+          if (p > st->viewStart + st->viewLen * 0.95) st->viewStart = p - st->viewLen * 0.05;
+        }
+      }
+      InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
+    }
     if (st && wp == kPeakTimer) {
       if (st->peaks.version() != st->peakSeen) InvalidateRect(hwnd, NULL, FALSE);
       if (!st->peaks.busy() && st->peaks.version() == st->peakSeen) KillTimer(hwnd, kPeakTimer);
@@ -2211,8 +2534,11 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     const Hit *h = hitAt(st, mx, my);
     const char *tip = h ? h->tip : nullptr;
-    if (tip != st->tip) {
+    double lx = (mx - st->ox) / st->scale;
+    int hr = (lx >= kL && lx < kL + kHdr && !st->optsOpen) ? rowAtY(st, my) : -1;
+    if (tip != st->tip || hr != st->hoverRow) {
       st->tip = tip;
+      st->hoverRow = hr;
       InvalidateRect(hwnd, NULL, FALSE);
     }
     return 0;
@@ -2286,6 +2612,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     if (g_open == st) g_open = nullptr;
     KillTimer(hwnd, kPeakTimer);
+    if (st) stopPlay(st);
     if (st) st->peaks.stop();
     if (st) {
       freeFonts(st);
@@ -2328,7 +2655,7 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   sessionRange(imp.session(), &a, &b);
   st.viewStart = a - (b - a) * 0.02;
   st.viewLen = (b - a) * 1.04;
-  st.tcAbs = 36000;
+  st.tcAbs = 0;
   auto &tr = imp.session().tracks;
   if (!tr.empty() && tr[0].clips.size() > 2) {
     st.sel.insert(tr[0].clips[2].id);
@@ -2337,6 +2664,12 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
     st.edited = true;
   }
   if (getenv("OLAAF_SHOWAUTO")) opt.showAutomation = true;
+  if (getenv("OLAAF_OPTS")) st.optsOpen = true;
+  host.playTimeline = [](const std::vector<MixEvent> &, double, double) { return false; };
+  host.playPreview = [](const std::vector<PreviewPart> &) { return false; };
+  st.playhead = imp.session().firstClip() + 9.5;
+  if (getenv("OLAAF_FPS")) host.projectFps = [](bool *d) { *d = false; return 24.0; };
+  if (getenv("OLAAF_HOVER")) st.hoverRow = atoi(getenv("OLAAF_HOVER"));
   if (getenv("OLAAF_DEST")) { // the "put on" popover with a made-up project
     host.projectTracks = []() {
       return std::vector<std::pair<std::string, std::string>>{{"{1}", "DX Boom"}, {"{2}", "DX Lav"}, {"{3}", "MIX"},
@@ -2386,6 +2719,13 @@ int dialogTranslateKey(MSG *msg) {
     return -1;
   }
   if (msg->message == WM_KEYDOWN && msg->wParam == VK_ESCAPE) {
+    if (st->optsOpen || st->folderTrack >= 0 || st->destTrack >= 0 || st->palTrack >= 0 || !st->palFolder.empty()) {
+      st->optsOpen = false; // Esc closes an open panel first
+      st->folderTrack = st->destTrack = st->palTrack = -1;
+      st->palFolder.clear();
+      InvalidateRect(st->hwnd, NULL, FALSE);
+      return 1;
+    }
     SendMessage(st->hwnd, WM_COMMAND, IDCANCEL, 0);
     return 1;
   }

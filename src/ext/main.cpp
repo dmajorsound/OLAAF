@@ -13,8 +13,10 @@
 #include "dialog.h"
 #include "theme.h"
 
+#include <cmath>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -33,6 +35,11 @@
 #define REAPERAPI_WANT_GetMainHwnd
 #define REAPERAPI_WANT_GetTrack
 #define REAPERAPI_WANT_GetUserFileNameForRead
+#define REAPERAPI_WANT_GetThemeColor
+#define REAPERAPI_WANT_PCM_Source_CreateFromFileEx
+#define REAPERAPI_WANT_PlayPreview
+#define REAPERAPI_WANT_StopPreview
+#define REAPERAPI_WANT_TimeMap_curFrameRate
 #define REAPERAPI_WANT_InsertTrackAtIndex
 #define REAPERAPI_WANT_AddProjectMarker2
 #define REAPERAPI_WANT_GetExtState
@@ -147,7 +154,6 @@ static void loadSettings(ImportOptions &o) {
   o.video = getFlag("video", true);
   o.markers = getFlag("markers", true);
   o.folders = getFlag("folders", true);
-  setDarkTheme(getFlag("dark", false));
   const char *d = GetExtState("olAAF", "dest");
   if (d && *d && getFlag("destCustom", false)) o.destDir = d;
 }
@@ -162,12 +168,217 @@ static void saveSettings(const ImportOptions &o, const std::string &defaultDest)
   setFlag("video", o.video);
   setFlag("markers", o.markers);
   setFlag("folders", o.folders);
-  setFlag("dark", darkTheme());
   // remember a destination only when the user chose one (not the project folder)
   bool custom = o.destDir != defaultDest;
   setFlag("destCustom", custom);
   if (custom) SetExtState("olAAF", "dest", o.destDir.c_str(), true);
 }
+
+// the whole timeline as one source: every event read from its file and mixed to stereo
+class TimelineSource : public PCM_source {
+public:
+  struct Ev {
+    int file;
+    MixEvent e;
+  };
+  TimelineSource(const std::vector<MixEvent> &events, double end) : m_end(end) {
+    std::vector<std::string> paths;
+    for (auto &e : events) {
+      int fi = -1;
+      for (size_t k = 0; k < paths.size(); k++)
+        if (paths[k] == e.path) fi = (int)k;
+      if (fi < 0) {
+        PCM_source *src = PCM_Source_CreateFromFileEx(e.path.c_str(), true);
+        if (!src) continue; // REAPER can't read it (it is converted on import)
+        paths.push_back(e.path);
+        m_files.push_back(src);
+        fi = (int)m_files.size() - 1;
+      }
+      m_ev.push_back({fi, e});
+    }
+  }
+  ~TimelineSource() override {
+    for (auto *f : m_files) delete f;
+  }
+  bool empty() const { return m_ev.empty(); }
+  PCM_source *Duplicate() override { return nullptr; }
+  bool IsAvailable() override { return true; }
+  const char *GetType() override { return "OLAAFMIX"; }
+  bool SetFileName(const char *) override { return false; }
+  int GetNumChannels() override { return 2; }
+  double GetSampleRate() override { return 48000.0; }
+  double GetLength() override { return m_end; }
+  int PropertiesWindow(HWND) override { return -1; }
+  void GetPeakInfo(PCM_source_peaktransfer_t *b) override { b->peaks_out = 0; }
+  void SaveState(ProjectStateContext *) override {}
+  int LoadState(const char *, ProjectStateContext *) override { return -1; }
+  void Peaks_Clear(bool) override {}
+  int PeaksBuild_Begin() override { return 0; }
+  int PeaksBuild_Run() override { return 0; }
+  void PeaksBuild_Finish() override {}
+
+  void GetSamples(PCM_source_transfer_t *b) override {
+    int nch = b->nch, len = b->length;
+    double sr = b->samplerate, t0 = b->time_s;
+    if (nch <= 0 || len <= 0 || sr <= 0) return;
+    for (int i = 0; i < nch * len; i++) b->samples[i] = 0;
+    double t1 = t0 + len / sr;
+    for (auto &ev : m_ev) {
+      const MixEvent &e = ev.e;
+      if (e.pos >= t1 || e.pos + e.len <= t0) continue;
+      int a = std::max(0, (int)std::ceil((e.pos - t0) * sr));
+      int z = std::min(len, (int)std::floor((e.pos + e.len - t0) * sr));
+      if (z <= a) continue;
+      PCM_source *src = m_files[(size_t)ev.file];
+      int cn = std::max(1, std::min(8, src->GetNumChannels()));
+      m_buf.resize((size_t)(z - a) * cn);
+      PCM_source_transfer_t tr{};
+      tr.time_s = e.offset + (t0 + a / sr - e.pos);
+      tr.samplerate = sr;
+      tr.nch = cn;
+      tr.length = z - a;
+      tr.samples = m_buf.data();
+      src->GetSamples(&tr);
+      for (int f = 0; f < tr.samples_out && f < z - a; f++) {
+        double t = t0 + (a + f) / sr - e.pos; // into the event
+        double g = e.gain;
+        if (e.fadeIn > 0 && t < e.fadeIn) g *= t / e.fadeIn;
+        if (e.fadeOut > 0 && e.len - t < e.fadeOut) g *= std::max(0.0, (e.len - t) / e.fadeOut);
+        const ReaSample *in = m_buf.data() + (size_t)f * cn;
+        double l, r;
+        if (e.side == 1) l = in[0], r = 0;
+        else if (e.side == 2) l = 0, r = in[0];
+        else if (cn == 1) l = r = in[0];
+        else l = in[0], r = in[1];
+        ReaSample *out = b->samples + (size_t)(a + f) * nch;
+        out[0] += l * g;
+        if (nch > 1) out[1] += r * g;
+      }
+    }
+    b->samples_out = len;
+  }
+
+private:
+  std::vector<PCM_source *> m_files;
+  std::vector<Ev> m_ev;
+  std::vector<ReaSample> m_buf;
+  double m_end;
+};
+
+// ------------------------------------------------------------------ listening (REAPER preview)
+// Up to two files at once (an L / R pair of mono files); stopped at the end of the event.
+namespace preview {
+struct Voice {
+  preview_register_t reg{};
+  bool on = false;
+};
+static Voice g_voice[2];
+static double g_start = 0, g_len = 0;
+static bool g_timeline = false; // pos() reports the timeline position
+
+static void lockInit(preview_register_t &r) {
+#ifdef _WIN32
+  InitializeCriticalSection(&r.cs);
+#else
+  pthread_mutex_init(&r.mutex, NULL);
+#endif
+}
+static void lockFree(preview_register_t &r) {
+#ifdef _WIN32
+  DeleteCriticalSection(&r.cs);
+#else
+  pthread_mutex_destroy(&r.mutex);
+#endif
+}
+
+static void stop() {
+  for (auto &v : g_voice) {
+    if (!v.on) continue;
+    StopPreview(&v.reg);
+    delete v.reg.src;
+    lockFree(v.reg);
+    v.reg = preview_register_t();
+    v.on = false;
+  }
+}
+
+static bool play(const std::vector<PreviewPart> &parts) {
+  stop();
+  int n = 0;
+  for (auto &p : parts) {
+    if (n >= 2) break;
+    PCM_source *src = PCM_Source_CreateFromFileEx(p.path.c_str(), true);
+    if (!src) continue;
+    Voice &v = g_voice[n];
+    lockInit(v.reg);
+    v.reg.src = src;
+    v.reg.m_out_chan = p.side == 1 ? (0 | 1024) : p.side == 2 ? (1 | 1024) : 0;
+    v.reg.curpos = p.offset;
+    v.reg.loop = false;
+    v.reg.volume = p.gain;
+    v.on = true;
+    n++;
+  }
+  if (!n) return false;
+  g_timeline = false;
+  g_start = parts[0].offset;
+  g_len = parts[0].length;
+  for (int i = 0; i < n; i++) PlayPreview(&g_voice[i].reg); // started together
+  return true;
+}
+
+// seconds played, -1 when stopped (at the end of the event it stops by itself)
+static double pos() {
+  if (!g_voice[0].on) return -1;
+  preview_register_t &r = g_voice[0].reg;
+#ifdef _WIN32
+  EnterCriticalSection(&r.cs);
+  double c = r.curpos;
+  LeaveCriticalSection(&r.cs);
+#else
+  pthread_mutex_lock(&r.mutex);
+  double c = r.curpos;
+  pthread_mutex_unlock(&r.mutex);
+#endif
+  if (g_timeline) {
+    if (r.src && c >= r.src->GetLength()) {
+      stop();
+      return -1;
+    }
+    return c;
+  }
+  double played = c - g_start;
+  bool done = played >= g_len;
+  if (r.src) {
+    double srcLen = r.src->GetLength();
+    if (srcLen > 0 && c >= srcLen - 0.001) done = true;
+  }
+  if (done) {
+    stop();
+    return -1;
+  }
+  return std::max(0.0, played);
+}
+static bool playTimeline(const std::vector<MixEvent> &events, double start, double end) {
+  stop();
+  auto *mix = new TimelineSource(events, end);
+  if (mix->empty()) {
+    delete mix;
+    return false;
+  }
+  Voice &v = g_voice[0];
+  lockInit(v.reg);
+  v.reg.src = mix;
+  v.reg.m_out_chan = 0;
+  v.reg.curpos = start;
+  v.reg.loop = false;
+  v.reg.volume = 1.0;
+  v.on = true;
+  g_timeline = true;
+  PlayPreview(&v.reg);
+  return true;
+}
+} // namespace preview
 
 static DialogHost makeHost() {
   DialogHost h;
@@ -194,6 +405,11 @@ static DialogHost makeHost() {
     return true;
   };
   h.editCursor = []() { return GetCursorPosition(); };
+  h.projectFps = [](bool *drop) { return TimeMap_curFrameRate(nullptr, drop); };
+  h.playPreview = [](const std::vector<PreviewPart> &p) { return preview::play(p); };
+  h.stopPreview = []() { preview::stop(); };
+  h.previewPos = []() { return preview::pos(); };
+  h.playTimeline = [](const std::vector<MixEvent> &e, double a, double b) { return preview::playTimeline(e, a, b); };
   h.getSetting = [](const char *key) {
     const char *v = GetExtState("olAAF", key);
     return std::string(v ? v : "");
@@ -218,6 +434,8 @@ static DialogHost makeHost() {
 // step 1: read the AAF and find its media (progress window), then the remembered settings
 static bool loadForImport(const std::string &aaf, ImportOptions &opt, Importer &imp, std::string &err,
                           std::string &defaultDest) {
+  // OLAAF wears the REAPER theme that is loaded right now
+  setThemeFromReaper([](const char *key) { return GetThemeColor(key, 0); });
   bool cancelled = false;
   {
     // newest first: the first folder that has a file wins
