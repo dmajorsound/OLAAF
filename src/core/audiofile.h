@@ -31,6 +31,8 @@ struct PcmInfo {
 bool readWavInfo(const std::string &path, PcmInfo *out);
 bool readAiffInfo(const std::string &path, PcmInfo *out);
 bool readMxfInfo(const std::string &path, PcmInfo *out);
+// Start timecode of a video file (MOV / MP4 timecode track, MXF timecode), in seconds; false if it has none.
+bool videoStartTimecode(const std::string &path, double *seconds);
 
 // Streams PCM from any of the readers above into a little-endian Broadcast WAV.
 // Lossless: samples are copied (byte order fixed for AIFF), nothing is resampled.

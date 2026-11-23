@@ -27,6 +27,9 @@ struct DialogHost {
   std::function<double()> editCursor;
   // tracks of the open REAPER project (GUID, name), for putting AAF tracks on existing ones; empty = none
   std::function<std::vector<std::pair<std::string, std::string>>()> projectTracks;
+  // small settings kept between imports (window size)
+  std::function<std::string(const char *key)> getSetting;
+  std::function<void(const char *key, const std::string &value)> setSetting;
 };
 
 // Shows the dialog. Returns true when the user pressed Import; `opt` and the session's

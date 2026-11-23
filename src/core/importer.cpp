@@ -127,7 +127,11 @@ void Importer::locateMedia(const ImportOptions &opt) {
     if (d.size() <= 3 && d.size() >= 2 && d[1] == ':') return true; // C:\ ...
     const char *home = getenv("HOME");
     if (!home) home = getenv("USERPROFILE");
-    if (home && d == home) return true;
+    if (home) { // the home folder itself and its big standard folders
+      std::string h = home;
+      for (const char *sub : {"", "/Desktop", "/Documents", "/Downloads", "/Music", "/Movies", "/Pictures", "/Videos"})
+        if (d == h + sub || d == h + sub + "/") return true;
+    }
     int depth = 0;
     for (char c : d) depth += c == '/' || c == '\\';
     return depth < 2;

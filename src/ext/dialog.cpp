@@ -22,6 +22,7 @@
 #include "theme.h"
 #include "logo.h"
 #include "../core/util.h"
+#include "../core/audiofile.h"
 
 
 #ifndef _WIN32
@@ -92,8 +93,11 @@ const int W = 1180, H = 800;
 #define kBlue (theme().blue)
 #define kBlueSoft (theme().blueSoft)
 #define kRed (theme().red)
-const COLORREF kWhite = RGB(0xff, 0xff, 0xff);
-const COLORREF kCounterBg = RGB(0x1c, 0x1f, 0x24), kCounterInk = RGB(0x7c, 0xe3, 0x8b);
+const COLORREF kWhiteFixed = RGB(0xff, 0xff, 0xff);
+// text on the blue accent: white in light mode, near-black on the brighter dark-mode blue
+#define kWhite (olaaf::darkTheme() ? RGB(0x12, 0x1a, 0x26) : kWhiteFixed)
+#define kCounterBg kPanel
+#define kCounterInk kBlue
 
 const uint32_t kPalette[10] = {0x5580d4, 0x1F9A8A, 0x4E8F3A, 0xB8962E, 0xD9822B,
                                0xC8423B, 0xB0457E, 0x7A5AC8, 0x6B7480, 0x2B3440};
@@ -232,7 +236,7 @@ void makeFonts(State *st) {
   st->fBody = makeFont(12.5, false, s);
   st->fBold = makeFont(13, true, s);
   st->fSmall = makeFont(11, false, s);
-  st->fSec = makeFont(9.5, true, s);
+  st->fSec = makeFont(11, false, s); // section labels: plain, not spaced capitals
   st->fMono = makeFont(14, true, s, true);
   st->fMonoBig = makeFont(21, false, s, true);
   st->fMonoSmall = makeFont(10.5, false, s, true);
@@ -346,22 +350,21 @@ void button(State *st, const Gfx &g, double l, double t, double r, double b, con
   if (enabled) addHit(st, l, t, r, b, id, idx, tip);
 }
 
-// a toggle in the toolbar; returns its right edge
+// a switch in the toolbar: a plain checkbox with its label; returns its right edge
 double chip(State *st, const Gfx &g, double x, double t, const std::string &label, bool on, bool enabled, int id,
             const char *tip) {
-  double w = g.width(st->fBody, label) + 22;
-  if (w < 30 || w > 260) w = 8 * label.size() + 22;
-  if (!enabled) {
-    g.box(x, t, x + w, t + 26, kLine, kFace);
-    g.text(st->fBody, kMute, label, x, t, x + w, t + 26, DT_CENTER);
-  } else if (on) {
-    g.fill(x, t, x + w, t + 26, kBlue);
-    g.text(st->fBody, kWhite, label, x, t, x + w, t + 26, DT_CENTER);
-  } else {
-    g.box(x, t, x + w, t + 26, kLine, kPanel);
-    g.text(st->fBody, kInk, label, x, t, x + w, t + 26, DT_CENTER);
-  }
-  addHit(st, x, t, x + w, t + 26, enabled ? id : H_NONE, 0, tip);
+  double tw = g.width(st->fBody, label);
+  if (tw < 4 || tw > 220) tw = 7 * label.size();
+  double w = 16 + 7 + tw + 14;
+  double cy = t + 13 - 8;
+  if (!enabled) g.box(x, cy, x + 16, cy + 16, kLine, kFace);
+  else if (on) {
+    g.fill(x, cy, x + 16, cy + 16, kBlue);
+    g.text(st->fCheck, kWhite, "\xe2\x9c\x93", x, cy, x + 16, cy + 16, DT_CENTER);
+  } else
+    g.box(x, cy, x + 16, cy + 16, theme().empty, kPanel);
+  g.text(st->fBody, enabled ? kInk : theme().empty, label, x + 23, t, x + w, t + 26, DT_LEFT);
+  addHit(st, x - 2, t, x + w - 8, t + 26, enabled ? id : H_NONE, 0, tip);
   return x + w;
 }
 
@@ -524,9 +527,9 @@ void paintHeader(State *st, const Gfx &g) {
   g.fill(0, 0, W, kHeadH, kPanel);
   g.fill(0, kHeadH - 1, W, kHeadH, kLine);
   g.fill(16, 13, 46, 43, kBlue);
-  g.fill(23, 21, 33, 24.5, kWhite);
-  g.fill(27, 26.4, 39, 29.9, kWhite);
-  g.fill(23, 31.8, 30, 35.3, kWhite);
+  g.fill(23, 21, 33, 24.5, kWhiteFixed);
+  g.fill(27, 26.4, 39, 29.9, kWhiteFixed);
+  g.fill(23, 31.8, 30, 35.3, kWhiteFixed);
   g.text(st->fTitle, kInk, "OLAAF", 56, 6, 300, 32, DT_LEFT);
   double tw = g.width(st->fTitle, "OLAAF");
   if (tw < 20 || tw > 200) tw = 55;
@@ -546,8 +549,8 @@ void paintHeader(State *st, const Gfx &g) {
   g.text(st->fBold, kInk, name, x, 11, x + nw, 29, DT_LEFT);
   g.text(st->fSmall, kMute, meta, x, 28, x + nw, 44, DT_LEFT);
   x += nw + 16;
-  struct Stat { const char *k; std::string v; } stats[2] = {{"FRAME RATE", fpsText(s)},
-                                                           {"AAF STARTS AT", formatTC(s.firstClip(), s.fps)}};
+  struct Stat { const char *k; std::string v; } stats[2] = {{"Frame rate", fpsText(s)},
+                                                           {"AAF starts at", formatTC(s.firstClip(), s.fps)}};
   for (auto &stt : stats) {
     double w = std::max(g.width(st->fMono, stt.v), g.width(st->fSec, stt.k)) + 26;
     if (w < 60 || w > 220) w = 130;
@@ -564,8 +567,7 @@ void paintToolbar(State *st, const Gfx &g) {
   Session &s = st->imp->session();
   ImportOptions &opt = *st->opt;
   double t = 69, mid = 82;
-  g.text(st->fSec, kMute, "IMPORT", kL, t, kL + 60, t + 26, DT_LEFT);
-  double x = kL + 56;
+  double x = kL;
   std::string mLabel = s.markers.empty() ? "Markers" : strprintf("Markers %zu", s.markers.size());
   bool videoOk = !s.video.empty();
   x = chip(st, g, x, t, "Combine .L / .R", st->merge, true, H_MERGE,
@@ -578,7 +580,7 @@ void paintToolbar(State *st, const Gfx &g) {
   if (videoOk) {
     bool manual = s.video[0].manual;
     x = chip(st, g, x, t, !fileExists(s.video[0].foundPath) ? "Video (missing)" : "Video", opt.video, true, H_VIDEO,
-             manual ? "The picture you chose, on a VIDEO track at the top, where the AAF starts."
+             manual ? "The picture you chose, on a VIDEO track at the top, at its own timecode (or where the AAF starts)."
                     : "The picture the AAF points to, on a VIDEO track at the top.") + 2;
     if (manual) // choose another file
       x = chip(st, g, x, t, "\xe2\x80\xa6", false, true, H_VIDEO_CHOOSE, "Choose another video file.") + 6;
@@ -586,7 +588,7 @@ void paintToolbar(State *st, const Gfx &g) {
       x += 4;
   } else
     x = chip(st, g, x, t, "Video\xe2\x80\xa6", false, true, H_VIDEO_CHOOSE,
-             "This AAF has no video. Choose the picture: it goes on a VIDEO track at the top, where the AAF starts.") + 6;
+             "This AAF has no video. Choose the picture: it goes on a VIDEO track at the top, at its own timecode (or where the AAF starts).") + 6;
   x = chip(st, g, x, t, mLabel, opt.markers && !s.markers.empty(), !s.markers.empty(), H_MARKERS,
            s.markers.empty() ? "This AAF has no markers." : "Markers from the edit become REAPER markers.") + 6;
   chip(st, g, x, t, "Folders", opt.folders, true, H_FOLDERS,
@@ -603,8 +605,8 @@ void paintToolbar(State *st, const Gfx &g) {
   g.text(st->fMonoSmall, kInk, formatTC(s.firstClip() + tcOffset(st), s.fps), r - landW, mid, r, mid + 16, DT_LEFT);
   r -= landW + 8;
   double cw = 176;
-  g.fill(r - cw, mid - 17, r, mid + 17, kCounterBg);
-  if (st->editKind != 1) g.text(st->fMonoBig, kCounterInk, formatTC(st->tcAbs, s.fps), r - cw, mid - 17, r, mid + 17, DT_CENTER);
+  if (st->editKind != 1) g.text(st->fMonoBig, kBlue, formatTC(st->tcAbs, s.fps), r - cw, mid - 17, r, mid + 15, DT_CENTER);
+  for (double dx = r - cw + 8; dx < r - 8; dx += 6) g.fill(dx, mid + 15, dx + 3, mid + 16, theme().empty); // click to type
   st->tcRc = devRect(st, r - cw + 10, mid - 11, r - 10, mid + 11);
   addHit(st, r - cw, mid - 17, r, mid + 17, H_TC_VALUE, 0,
          "Type the offset: HH:MM:SS:FF or just the digits (1000 = 10 seconds). Return applies, Esc cancels.");
@@ -617,7 +619,7 @@ void paintToolbar(State *st, const Gfx &g) {
   g.text(st->fBold, st->tcMinus ? kWhite : kInk, "\xe2\x88\x92", sb + 26, mid - 16, sb + 52, mid + 16, DT_CENTER);
   addHit(st, sb, mid - 16, sb + 26, mid + 16, H_TC_PLUS, 0, "Add the offset to the AAF's timecode.");
   addHit(st, sb + 26, mid - 16, sb + 52, mid + 16, H_TC_MINUS, 0, "Subtract the offset from the AAF's timecode.");
-  g.text(st->fSec, kMute, "OFFSET", sb - 56, mid - 13, sb - 6, mid + 13, DT_RIGHT);
+  g.text(st->fSec, kMute, "Offset", sb - 56, mid - 13, sb - 6, mid + 13, DT_RIGHT);
 }
 
 // volume (dB scale, -60 ... +12) and pan lines over a lane, as they would be imported
@@ -722,7 +724,7 @@ void paintArrange(State *st, const Gfx &g) {
       if (!m.name.empty()) {
         double w = std::min(90.0, g.width(st->fClip, m.name) + 8);
         g.fill(px, ry + 17, std::min(px + w, kTlr), ry + 29, mc);
-        g.text(st->fClip, kWhite, m.name, px + 3, ry + 17, std::min(px + w, kTlr), ry + 29, DT_LEFT);
+        g.text(st->fClip, kWhiteFixed, m.name, px + 3, ry + 17, std::min(px + w, kTlr), ry + 29, DT_LEFT);
       }
     }
 
@@ -882,7 +884,7 @@ void paintArrange(State *st, const Gfx &g) {
         if (opt.fades && fo > 2) g.line(std::max(x0, x1 - fo), y0, x1, y1, kInk);
       }
       if (x1 - x0 > 30 && !c.name.empty())
-        g.text(st->fClip, (c.excluded || c.mute || !on) ? kMute : kWhite, c.mute ? "M  " + c.name : c.name, x0 + 4, y0,
+        g.text(st->fClip, (c.excluded || c.mute || !on) ? kMute : kWhiteFixed, c.mute ? "M  " + c.name : c.name, x0 + 4, y0,
                x1 - 3, y1, DT_LEFT);
       ClipHit h;
       h.r = devRect(st, x0, y0, x1, y1);
@@ -907,7 +909,7 @@ void paintArrange(State *st, const Gfx &g) {
     double my = (st->dragMouseY - st->oy) / st->scale;
     double w = std::min(200.0, g.width(st->fSmall, what) + 16);
     g.fill(kL + 60, my + 8, kL + 60 + w, my + 28, kBlue);
-    g.text(st->fSmall, kWhite, what, kL + 68, my + 8, kL + 60 + w - 4, my + 28, DT_LEFT);
+    g.text(st->fSmall, kWhiteFixed, what, kL + 68, my + 8, kL + 60 + w - 4, my + 28, DT_LEFT);
   }
 
   // vertical scrollbar
@@ -941,7 +943,7 @@ void paintEventBar(State *st, const Gfx &g) {
   Session &s = st->imp->session();
   double t = kEvT, b = kEvB, mid = (t + b) / 2;
   g.box(kL, t, kR, b, kLine, kPanel);
-  g.text(st->fSec, kMute, "EVENT", kL + 12, t, kL + 60, b, DT_LEFT);
+  g.text(st->fSec, kMute, "Event", kL + 12, t, kL + 60, b, DT_LEFT);
   std::vector<int> ids(st->sel.begin(), st->sel.end());
   double right = kR - 10;
   if (!ids.empty()) {
@@ -1006,7 +1008,7 @@ void paintMediaBar(State *st, const Gfx &g) {
   Session &s = st->imp->session();
   ImportOptions &opt = *st->opt;
   double t = kMdT, b = kMdB, mid = (t + b) / 2;
-  g.text(st->fSec, kMute, "MEDIA", kL, t, kL + 50, b, DT_LEFT);
+  g.text(st->fSec, kMute, "Media", kL, t, kL + 50, b, DT_LEFT);
   int total = 0, ok = 0;
   std::set<int> used;
   for (auto &tr : s.tracks)
@@ -1036,20 +1038,11 @@ void paintMediaBar(State *st, const Gfx &g) {
            "Choose the folder that holds the media. All its subfolders are searched, and OLAAF remembers it for the next import.");
     x += 86;
   }
-  // copy / leave
-  const char *a = "Copy into subfolder", *bb = "Leave in place";
-  double wa = g.width(st->fBody, a) + 20, wb = g.width(st->fBody, bb) + 20;
-  if (wa < 60 || wa > 220) wa = 140;
-  if (wb < 60 || wb > 220) wb = 110;
-  g.box(x, mid - 15, x + wa + wb, mid + 15, kLine, kPanel);
-  g.fill(opt.copyToSubdir ? x + 1 : x + wa, mid - 14, opt.copyToSubdir ? x + wa : x + wa + wb - 1, mid + 14, kBlue);
-  g.text(st->fBody, opt.copyToSubdir ? kWhite : kInk, a, x, mid - 15, x + wa, mid + 15, DT_CENTER);
-  g.text(st->fBody, opt.copyToSubdir ? kInk : kWhite, bb, x + wa, mid - 15, x + wa + wb, mid + 15, DT_CENTER);
-  addHit(st, x, mid - 15, x + wa, mid + 15, H_COPY_YES, 0,
-         "WAV files are copied into the audio subfolder. MXF, AIFF and embedded audio always become Broadcast WAV there.");
-  addHit(st, x + wa, mid - 15, x + wa + wb, mid + 15, H_COPY_NO, 0,
-         "WAV files stay where they are. Only MXF, AIFF and embedded audio are written (as Broadcast WAV) into the subfolder.");
-  x += wa + wb + 8;
+  // copy: one plain checkbox, off by default
+  x = chip(st, g, x, mid - 13, "Copy audio into a subfolder", opt.copyToSubdir, true, opt.copyToSubdir ? H_COPY_NO : H_COPY_YES,
+           "On: WAV files are copied into the audio subfolder. Off: they stay where they are. MXF, AIFF and embedded audio "
+           "always become Broadcast WAV in the subfolder.");
+  x += 8;
 
   // where it goes
   double cancelW = 84, buildW = 190;
@@ -1058,7 +1051,7 @@ void paintMediaBar(State *st, const Gfx &g) {
   std::string dest = opt.destDir;
   if (!dest.empty() && dest.back() != '/' && dest.back() != '\\') dest += "/";
   g.box(x, mid - 18, pr, mid + 18, kLine, kPanel);
-  g.text(st->fSec, kMute, opt.copyToSubdir ? "AUDIO GOES TO" : "CONVERTED AUDIO GOES TO", x + 8, mid - 16, pr - 8, mid - 2, DT_LEFT);
+  g.text(st->fSec, kMute, opt.copyToSubdir ? "Audio goes to" : "Converted audio goes to", x + 8, mid - 16, pr - 8, mid - 2, DT_LEFT);
   // the folder it goes into, shortened from the left so the subfolder name always shows
   size_t maxc = (size_t)std::max(24.0, (pr - x - 16) / 6.2);
   std::string subShown = sub.size() > maxc / 2 ? utf8Head(sub, maxc / 2 - 1) + "\xe2\x80\xa6" : sub;
@@ -1126,7 +1119,7 @@ void paintFolderPopover(State *st, const Gfx &g) {
   folderPopoverRect(st, &px, &py, &ph);
   g.box(px, py, px + pw, py + ph, kLine, kPanel);
   addHit(st, px, py, px + pw, py + ph, H_FOLD_POP, 0, nullptr);
-  g.text(st->fSec, kMute, "FOLDER \xc2\xb7 " + tr.name, px + 10, py + 4, px + pw - 10, py + 26, DT_LEFT);
+  g.text(st->fSec, kMute, "Folder \xc2\xb7 " + tr.name, px + 10, py + 4, px + pw - 10, py + 26, DT_LEFT);
   double y = py + 30;
   for (int i = 0; i < n; i++, y += rowH) {
     const Folder &f = s.folders[(size_t)i];
@@ -1167,7 +1160,7 @@ void paintDestPopover(State *st, const Gfx &g) {
   py = std::max(py, 60.0);
   g.box(px, py, px + kDpW, py + ph, kLine, kPanel);
   addHit(st, px, py, px + kDpW, py + ph, H_DEST_POP, 0, nullptr);
-  g.text(st->fSec, kMute, "PUT ON \xc2\xb7 " + tr.name, px + 10, py + 4, px + kDpW - 10, py + 26, DT_LEFT);
+  g.text(st->fSec, kMute, "Put on \xc2\xb7 " + tr.name, px + 10, py + 4, px + kDpW - 10, py + 26, DT_LEFT);
   double y = py + 30;
   bool isNew = tr.target.empty();
   if (isNew) g.fill(px + 1, y, px + kDpW - 1, y + kDpRowH, kBlueSoft);
@@ -1228,7 +1221,7 @@ void paintPalette(State *st, const Gfx &g) {
   if (py + ph > H - 20) py = st->palY0 - 4 - ph;
   g.box(px, py, px + pw, py + ph, kLine, kPanel);
   addHit(st, px, py, px + pw, py + ph, H_PAL_BG, 0, nullptr);
-  g.text(st->fSec, kMute, "COLOR \xc2\xb7 " + title, px + 10, py + 4, px + 170, py + 24, DT_LEFT);
+  g.text(st->fSec, kMute, "Color \xc2\xb7 " + title, px + 10, py + 4, px + 170, py + 24, DT_LEFT);
   for (int i = 0; i < 10; i++) {
     double sx = px + 10 + (i % 5) * 32, sy = py + 28 + (i / 5) * 30;
     g.box(sx, sy, sx + 24, sy + 24, cur == kPalette[i] ? kInk : RGB(0x99, 0x99, 0x99), rgbToRef(kPalette[i]));
@@ -1697,7 +1690,14 @@ void click(State *st, int x, int y, bool shift) {
       VideoClip v;
       v.foundPath = path;
       v.name = baseName(path);
-      v.pos = s.firstClip(); // where the AAF starts ("AAF STARTS AT")
+      // the file's own timecode (MOV / MP4 timecode track, MXF) when it has one, otherwise where the AAF starts
+      double tc = 0;
+      bool hasTc = videoStartTimecode(path, &tc) && (tc > 0 || s.firstClip() < 1.0);
+      v.pos = hasTc ? tc : s.firstClip();
+      static std::string tipBuf;
+      tipBuf = hasTc ? "Video placed at its own timecode " + formatTC(tc, s.fps) + "."
+                     : "The video has no timecode: placed where the AAF starts, " + formatTC(v.pos, s.fps) + ".";
+      st->tip = tipBuf.c_str();
       v.manual = true;
       s.video.clear();
       s.video.push_back(v);
@@ -1814,6 +1814,17 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                    std::max((int)pr.top, (int)(pr.top + pr.bottom - h) / 2), w, h, SWP_NOZORDER);
 #endif
     olSetText(hwnd, "OLAAF \xe2\x80\x93 AAF Import for Reaper");
+    // the size it had last time (whole window, as the system measures it), centered on REAPER
+    if (st->host && st->host->getSetting) {
+      int w = atoi(st->host->getSetting("winW").c_str()), h = atoi(st->host->getSetting("winH").c_str());
+      if (w >= 400 && h >= 300 && w < 10000 && h < 10000) {
+        RECT pr = {0, 0, 0, 0};
+        HWND par = GetParent(hwnd);
+        if (par) GetWindowRect(par, &pr);
+        int x = par ? (int)(pr.left + pr.right - w) / 2 : 0, y = par ? (int)(pr.top + pr.bottom - h) / 2 : 0;
+        SetWindowPos(hwnd, NULL, std::max(0, x), std::max(0, y), w, h, SWP_NOZORDER);
+      }
+    }
     relayout(st);
     double a, b;
     sessionRange(st->imp->session(), &a, &b);
@@ -2121,6 +2132,13 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (st) closeDialog(st, false);
     return 0;
   case WM_DESTROY:
+    if (st && st->host && st->host->setSetting) { // remember the size for next time
+      RECT wr;
+      if (GetWindowRect(hwnd, &wr) && wr.right - wr.left >= 400) {
+        st->host->setSetting("winW", std::to_string(wr.right - wr.left));
+        st->host->setSetting("winH", std::to_string(std::abs(wr.bottom - wr.top)));
+      }
+    }
     if (g_open == st) g_open = nullptr;
     if (st) {
       freeFonts(st);

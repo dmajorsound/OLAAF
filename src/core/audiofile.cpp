@@ -1,6 +1,7 @@
 // olAAF - AAF import for REAPER
 // Copyright (C) 2026 dmajorsound. Licensed under the GNU GPL v2 or later.
 
+#include <functional>
 #include "audiofile.h"
 #include "util.h"
 
@@ -292,6 +293,132 @@ bool readMxfInfo(const std::string &path, PcmInfo *o) {
   // tape timecode + where this file starts on the tape (SourceClip edit rate = audio rate for sound tracks)
   o->timeReference = (tcBase > 0 ? tcFrames * o->rate / tcBase : 0) + srcStart;
   return true;
+}
+
+// ---------------------------------------------------------------- video timecode
+
+// MXF: the start timecode of the file (TimecodeComponent in the header metadata), in seconds.
+static bool mxfStartTimecode(const std::string &path, double *seconds) {
+  FilePtr f(openUtf8(path, "rb"));
+  if (!f) return false;
+  int64_t tcFrames = -1;
+  int tcBase = 0;
+  Klv k;
+  int sets = 0;
+  while (readKlv(f.get(), &k)) {
+    // the essence begins: the header metadata is behind us
+    if (k.key[4] == 0x01 && k.key[5] == 0x02 && k.key[8] == 0x0d && k.key[9] == 0x01 && k.key[10] == 0x03) break;
+    if (k.key[4] == 0x02 && k.key[5] == 0x53 && k.key[14] == 0x14 && k.len < (1u << 16)) { // TimecodeComponent
+      std::vector<unsigned char> d((size_t)k.len);
+      if (fread(d.data(), 1, d.size(), f.get()) != d.size()) break;
+      for (size_t p = 0; p + 4 <= d.size();) {
+        uint16_t tag = be16(&d[p]), ln = be16(&d[p + 2]);
+        if (p + 4 + ln > d.size()) break;
+        const unsigned char *v = &d[p + 4];
+        if (tag == 0x1501 && ln == 8) tcFrames = std::max<int64_t>(tcFrames, (int64_t)be64(v));
+        if (tag == 0x1502 && ln == 2) tcBase = be16(v);
+        p += 4 + ln;
+      }
+      continue;
+    }
+    if (++sets > 200000) break;
+    if (fseek64(f.get(), (int64_t)(k.valueOffset + k.len), SEEK_SET)) break;
+  }
+  if (tcFrames < 0 || tcBase <= 0) return false;
+  *seconds = (double)tcFrames / tcBase;
+  return true;
+}
+
+// QuickTime / MP4: the first sample of the timecode ('tmcd') track, in seconds.
+static bool movStartTimecode(const std::string &path, double *seconds) {
+  FilePtr f(openUtf8(path, "rb"));
+  if (!f) return false;
+  fseek64(f.get(), 0, SEEK_END);
+  int64_t fileSize = ftell64(f.get());
+  // find moov at the top level
+  int64_t pos = 0, moovPos = -1, moovSize = 0;
+  while (pos + 8 <= fileSize) {
+    unsigned char h[16];
+    fseek64(f.get(), pos, SEEK_SET);
+    if (fread(h, 1, 8, f.get()) != 8) break;
+    uint64_t sz = be32(h);
+    int hdr = 8;
+    if (sz == 1) {
+      if (fread(h + 8, 1, 8, f.get()) != 8) break;
+      sz = be64(h + 8);
+      hdr = 16;
+    } else if (sz == 0)
+      sz = (uint64_t)(fileSize - pos);
+    if (sz < (uint64_t)hdr) break;
+    if (!memcmp(h + 4, "moov", 4)) {
+      moovPos = pos + hdr;
+      moovSize = (int64_t)sz - hdr;
+      break;
+    }
+    pos += (int64_t)sz;
+  }
+  if (moovPos < 0 || moovSize <= 0 || moovSize > (64 << 20)) return false;
+  std::vector<unsigned char> m((size_t)moovSize);
+  fseek64(f.get(), moovPos, SEEK_SET);
+  if (fread(m.data(), 1, m.size(), f.get()) != m.size()) return false;
+  // walk boxes inside [a, b); call fn(type, start, end) for each
+  std::function<void(size_t, size_t, const std::function<void(const char *, size_t, size_t)> &)> each =
+      [&](size_t a, size_t b, const std::function<void(const char *, size_t, size_t)> &fn) {
+        while (a + 8 <= b) {
+          uint64_t sz = be32(&m[a]);
+          size_t hdr = 8;
+          if (sz == 1 && a + 16 <= b) {
+            sz = be64(&m[a + 8]);
+            hdr = 16;
+          }
+          if (sz < hdr || a + sz > b) break;
+          fn((const char *)&m[a + 4], a + hdr, a + (size_t)sz);
+          a += (size_t)sz;
+        }
+      };
+  bool found = false;
+  each(0, m.size(), [&](const char *t, size_t a, size_t b) {
+    if (found || memcmp(t, "trak", 4)) return;
+    bool isTc = false;
+    uint32_t timescale = 0, frameDur = 0, chunkOff = 0;
+    uint64_t chunkOff64 = 0;
+    int nFrames = 0;
+    std::function<void(const char *, size_t, size_t)> walk = [&](const char *tt, size_t aa, size_t bb) {
+      if (!memcmp(tt, "mdia", 4) || !memcmp(tt, "minf", 4) || !memcmp(tt, "stbl", 4)) each(aa, bb, walk);
+      else if (!memcmp(tt, "hdlr", 4) && aa + 12 <= bb) isTc = isTc || !memcmp(&m[aa + 8], "tmcd", 4);
+      else if (!memcmp(tt, "stsd", 4) && aa + 8 + 16 + 17 <= bb) {
+        size_t e = aa + 8; // first sample description
+        if (!memcmp(&m[e + 4], "tmcd", 4)) {
+          size_t d = e + 8 + 8; // after size, format, 6 reserved + 2 data reference index
+          timescale = be32(&m[d + 8]);
+          frameDur = be32(&m[d + 12]);
+          nFrames = m[d + 16];
+        }
+      } else if (!memcmp(tt, "stco", 4) && aa + 12 <= bb && be32(&m[aa + 4]) > 0)
+        chunkOff = be32(&m[aa + 8]);
+      else if (!memcmp(tt, "co64", 4) && aa + 16 <= bb && be32(&m[aa + 4]) > 0)
+        chunkOff64 = be64(&m[aa + 8]);
+    };
+    each(a, b, walk);
+    if (!isTc || !timescale || !frameDur) return;
+    uint64_t off = chunkOff64 ? chunkOff64 : chunkOff;
+    unsigned char fr[4];
+    fseek64(f.get(), (int64_t)off, SEEK_SET);
+    if (fread(fr, 1, 4, f.get()) != 4) return;
+    double frame = be32(fr);
+    *seconds = frame * frameDur / timescale;
+    (void)nFrames;
+    found = true;
+  });
+  return found;
+}
+
+bool videoStartTimecode(const std::string &path, double *seconds) {
+  std::string e = path.size() > 4 ? path.substr(path.size() - 4) : path;
+  for (auto &c : e) c = (char)tolower((unsigned char)c);
+  if (e == ".mxf") return mxfStartTimecode(path, seconds);
+  if (e == ".mov" || e == ".mp4" || e == ".m4v") return movStartTimecode(path, seconds);
+  return false;
 }
 
 // ---------------------------------------------------------------- BWF writer

@@ -194,6 +194,11 @@ static DialogHost makeHost() {
     return true;
   };
   h.editCursor = []() { return GetCursorPosition(); };
+  h.getSetting = [](const char *key) {
+    const char *v = GetExtState("olAAF", key);
+    return std::string(v ? v : "");
+  };
+  h.setSetting = [](const char *key, const std::string &v) { SetExtState("olAAF", key, v.c_str(), true); };
   h.projectTracks = []() {
     std::vector<std::pair<std::string, std::string>> out;
     int n = CountTracks(nullptr);
