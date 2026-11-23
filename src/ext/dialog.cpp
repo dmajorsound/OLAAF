@@ -1084,7 +1084,7 @@ void paintMediaBar(State *st, const Gfx &g) {
 void paintFooter(State *st, const Gfx &g) {
   g.fill(kL, kFootY, kR, kFootY + 1, kLine);
   double t = kFootY + 3, b = H - 6;
-  const char *v = "V 0.5.2 beta developed with AI assistance";
+  const char *v = "V 0.6 beta developed with AI assistance";
   double vw = g.width(st->fTag, v) + 10;
   if (vw < 100 || vw > 400) vw = 240;
   g.box(kR - 22, t + 2, kR, b - 2, kLine, kPanel);
