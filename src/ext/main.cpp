@@ -56,6 +56,13 @@
 #define REAPERAPI_WANT_GetSetMediaTrackInfo_String
 #define REAPERAPI_WANT_AddMediaItemToTrack
 #define REAPERAPI_WANT_SetItemStateChunk
+#define REAPERAPI_WANT_GetTrackEnvelopeByChunkName
+#define REAPERAPI_WANT_DeleteEnvelopePointRange
+#define REAPERAPI_WANT_InsertEnvelopePoint
+#define REAPERAPI_WANT_Envelope_SortPoints
+#define REAPERAPI_WANT_ScaleToEnvelopeMode
+#define REAPERAPI_WANT_GetEnvelopeScalingMode
+#define REAPERAPI_WANT_GetTrackStateChunk
 #include "reaper_plugin.h"
 #include "reaper_plugin_functions.h"
 #undef min
@@ -264,6 +271,36 @@ static bool runImport(const std::string &aaf, ImportOptions &opt, Importer &imp,
   return finishImport(imp, opt, rep, merged, err);
 }
 
+// "Overwrite envelopes": the AAF's volume / pan automation replaces what the existing track has over the
+// AAF's time range; outside it the track's own points stay. A track without such an envelope gets one.
+static void overwriteOne(MediaTrack *tr, const char *chunkName, const std::vector<GainPoint> &pts,
+                         const std::string &block, double t0, double t1, bool pan) {
+  if (pts.empty()) return;
+  TrackEnvelope *env = GetTrackEnvelopeByChunkName(tr, chunkName);
+  if (env) {
+    DeleteEnvelopePointRange(env, t0 - 0.001, t1 + 0.001);
+    int mode = GetEnvelopeScalingMode(env);
+    bool noSort = true;
+    for (auto &p : pts) InsertEnvelopePoint(env, p.time, pan ? p.gain : ScaleToEnvelopeMode(mode, p.gain), 0, 0, false, &noSort);
+    Envelope_SortPoints(env);
+    return;
+  }
+  // no such envelope yet: put the block into the track's state chunk
+  std::vector<char> buf(8 << 20);
+  if (!GetTrackStateChunk(tr, buf.data(), (int)buf.size(), false)) return;
+  std::string c = buf.data();
+  size_t at = c.find("\n<ITEM");
+  if (at == std::string::npos) at = c.rfind("\n>");
+  if (at == std::string::npos) return;
+  c.insert(at + 1, block);
+  SetTrackStateChunk(tr, c.c_str(), false);
+}
+
+static void overwriteEnvelopes(MediaTrack *tr, const TrackChunk &tc) {
+  overwriteOne(tr, "<VOLENV2", tc.volEnv, tc.volEnvChunk, tc.rangeStart, tc.rangeEnd, false);
+  overwriteOne(tr, "<PANENV2", tc.panEnv, tc.panEnvChunk, tc.rangeStart, tc.rangeEnd, true);
+}
+
 static void insertTracks(Importer &imp, ImportOptions &opt, const MediaReport &rep, int merged) {
   Undo_BeginBlock2(nullptr);
   PreventUIRefresh(1);
@@ -279,6 +316,7 @@ static void insertTracks(Importer &imp, ImportOptions &opt, const MediaReport &r
         if (tr && GetSetMediaTrackInfo_String(tr, "GUID", guid, false) && chunks[i].targetGuid == guid) dst = tr;
       }
       if (dst) {
+        overwriteEnvelopes(dst, chunks[i]);
         for (auto &it : chunks[i].items) {
           MediaItem *mi = AddMediaItemToTrack(dst);
           if (mi) SetItemStateChunk(mi, it.c_str(), false);

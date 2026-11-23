@@ -756,18 +756,23 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
     c += "VOLPAN " + num(t.volume) + " " + num(t.pan) + " -1 -1 1\n";
     int nch = t.channels <= 2 ? 2 : (t.channels + 1) / 2 * 2;
     c += strprintf("NCHAN %d\n", nch);
+    // a track put on an existing REAPER track keeps that track's envelopes, unless they are overwritten
+    bool matched = !t.target.empty();
+    bool envToTrack = !matched || opt.overwriteEnvelopes;
     std::vector<GainPoint> vol = trackVolumeEnvelope(t, opt);
+    std::string volChunk, panChunk;
     if (!vol.empty()) {
-      c += "<VOLENV2\nACT 1 -1\nVIS 1 1 1\nLANEHEIGHT 0 0\nARM 0\nDEFSHAPE 0 -1 -1\n";
-      for (auto &pt : vol) c += "PT " + num(pt.time + opt.tcOffset) + " " + num(pt.gain) + " 0\n";
-      c += ">\n";
+      volChunk = "<VOLENV2\nACT 1 -1\nVIS 1 1 1\nLANEHEIGHT 0 0\nARM 0\nDEFSHAPE 0 -1 -1\n";
+      for (auto &pt : vol) volChunk += "PT " + num(pt.time + opt.tcOffset) + " " + num(pt.gain) + " 0\n";
+      volChunk += ">\n";
     }
     if (!t.panEnv.empty()) {
       // REAPER pan envelopes run the other way round: +1 = left, -1 = right
-      c += "<PANENV2\nACT 1 -1\nVIS 1 1 1\nLANEHEIGHT 0 0\nARM 0\nDEFSHAPE 0 -1 -1\n";
-      for (auto &pt : t.panEnv) c += "PT " + num(pt.time + opt.tcOffset) + " " + num(-pt.gain) + " 0\n";
-      c += ">\n";
+      panChunk = "<PANENV2\nACT 1 -1\nVIS 1 1 1\nLANEHEIGHT 0 0\nARM 0\nDEFSHAPE 0 -1 -1\n";
+      for (auto &pt : t.panEnv) panChunk += "PT " + num(pt.time + opt.tcOffset) + " " + num(-pt.gain) + " 0\n";
+      panChunk += ">\n";
     }
+    c += volChunk + panChunk;
     std::vector<std::string> items;
     for (auto &k : t.clips) {
       if (k.excluded) continue;
@@ -781,7 +786,8 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
       c += strprintf("FADEOUT %d %s 0\n", opt.fades ? k.fadeOut.shape : 0, num(fo).c_str());
       if (k.mute) c += "MUTE 1 0\n";
       c += "NAME " + q(k.name) + "\n";
-      bool onItem = opt.clipGain && !opt.clipGainToTrack; // clip gain on the item, or folded into the track
+      // clip gain on the item, or folded into the track envelope (not when that envelope is not written)
+      bool onItem = opt.clipGain && (!opt.clipGainToTrack || !envToTrack);
       c += "VOLPAN " + num(onItem ? k.gain : 1.0) + " 0 1 -1\n";
       c += "SOFFS " + num(k.srcOffset) + "\n";
       if (k.chanMode) c += strprintf("CHANMODE %d\n", k.chanMode);
@@ -816,6 +822,23 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
     tc.color = tcol;
     tc.targetGuid = t.target;
     tc.items = std::move(items);
+    if (matched && opt.overwriteEnvelopes) {
+      for (auto &pt : vol) tc.volEnv.push_back({pt.time + opt.tcOffset, pt.gain});
+      for (auto &pt : t.panEnv) tc.panEnv.push_back({pt.time + opt.tcOffset, -pt.gain});
+      tc.volEnvChunk = volChunk;
+      tc.panEnvChunk = panChunk;
+      bool first = true;
+      for (auto &k : t.clips) {
+        if (k.excluded) continue;
+        if (first || k.pos < tc.rangeStart) tc.rangeStart = k.pos;
+        if (first || k.pos + k.len > tc.rangeEnd) tc.rangeEnd = k.pos + k.len;
+        first = false;
+      }
+      for (auto &pt : vol) tc.rangeStart = std::min(tc.rangeStart, pt.time), tc.rangeEnd = std::max(tc.rangeEnd, pt.time);
+      for (auto &pt : t.panEnv) tc.rangeStart = std::min(tc.rangeStart, pt.time), tc.rangeEnd = std::max(tc.rangeEnd, pt.time);
+      tc.rangeStart += opt.tcOffset;
+      tc.rangeEnd += opt.tcOffset;
+    }
     out.push_back(tc);
   }
   return out;

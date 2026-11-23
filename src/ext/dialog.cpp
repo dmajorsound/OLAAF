@@ -123,7 +123,7 @@ enum HitId {
   H_CANCEL, H_IMPORT, H_TC_PLUS, H_TC_MINUS, H_TC_VALUE, H_TC_CURSOR, H_PAL, H_PAL_CUSTOM, H_PAL_NONE,
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
-  H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP
+  H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE
 };
 
 struct Hit {
@@ -829,7 +829,8 @@ void paintArrange(State *st, const Gfx &g) {
     double nx = hx + 48;
     if (!tr.target.empty()) {
       g.text(st->fBody, nameC, tr.name, nx, y + 1, nameR, y + 18, DT_LEFT);
-      g.text(st->fClip, kBlue, "\xe2\x86\x92 " + tr.targetName, nx, y + 16, nameR, y + kRowH - 2, DT_LEFT);
+      g.text(st->fClip, kBlue, "\xe2\x86\x92 " + tr.targetName + (opt.overwriteEnvelopes ? "  (envelopes overwritten)" : ""), nx,
+             y + 16, nameR, y + kRowH - 2, DT_LEFT);
     } else if (!tr.mergedFrom.empty()) {
       g.text(st->fBody, nameC, tr.name, nx, y + 1, nameR, y + 18, DT_LEFT);
       g.text(st->fClip, kMute, tr.mergedFrom, nx, y + 16, nameR, y + kRowH - 2, DT_LEFT);
@@ -1160,7 +1161,7 @@ void paintDestPopover(State *st, const Gfx &g) {
   Track &tr = s.tracks[(size_t)st->destTrack];
   int n = (int)st->projTracks.size();
   int shown = std::min(n, kDpRows);
-  double ph = 30 + 2 * kDpRowH + 9 + std::max(1, shown) * kDpRowH + 8;
+  double ph = 30 + 3 * kDpRowH + 9 + std::max(1, shown) * kDpRowH + 8;
   double px = std::min(st->dpX, (double)W - 16 - kDpW), py = st->dpY;
   if (py + ph > H - 20) py = st->dpY0 - ph;
   py = std::max(py, 60.0);
@@ -1176,6 +1177,11 @@ void paintDestPopover(State *st, const Gfx &g) {
   g.text(st->fBody, kBlue, "Match all tracks by name", px + 12, y, px + kDpW - 10, y + kDpRowH, DT_LEFT);
   addHit(st, px + 1, y, px + kDpW - 1, y + kDpRowH, H_DEST_MATCHALL, 0,
          "Every AAF track goes onto the REAPER track with the same name; the others stay new tracks.");
+  y += kDpRowH;
+  checkbox(st, g, px + 12, y + 4, st->opt->overwriteEnvelopes, H_DEST_OVERWRITE, 0,
+           "On: the AAF's volume and pan automation replaces the envelopes of the existing tracks where the AAF has events. "
+           "Off: their envelopes stay untouched.");
+  g.text(st->fBody, kInk, "Overwrite track envelopes", px + 36, y, px + kDpW - 10, y + kDpRowH, DT_LEFT);
   y += kDpRowH + 4;
   g.fill(px + 8, y, px + kDpW - 8, y + 1, kLine);
   y += 5;
@@ -1192,8 +1198,8 @@ void paintDestPopover(State *st, const Gfx &g) {
     addHit(st, px + 1, y, px + kDpW - 1, y + kDpRowH, H_DEST_PICK, k, "Put the events on this REAPER track.");
   }
   if (n > shown) // a thin bar: where in the list we are (mouse wheel scrolls)
-    g.fill(px + kDpW - 6, py + 30 + 2 * kDpRowH + 9 + (double)st->destScroll / n * shown * kDpRowH, px + kDpW - 3,
-           py + 30 + 2 * kDpRowH + 9 + (double)(st->destScroll + shown) / n * shown * kDpRowH, theme().thumb);
+    g.fill(px + kDpW - 6, py + 30 + 3 * kDpRowH + 9 + (double)st->destScroll / n * shown * kDpRowH, px + kDpW - 3,
+           py + 30 + 3 * kDpRowH + 9 + (double)(st->destScroll + shown) / n * shown * kDpRowH, theme().thumb);
 }
 
 void paintPalette(State *st, const Gfx &g) {
@@ -1464,7 +1470,7 @@ void click(State *st, int x, int y, bool shift) {
     InvalidateRect(st->hwnd, NULL, FALSE);
     if (id == H_LANES || id == H_NONE || id == H_FOLD_POP) return;
   }
-  bool inDest = id == H_DEST_NEW || id == H_DEST_MATCHALL || id == H_DEST_PICK || id == H_DEST_POP;
+  bool inDest = id == H_DEST_NEW || id == H_DEST_MATCHALL || id == H_DEST_PICK || id == H_DEST_POP || id == H_DEST_OVERWRITE;
   if (st->destTrack >= 0 && !inDest && id != H_TRACK_DEST) {
     st->destTrack = -1;
     InvalidateRect(st->hwnd, NULL, FALSE);
@@ -1554,6 +1560,7 @@ void click(State *st, int x, int y, bool shift) {
     break;
   }
   case H_DEST_POP: return;
+  case H_DEST_OVERWRITE: opt.overwriteEnvelopes = !opt.overwriteEnvelopes; break;
   case H_TRACK_FOLDERMENU: {
     bool same = st->folderTrack == h->idx;
     st->folderTrack = same ? -1 : h->idx;

@@ -19,6 +19,8 @@ struct ImportOptions {
   bool fades = true;            // import fades and crossfades
   bool clipGain = true;         // import clip gain as take volume
   bool clipGainToTrack = false; // ... or fold clip gain and its automation into the track volume envelope
+  bool overwriteEnvelopes = false; // tracks put on existing REAPER tracks: replace their volume / pan
+                                   // envelopes over the AAF's time range with the AAF's (off: leave them)
   bool showAutomation = false;  // dialog view: draw volume / pan automation in the lanes (no effect on the import)
   bool video = true;            // video reference from the AAF on its own track
   bool markers = true;          // AAF markers as REAPER markers
@@ -45,6 +47,9 @@ struct TrackChunk {
   bool videoFromFile = false; // the VIDEO track: take each item's length from its file
   std::string targetGuid;     // set: no new track - put `items` on this existing REAPER track
   std::vector<std::string> items; // the "<ITEM ... >" chunks of the track
+  std::vector<GainPoint> volEnv, panEnv; // absolute times (offset applied); pan in REAPER's direction (+1 = left)
+  std::string volEnvChunk, panEnvChunk;  // the same as "<VOLENV2 ... >" / "<PANENV2 ... >" blocks
+  double rangeStart = 0, rangeEnd = 0;   // where the track's events are (offset applied)
 };
 
 // folder a track belongs in, from its name ("Boom 1" -> DIALOG, "ATMO Stereo 2" -> ATMO)
