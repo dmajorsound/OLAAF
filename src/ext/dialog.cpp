@@ -268,6 +268,8 @@ void relayout(State *st) {
   }
 }
 
+static const double kPi = 3.14159265358979323846;
+
 struct Gfx {
   HDC dc;
   double s;
@@ -312,6 +314,53 @@ struct Gfx {
     SelectObject(dc, old);
     DeleteObject(p);
   }
+  void poly(const std::vector<std::pair<double, double>> &pts, COLORREF c) const {
+    std::vector<POINT> p;
+    for (auto &q : pts) p.push_back({(LONG)X(q.first), (LONG)Y(q.second)});
+    HPEN pen = CreatePen(PS_SOLID, 1, c);
+    HBRUSH br = CreateSolidBrush(c);
+    HGDIOBJ op = SelectObject(dc, pen), ob = SelectObject(dc, br);
+    Polygon(dc, p.data(), (int)p.size());
+    SelectObject(dc, op);
+    SelectObject(dc, ob);
+    DeleteObject(pen);
+    DeleteObject(br);
+  }
+  void disc(double cx, double cy, double r, COLORREF c) const {
+    std::vector<std::pair<double, double>> p;
+    for (int i = 0; i < 24; i++) p.push_back({cx + r * std::cos(i * kPi / 12), cy + r * std::sin(i * kPi / 12)});
+    poly(p, c);
+  }
+  // The few symbols IBM Plex has no glyph for, drawn so they look the same everywhere.
+  // Returns false for anything else (then it is plain text).
+  bool icon(const std::string &glyph, double cx, double cy, COLORREF c, COLORREF bg) const {
+    if (glyph == "\xe2\x96\xbe") { // small caret down
+      poly({{cx - 4, cy - 2}, {cx + 4, cy - 2}, {cx, cy + 2.5}}, c);
+    } else if (glyph == "\xe2\x96\xbc") { // down
+      poly({{cx - 5, cy - 3}, {cx + 5, cy - 3}, {cx, cy + 4}}, c);
+    } else if (glyph == "\xe2\x96\xb2") { // up
+      poly({{cx - 5, cy + 3}, {cx + 5, cy + 3}, {cx, cy - 4}}, c);
+    } else if (glyph == "\xe2\x9c\x8e") { // pencil: body, then the tip
+      poly({{cx - 2.6, cy + 4.6}, {cx + 3.6, cy - 1.6}, {cx + 5.6, cy + 0.4}, {cx - 0.6, cy + 6.6}}, c);
+      poly({{cx + 4.4, cy - 2.8}, {cx + 5.6, cy - 4}, {cx + 7.6, cy - 2}, {cx + 6.4, cy - 0.8}}, c);
+      poly({{cx - 2.6, cy + 4.6}, {cx - 0.6, cy + 6.6}, {cx - 4, cy + 8}}, c);
+    } else if (glyph == "\xe2\x87\xa5") { // arrow to a bar: put on a track
+      line(cx - 5, cy, cx + 2, cy, c, 1.5);
+      poly({{cx + 0.5, cy - 3.5}, {cx + 4, cy}, {cx + 0.5, cy + 3.5}}, c);
+      line(cx + 5.5, cy - 4.5, cx + 5.5, cy + 4.5, c, 1.5);
+    } else if (glyph == "\xe2\x98\x80") { // sun
+      disc(cx, cy, 3.2, c);
+      for (int i = 0; i < 8; i++) {
+        double a = i * kPi / 4;
+        line(cx + 5 * std::cos(a), cy + 5 * std::sin(a), cx + 7 * std::cos(a), cy + 7 * std::sin(a), c, 1.2);
+      }
+    } else if (glyph == "\xe2\x98\xbe") { // moon: a disc with a disc of the background cut out
+      disc(cx, cy, 6, c);
+      disc(cx + 3.2, cy - 2.2, 5, bg);
+    } else
+      return false;
+    return true;
+  }
   // a check mark drawn as two strokes, centred in a 16 x 16 box at (x, y)
   void check(double x, double y, COLORREF c) const {
     line(x + 3.75, y + 8.25, x + 6.75, y + 11.25, c, 2);
@@ -349,7 +398,8 @@ void button(State *st, const Gfx &g, double l, double t, double r, double b, con
     g.text(st->fBold, kWhite, label, l, t, r, b, DT_CENTER);
   } else {
     g.box(l, t, r, b, kLine, kPanel);
-    g.text(st->fBody, enabled ? kInk : kMute, label, l, t, r, b, DT_CENTER);
+    if (!g.icon(label, (l + r) / 2, (t + b) / 2, enabled ? kInk : kMute, kPanel))
+      g.text(st->fBody, enabled ? kInk : kMute, label, l, t, r, b, DT_CENTER);
   }
   if (enabled) addHit(st, l, t, r, b, id, idx, tip);
 }
@@ -596,7 +646,7 @@ void paintToolbar(State *st, const Gfx &g) {
   x = chip(st, g, x, t, mLabel, opt.markers && !s.markers.empty(), !s.markers.empty(), H_MARKERS,
            s.markers.empty() ? "This AAF has no markers." : "Markers from the edit become REAPER markers.") + 6;
   chip(st, g, x, t, "Folders", opt.folders, true, H_FOLDERS,
-       "Folder tracks. Click a track name to choose its folder; \xe2\x9c\x8e renames a folder.");
+       "Folder tracks. Click a track name to choose its folder; the pencil renames a folder.");
 
   // timecode offset: + / -, counter, where it lands in REAPER, edit cursor
   double r = kR;
@@ -827,13 +877,13 @@ void paintArrange(State *st, const Gfx &g) {
         g.fill(kL + 1, y, kL + kHdr, y + kRowH - 1, kBlueSoft); // the folder they go into
       g.fill(kL + 1, y, kL + 7, y + kRowH - 1, f.color ? rgbToRef(f.color) : kMute);
       addHit(st, kL + 1, y, kL + 14, y + kRowH, H_FROW_COLOR, fi, "Set the folder color.");
-      g.text(st->fSmall, kMute, "\xe2\x96\xbe", kL + 14, y, kL + 26, y + kRowH, DT_LEFT);
+      g.icon("\xe2\x96\xbe", kL + 19, y + kRowH / 2.0, kMute, kSoft);
       bool renaming = st->editKind == 2 && st->editKey == f.key;
       double nw = std::min(120.0, g.width(st->fBold, f.name) + 12);
       if (!renaming) g.text(st->fBold, kInk, f.name, kL + 28, y, kL + 28 + nw, y + kRowH, DT_LEFT);
       g.text(st->fSmall, kMute, strprintf("folder \xc2\xb7 %d track%s", n, n == 1 ? "" : "s"), kL + 34 + nw, y,
              kL + kHdr - 30, y + kRowH, DT_LEFT);
-      g.text(st->fBody, kMute, "\xe2\x9c\x8e", kL + kHdr - 26, y, kL + kHdr - 6, y + kRowH, DT_CENTER);
+      g.icon("\xe2\x9c\x8e", kL + kHdr - 17, y + kRowH / 2.0 - 1, kMute, kSoft);
       addHit(st, kL + kHdr - 28, y + 4, kL + kHdr - 4, y + kRowH - 4, H_FROW_RENAME, fi, "Rename this folder.");
       continue;
     }
@@ -872,13 +922,13 @@ void paintArrange(State *st, const Gfx &g) {
     double nameR = kL + kHdr - 34;
     if (st->host && st->host->projectTracks) { // put the events on an existing REAPER track
       bool matched = !tr.target.empty();
-      g.text(st->fSmall, matched ? kBlue : kMute, "\xe2\x87\xa5", nameR - 16, y, nameR - 2, y + kRowH, DT_CENTER);
+      g.icon("\xe2\x87\xa5", nameR - 9, y + kRowH / 2.0, matched ? kBlue : kMute, kPanel);
       addHit(st, nameR - 18, y + 4, nameR, y + kRowH - 4, H_TRACK_DEST, row.track,
              "Put this track on a track that is already in your REAPER project (or on a new one).");
       nameR -= 18;
     }
     if (opt.folders) {
-      g.text(st->fSmall, kMute, "\xe2\x96\xbe", nameR - 16, y, nameR - 2, y + kRowH, DT_CENTER);
+      g.icon("\xe2\x96\xbe", nameR - 9, y + kRowH / 2.0, kMute, kPanel);
       addHit(st, nameR - 18, y + 4, nameR, y + kRowH - 4, H_TRACK_FOLDERMENU, row.track, "Choose the folder for this track.");
       nameR -= 18;
     }
@@ -1150,7 +1200,7 @@ void paintFooter(State *st, const Gfx &g) {
   double vw = g.width(st->fTag, v) + 10;
   if (vw < 100 || vw > 400) vw = 240;
   g.box(kR - 22, t + 2, kR, b - 2, kLine, kPanel);
-  g.text(st->fTheme, kInk, darkTheme() ? "\xe2\x98\xbe" : "\xe2\x98\x80", kR - 22, t + 2, kR, b - 2, DT_CENTER);
+  g.icon(darkTheme() ? "\xe2\x98\xbe" : "\xe2\x98\x80", kR - 11, (t + b) / 2, kInk, kPanel);
   addHit(st, kR - 22, t + 2, kR, b - 2, H_THEME, 0, "Light or dark interface.");
   g.text(st->fTag, kMute, v, kR - 30 - vw, t, kR - 30, b, DT_RIGHT);
   g.text(st->fTag, kMute,
