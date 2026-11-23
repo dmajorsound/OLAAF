@@ -14,6 +14,7 @@ using std::min;
 
 #include "round.h"
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -75,6 +76,30 @@ void olRoundCorners(HDC dc, double l, double t, double r, double b, double rad, 
   Gdiplus::Pen pen(gc(line), 1.0f);
   g.DrawPath(&pen, &p);
 }
+void olPolyFill(HDC dc, const double *xy, int n, COLORREF c) {
+  if (n < 3) return;
+  gdipStart();
+  Gdiplus::Graphics g(dc);
+  g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+  g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+  std::vector<Gdiplus::PointF> p((size_t)n);
+  for (int i = 0; i < n; i++) p[(size_t)i] = Gdiplus::PointF((float)xy[2 * i], (float)xy[2 * i + 1]);
+  Gdiplus::SolidBrush br(gc(c));
+  g.FillPolygon(&br, p.data(), n);
+}
+
+void olPolyline(HDC dc, const double *xy, int n, COLORREF c, double width) {
+  if (n < 2) return;
+  gdipStart();
+  Gdiplus::Graphics g(dc);
+  g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+  g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+  std::vector<Gdiplus::PointF> p((size_t)n);
+  for (int i = 0; i < n; i++) p[(size_t)i] = Gdiplus::PointF((float)xy[2 * i], (float)xy[2 * i + 1]);
+  Gdiplus::Pen pen(gc(c), (float)width);
+  pen.SetLineJoin(Gdiplus::LineJoinRound);
+  g.DrawLines(&pen, p.data(), n);
+}
 #else
 // SWELL draws polygons with Core Graphics (smooth edges on macOS)
 static void arc(std::vector<POINT> &pts, double cx, double cy, double rad, double a0) {
@@ -133,6 +158,23 @@ void olRoundCorners(HDC dc, double l, double t, double r, double b, double rad, 
   LineTo(dc, (int)std::lround(r - rad), (int)std::lround(b - 1));
   MoveToEx(dc, (int)std::lround(l), (int)std::lround(t + rad), NULL);
   LineTo(dc, (int)std::lround(l), (int)std::lround(b - rad));
+  SelectObject(dc, op);
+  DeleteObject(pen);
+}
+
+void olPolyFill(HDC dc, const double *xy, int n, COLORREF c) {
+  if (n < 3) return;
+  std::vector<POINT> pts((size_t)n);
+  for (int i = 0; i < n; i++) pts[(size_t)i] = {(LONG)std::lround(xy[2 * i]), (LONG)std::lround(xy[2 * i + 1])};
+  poly(dc, pts, c);
+}
+
+void olPolyline(HDC dc, const double *xy, int n, COLORREF c, double width) {
+  if (n < 2) return;
+  HPEN pen = CreatePen(PS_SOLID, std::max(1, (int)std::lround(width)), c);
+  HGDIOBJ op = SelectObject(dc, pen);
+  MoveToEx(dc, (int)std::lround(xy[0]), (int)std::lround(xy[1]), NULL);
+  for (int i = 1; i < n; i++) LineTo(dc, (int)std::lround(xy[2 * i]), (int)std::lround(xy[2 * i + 1]));
   SelectObject(dc, op);
   DeleteObject(pen);
 }

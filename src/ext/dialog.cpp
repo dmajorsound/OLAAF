@@ -134,7 +134,7 @@ enum HitId {
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
   H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE,
-  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG
+  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE
 };
 
 struct Hit {
@@ -214,7 +214,7 @@ struct State {
   std::string updTag, updUrl;            // a newer OLAAF on GitHub
   int updPolls = 0;
   // the stereo meter while a stereo event plays
-  bool gonioOpen = false;
+  bool gonioOpen = false;               // the stereo meter is wanted (shows while a stereo event is selected)
   PcmReader rdL, rdR;                    // the files the meter reads (one stereo file: both the same)
   int rdChL = 0, rdChR = 1;
   bool rdSwap = false;
@@ -857,7 +857,6 @@ void gonioStart(State *st, const Clip &c) {
   }
   st->rdSwap = c.swapLR;
   st->rdOffset = c.srcOffset;
-  st->gonioOpen = true;
 }
 
 // the stretch just played: correlation (smoothed) and points for the goniometer
@@ -883,8 +882,15 @@ void gonioUpdate(State *st) {
   for (int i = 0; i < n; i += 4) st->gonio.push_back({l[(size_t)i], r[(size_t)i]});
 }
 
+bool selectionStereo(State *st) {
+  for (int id : st->sel)
+    if (Clip *k = st->imp->findClip(id))
+      if (clipIsStereo(st, *k)) return true;
+  return false;
+}
+
 void paintGonio(State *st, const Gfx &g) {
-  if (!st->gonioOpen) return;
+  if (!st->gonioOpen || !selectionStereo(st)) return;
   double w = 248, h = 330;
   double l = kR - w - 14, t = kLB - h - 10;
   g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 14, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
@@ -942,11 +948,57 @@ void paintGonio(State *st, const Gfx &g) {
   g.text(st->fSmall, kMute, "0", mid - 10, by + 18, mid + 10, by + 34, DT_CENTER);
   g.text(st->fSmall, kMute, "+1", br - 24, by + 18, br + 4, by + 34, DT_RIGHT);
   by += 16;
-  const char *what = st->playClip == 0 ? "Play a stereo event (P) to measure."
+  const char *what = st->playClip == 0 ? "Play the event (P) to measure."
                      : c < 0         ? "Out of phase: one channel may be inverted."
                      : c < 0.3       ? "Wide or barely related channels."
                                      : "Coherent.";
   g.text(st->fSmall, cc, what, l + 20, by + 20, l + w - 12, by + 38, DT_LEFT);
+}
+
+// REAPER's fade shapes (fade in, t from 0 to 1)
+double fadeGain(int shape, double t) {
+  t = std::max(0.0, std::min(1.0, t));
+  switch (shape) {
+  case 1: return 1 - (1 - t) * (1 - t);           // fast start
+  case 2: return t * t;                           // fast end
+  case 3: return 1 - std::pow(1 - t, 4);          // fast start, steep
+  case 4: return std::pow(t, 4);                  // fast end, steep
+  case 5: return (1 - std::cos(kPi * t)) / 2;     // slow start and end
+  case 6: {                                       // slow start and end, steep
+    double u = (1 - std::cos(kPi * t)) / 2;
+    return (1 - std::cos(kPi * u)) / 2;
+  }
+  default: return t;                              // linear
+  }
+}
+
+// A fade as REAPER draws it: the curve, and the part it takes away shaded.
+// a..b: where the fade runs (layout x, may lie outside the view); in = fade in.
+void paintFade(const Gfx &g, double a, double b, double y0, double y1, int shape, bool in, bool shade, COLORREF shadeC,
+               COLORREF lineC, bool shadeBelow = false) {
+  if (b - a < 1.5) return;
+  double l = std::max(a, (double)kTlx), r = std::min(b, (double)kTlr);
+  if (r <= l) return;
+  int n = std::max(8, std::min(96, (int)((r - l) / 2)));
+  std::vector<double> curve, area;
+  for (int i = 0; i <= n; i++) {
+    double x = l + (r - l) * i / n;
+    double t = (x - a) / (b - a);
+    double gn = in ? fadeGain(shape, t) : fadeGain(shape, 1 - t);
+    double y = y1 - (y1 - y0) * gn;
+    curve.push_back(g.X(x));
+    curve.push_back(g.Y(y));
+  }
+  if (shade) { // above the curve up to the top edge (or, for the hidden half of a crossfade, below it)
+    area = curve;
+    double ye = shadeBelow ? y1 : y0;
+    area.push_back(g.X(r));
+    area.push_back(g.Y(ye));
+    area.push_back(g.X(l));
+    area.push_back(g.Y(ye));
+    olPolyFill(g.dc, area.data(), (int)area.size() / 2, shadeC);
+  }
+  olPolyline(g.dc, curve.data(), (int)curve.size() / 2, lineC, 1.3 * g.s);
 }
 
 // The waveform of one event: one lane per channel for mono and stereo (two small waveforms for
@@ -995,7 +1047,13 @@ void paintWave(State *st, const Gfx &g, const Clip &c, double l, double t, doubl
       float pk = -1;
       for (auto &ln : lanes[i]) pk = std::max(pk, st->peaks.peak(ln.media, ln.chan, s0, s1));
       if (pk < 0) return; // not read yet (or not a PCM file)
-      double a = std::sqrt(std::min(1.0, pk * gain)); // square root: quiet passages stay visible
+      double fg = 1.0; // the fades shape the waveform too, as in REAPER
+      if (st->opt->fades) {
+        double tc = (x - clipX) * spp;
+        if (c.fadeIn.len > 0 && tc < c.fadeIn.len) fg *= fadeGain(c.fadeIn.shape, tc / c.fadeIn.len);
+        if (c.fadeOut.len > 0 && c.len - tc < c.fadeOut.len) fg *= fadeGain(c.fadeOut.shape, (c.len - tc) / c.fadeOut.len);
+      }
+      double a = std::sqrt(std::min(1.0, pk * gain * fg)); // square root: quiet passages stay visible
       double h = std::max(a * half, 0.5 * step);
       g.fill(x, mid - h, x + step, mid + h, col);
     }
@@ -1246,9 +1304,12 @@ void paintArrange(State *st, const Gfx &g) {
         } else
           g.fill(x0, y0, x1, y1, tint);
         paintWave(st, g, c, x0 + 2, wy, x1 - 1, y1, cx0, spp, wave);
-        double fi = c.fadeIn.len / spp, fo = c.fadeOut.len / spp;
-        if (opt.fades && fi > 2) g.line(x0, y1, std::min(x1, x0 + fi), y0, kInk);
-        if (opt.fades && fo > 2) g.line(std::max(x0, x1 - fo), y0, x1, y1, kInk);
+        if (opt.fades) { // smooth fades, the faded part darker (crossfade lines are drawn once the track is done)
+          double cx1 = cx0 + c.len / spp, fi = c.fadeIn.len / spp, fo = c.fadeOut.len / spp;
+          COLORREF sh = mixColor(tint, olaaf::darkTheme() ? RGB(0, 0, 0) : kPanel, olaaf::darkTheme() ? 0.45 : 0.6);
+          paintFade(g, cx0, cx0 + fi, y0, y1, c.fadeIn.shape, true, true, sh, kInk);
+          paintFade(g, cx1 - fo, cx1, y0, y1, c.fadeOut.shape, false, true, sh, kInk);
+        }
       }
       if (x1 - x0 > 30 && !c.name.empty())
         g.text(st->fClip, (c.excluded || c.mute || !on) ? kMute : kInk, c.mute ? "M  " + c.name : c.name, x0 + 4, y0,
@@ -1258,6 +1319,27 @@ void paintArrange(State *st, const Gfx &g) {
       h.id = c.id;
       st->clipHits.push_back(h);
     }
+    // crossfades: where two events overlap, both curves show as an X on top
+    if (opt.fades)
+      for (size_t i = 0; i < tr.clips.size(); i++) {
+        const Clip &p = tr.clips[i];
+        if (p.excluded || p.mute || p.pos + p.len < st->viewStart || p.pos > st->viewStart + st->viewLen) continue;
+        for (size_t j = 0; j < tr.clips.size(); j++) {
+          const Clip &q = tr.clips[j];
+          if (j == i || q.excluded || q.mute || q.pos <= p.pos || q.pos >= p.pos + p.len) continue;
+          double y0 = y + 4, y1 = y + kRowH - 4;
+          double pe = kTlx + (p.pos + p.len - st->viewStart) / spp, qs = kTlx + (q.pos - st->viewStart) / spp;
+          double fo = std::max(p.fadeOut.len / spp, pe - qs), fi = std::max(q.fadeIn.len / spp, pe - qs);
+          // the earlier event shows under its fade-out curve again, so only the part both fades take away stays dark
+          COLORREF pc = on ? tc : theme().off;
+          COLORREF ptint = mixColor(pc, kPanel, olaaf::darkTheme() ? 0.55 : 0.72);
+          bool inside = pe - fo >= qs - 1; // the fade-out lies within the overlap
+          paintFade(g, pe - fo, pe, y0, y1, p.fadeOut.shape, false, inside, ptint, kInk, true);
+          paintFade(g, qs, qs + fi, y0, y1, q.fadeIn.shape, true, false, 0, kInk);
+          double qe = std::min((double)kTlr, kTlx + (q.pos + q.len - st->viewStart) / spp), qx = std::max((double)kTlx, qs);
+          if (qe - qx > 30 && !q.name.empty()) g.text(st->fClip, kInk, q.name, qx + 4, y0, qe - 3, y0 + 12, DT_LEFT);
+        }
+      }
     if (opt.showAutomation && on) paintAutomation(st, g, tr, y, spp);
   }
 
@@ -1379,6 +1461,12 @@ void paintEventBar(State *st, const Gfx &g) {
                    : "Exchange left and right of the selected stereo events (on import and when listening).",
                false, true, all);
         right -= sw + 6;
+        const char *gl = "Meter";
+        double gw = g.width(st->fBody, gl) + 26;
+        button(st, g, right - gw, mid - 15, right, mid + 15, gl, H_GONIO_TOGGLE, 0,
+               st->gonioOpen ? "Hide the stereo meter (G)." : "Show the goniometer and correlation meter; P plays the event (G).",
+               false, true, st->gonioOpen);
+        right -= gw + 6;
       }
     }
     if (st->host && st->host->playPreview) {
@@ -1553,7 +1641,7 @@ void keyCap(State *st, const Gfx &g, double &x, double y, const std::string &k) 
 }
 
 void paintHelp(State *st, const Gfx &g) {
-  double w = 820, h = 500;
+  double w = 820, h = 530;
   double l = (W - w) / 2, t = kTopH + 14;
   g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 16, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
   g.rbox(l, t, l + w, t + h, 16, kLine, kPop);
@@ -1576,6 +1664,7 @@ void paintHelp(State *st, const Gfx &g) {
   const Row ev[] = {{"Click", "Select an event (Shift-click: more)"},
                     {"\xe2\x86\x91/\xe2\x86\x93", "Move the selection one track up / down"},
                     {"M", "Mute / unmute"},
+                    {"G", "Stereo meter for a stereo event"},
                     {"Delete/Backspace", "Remove / restore"},
                     {"Drag names", "Order tracks, put them in folders"},
                     {"Double-click", "Rename a track"}};
@@ -2318,6 +2407,7 @@ void click(State *st, int x, int y, bool shift) {
   case H_HELP_BG: return;
   case H_GONIO_BG: return;
   case H_GONIO_CLOSE: st->gonioOpen = false; break;
+  case H_GONIO_TOGGLE: st->gonioOpen = !st->gonioOpen; break;
   case H_EV_SWAP: {
     bool any = false, all = true;
     for (int sid : st->sel)
@@ -2463,6 +2553,8 @@ void stopPlay(State *st);
 void stopPlay(State *st) {
   if ((st->playClip || st->playTL) && st->host && st->host->stopPreview) st->host->stopPreview();
   if (st->playTL) st->playhead = st->playFrom; // back to where it started, as in REAPER
+  st->gonio.clear();
+  st->corr = 0;
   st->playClip = 0;
   st->playTL = false;
   st->playPos = -1;
@@ -2590,6 +2682,11 @@ bool handleKey(State *st, int vk) {
     sessionRange(st->imp->session(), &a, &b);
     st->viewStart = a - (b - a) * 0.02;
     st->viewLen = (b - a) * 1.04;
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    return true;
+  }
+  if (vk == 'G') { // the stereo meter
+    st->gonioOpen = !st->gonioOpen;
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
   }
@@ -3077,12 +3174,14 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   if (getenv("OLAAF_SHOWAUTO")) opt.showAutomation = true;
   if (getenv("OLAAF_OPTS")) st.optsOpen = true;
   if (getenv("OLAAF_HELP")) st.helpOpen = true;
+  if (getenv("OLAAF_VIEW")) sscanf(getenv("OLAAF_VIEW"), "%lf,%lf", &st.viewStart, &st.viewLen);
   if (getenv("OLAAF_GONIO")) // the MUSIC pair, 20 s in
     for (auto &tr : imp.session().tracks)
       for (auto &c : tr.clips)
         if (!st.gonioOpen && c.sources.size() == 2) {
           if (getenv("OLAAF_SWAP")) c.swapLR = true;
           gonioStart(&st, c);
+          st.gonioOpen = true;
           st.playClip = c.id;
           st.sel.clear();
           st.sel.insert(c.id);

@@ -13,4 +13,7 @@ void olRoundFill(HDC dc, double l, double t, double r, double b, double rad, COL
 // paints the corners outside a rounded rectangle in bg and draws its 1 px border in line
 // (for a panel whose content was drawn square)
 void olRoundCorners(HDC dc, double l, double t, double r, double b, double rad, COLORREF bg, COLORREF line);
+// smooth polygon and polyline (device pixels)
+void olPolyFill(HDC dc, const double *xy, int n, COLORREF c);
+void olPolyline(HDC dc, const double *xy, int n, COLORREF c, double width);
 } // namespace olaaf
