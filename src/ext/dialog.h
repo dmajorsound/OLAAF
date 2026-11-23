@@ -32,5 +32,7 @@ struct DialogHost {
 bool showImportDialog(HWND parent, Importer &imp, ImportOptions &opt, const DialogHost &host);
 
 void dialogSetInstance(void *hInstance);
+// for REAPER's accelerator hook ("accelerator" plugin_register): keys while the import dialog is open
+int dialogTranslateKey(MSG *msg);
 
 } // namespace olaaf

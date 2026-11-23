@@ -1524,6 +1524,32 @@ int posAtY(State *st, int y) {
   return posAtRow(st, st->scrollRow + vr);
 }
 
+// keys for the open dialog: + / - zoom; arrows, M and Delete act on the selected events
+bool handleKey(State *st, int vk) {
+  if (!st || st->editKind) return false;
+  bool in = vk == VK_ADD || vk == 0xBB /* VK_OEM_PLUS */;
+  bool out = vk == VK_SUBTRACT || vk == 0xBD /* VK_OEM_MINUS */;
+#ifndef _WIN32
+  in = in || vk == '+' || vk == '=';
+  out = out || vk == '-';
+#endif
+  if (in || out) {
+    zoomBy(st, in ? 0.5 : 2.0, (kTlx + kTlr) / 2);
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    return true;
+  }
+  if (st->sel.empty()) return false;
+  if (vk == VK_UP) moveSelectionBy(st, -1);
+  else if (vk == VK_DOWN) moveSelectionBy(st, 1);
+  else if (vk == 'M' || vk == 'm') toggleMute(st);
+  else if (vk == VK_DELETE || vk == VK_BACK) toggleExcluded(st);
+  else return false;
+  InvalidateRect(st->hwnd, NULL, FALSE);
+  return true;
+}
+
+State *g_open = nullptr; // the dialog that is open (for REAPER's keyboard hook)
+
 INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   State *st = (State *)OL_GETUSER(hwnd);
   switch (msg) {
@@ -1531,6 +1557,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     st = (State *)lp;
     OL_SETUSER(hwnd, st);
     st->hwnd = hwnd;
+    g_open = st;
 #ifdef _WIN32
     HDC dc = GetDC(hwnd);
     st->base = st->scale = GetDeviceCaps(dc, LOGPIXELSX) / 96.0;
@@ -1575,31 +1602,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return TRUE;
 #endif
   case WM_KEYDOWN:
-    if (st && !st->editKind) { // + and - zoom the timeline
-      bool in = wp == VK_ADD || wp == 0xBB /* VK_OEM_PLUS */;
-      bool out = wp == VK_SUBTRACT || wp == 0xBD /* VK_OEM_MINUS */;
-#ifndef _WIN32
-      in = in || wp == '+' || wp == '=';
-      out = out || wp == '-';
-#endif
-      if (in || out) {
-        zoomBy(st, in ? 0.5 : 2.0, (kTlx + kTlr) / 2);
-        InvalidateRect(hwnd, NULL, FALSE);
-        return 1;
-      }
-    }
-    if (st && !st->editKind && !st->sel.empty()) {
-      bool done = true;
-      if (wp == VK_UP) moveSelectionBy(st, -1);
-      else if (wp == VK_DOWN) moveSelectionBy(st, 1);
-      else if (wp == 'M') toggleMute(st);
-      else if (wp == VK_DELETE || wp == VK_BACK) toggleExcluded(st);
-      else done = false;
-      if (done) {
-        InvalidateRect(hwnd, NULL, FALSE);
-        return 1;
-      }
-    }
+    if (st && handleKey(st, (int)wp)) return 1;
     return 0;
   case WM_PAINT: {
     PAINTSTRUCT ps;
@@ -1861,6 +1864,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     EndDialog(hwnd, 0);
     return 0;
   case WM_DESTROY:
+    if (g_open == st) g_open = nullptr;
     if (st) {
       freeFonts(st);
       if (st->editBrush) DeleteObject(st->editBrush);
@@ -1926,6 +1930,18 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   paint(&st, dc);
 }
 #endif
+
+// REAPER hands every key press to registered extensions first (otherwise its own shortcuts,
+// like M, take them): returns 1 when the dialog used the key, -1 to let the dialog have it, 0 if not ours
+int dialogTranslateKey(MSG *msg) {
+  State *st = g_open;
+  if (!st || !st->hwnd || !msg) return 0;
+  if (msg->hwnd != st->hwnd && !IsChild(st->hwnd, msg->hwnd)) return 0;
+  if (st->editKind) return -1; // typing in a field
+  if (msg->message == WM_KEYDOWN && handleKey(st, (int)msg->wParam)) return 1;
+  if (msg->message == WM_KEYDOWN || msg->message == WM_CHAR || msg->message == WM_KEYUP) return -1;
+  return 0;
+}
 
 bool showImportDialog(HWND parent, Importer &imp, ImportOptions &opt, const DialogHost &host) {
   State st;

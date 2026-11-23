@@ -341,12 +341,16 @@ static project_import_register_t g_projImport = {wantProjectFile, enumFileExtens
 
 // ---------------------------------------------------------------- entry
 
+static int translateAccel(MSG *msg, accelerator_register_t *) { return olaaf::dialogTranslateKey(msg); }
+static accelerator_register_t g_accel = {translateAccel, true, nullptr};
+
 extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance,
                                                                  reaper_plugin_info_t *rec) {
   if (!rec) {
     plugin_register("-hookcommand2", (void *)onAction);
     plugin_register("-projectimport", &g_projImport);
     plugin_register("-hookcustommenu", (void *)menuHook);
+    plugin_register("-accelerator", &g_accel);
     return 0;
   }
   if (rec->caller_version != REAPER_PLUGIN_VERSION || !rec->GetFunc) return 0;
@@ -360,5 +364,6 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_H
   plugin_register("projectimport", &g_projImport);
   AddExtensionsMainMenu();
   plugin_register("hookcustommenu", (void *)menuHook);
+  plugin_register("accelerator", &g_accel);
   return 1;
 }
