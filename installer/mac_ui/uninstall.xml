@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>Uninstall OLAAF</title>
+    <organization>com.dmajorsound</organization>
+    <background file="background.tiff" alignment="bottomleft" scaling="none"/>
+    <background-darkAqua file="background-darkAqua.tiff" alignment="bottomleft" scaling="none"/>
+    <welcome file="uninstall.html" mime-type="text/html"/>
+    <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <domains enable_currentUserHome="true" enable_localSystem="true"/>
+    <choices-outline>
+        <line choice="default"/>
+    </choices-outline>
+    <choice id="default" title="Uninstall OLAAF">
+        <pkg-ref id="com.dmajorsound.olaaf.uninstall"/>
+    </choice>
+    <pkg-ref id="com.dmajorsound.olaaf.uninstall" version="0.5.2" onConclusion="none">olaaf-uninstall-component.pkg</pkg-ref>
+</installer-gui-script>

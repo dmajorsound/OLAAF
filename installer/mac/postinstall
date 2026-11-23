@@ -1,5 +1,5 @@
 #!/bin/sh
-# olAAF installer: copies the extension into the REAPER UserPlugins folder of the logged-in user.
+# OLAAF installer: copies the extension into the REAPER UserPlugins folder of the logged-in user.
 USER_NAME=$(stat -f%Su /dev/console)
 USER_HOME=$(dscl . -read "/Users/$USER_NAME" NFSHomeDirectory | awk '{print $2}')
 DEST="$USER_HOME/Library/Application Support/REAPER/UserPlugins"

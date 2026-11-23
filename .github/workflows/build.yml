@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: "Publish a release with this version tag, e.g. v0.5.1 (empty = just build)"
+        description: "Publish a release with this version tag, e.g. v0.5.2 (empty = just build)"
         required: false
         default: ""
 
@@ -30,18 +30,25 @@ jobs:
           chmod +x installer/mac/postinstall
           pkgbuild --root payload --install-location /tmp/olaaf-install \
             --scripts installer/mac --identifier com.dmajorsound.olaaf \
-            --version 0.5.1 olaaf-component.pkg
+            --version 0.5.2 olaaf-component.pkg
           cp installer/mac_ui/welcome.html installer/mac_ui/logo.png installer/mac_ui/logo-dark.png ui/
           cp LICENSE ui/LICENSE.txt
           tiffutil -cathidpicheck installer/mac_ui/background.png installer/mac_ui/background@2x.png -out ui/background.tiff
           tiffutil -cathidpicheck installer/mac_ui/background-darkAqua.png installer/mac_ui/background-darkAqua@2x.png -out ui/background-darkAqua.tiff
           productbuild --distribution installer/mac_ui/distribution.xml --resources ui \
-            --package-path . olAAF-0.5.1-mac.pkg
+            --package-path . OLAAF-0.5.2-mac.pkg
+          # uninstaller: an empty package whose script removes the extension
+          pkgbuild --nopayload --scripts installer/mac_uninstall --identifier com.dmajorsound.olaaf.uninstall \
+            --version 0.5.2 olaaf-uninstall-component.pkg
+          cp installer/mac_ui/uninstall.html ui/
+          productbuild --distribution installer/mac_ui/uninstall.xml --resources ui \
+            --package-path . OLAAF-0.5.2-mac-uninstall.pkg
       - uses: actions/upload-artifact@v4
         with:
-          name: olAAF-mac
+          name: OLAAF-mac
           path: |
-            olAAF-0.5.1-mac.pkg
+            OLAAF-0.5.2-mac.pkg
+            OLAAF-0.5.2-mac-uninstall.pkg
             build/src/ext/reaper_olaaf.dylib
             build/olaaf-cli
 
@@ -60,9 +67,9 @@ jobs:
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\win\olaaf.iss
       - uses: actions/upload-artifact@v4
         with:
-          name: olAAF-windows
+          name: OLAAF-windows
           path: |
-            installer/win/Output/olAAF-0.5.1-win64.exe
+            installer/win/Output/OLAAF-0.5.2-win64.exe
             build/src/ext/Release/reaper_olaaf.dll
             build/Release/olaaf-cli.exe
 
@@ -76,12 +83,12 @@ jobs:
           cmake --build build -j 4
       - uses: actions/upload-artifact@v4
         with:
-          name: olAAF-linux
+          name: OLAAF-linux
           path: |
             build/src/ext/reaper_olaaf.so
             build/olaaf-cli
 
-  # "Run workflow" with a version (e.g. v0.5.1) publishes the installers as a GitHub release
+  # "Run workflow" with a version (e.g. v0.5.2) publishes the installers as a GitHub release
   release:
     if: github.event_name == 'workflow_dispatch' && inputs.release != ''
     needs: [macos, windows]
@@ -105,28 +112,28 @@ jobs:
           </picture>
           </p>
 
-          <h2 align="center">olAAF – AAF Import for Reaper</h2>
+          <h2 align="center">OLAAF – AAF Import for Reaper</h2>
           <p align="center"><i>Do you wanna build a Reaper Session?</i></p>
 
           Free REAPER extension by dmajorsound. Imports AAF files from Pro Tools, DaVinci Resolve, Premiere, Avid and Nuendo with tracks, clips, fades, crossfades, clip gain and automation, sample-accurate.
 
           ### Download
-          - **Mac** (Apple Silicon and Intel): `olAAF-VERSION-mac.pkg` below
-          - **Windows** (64-bit): `olAAF-VERSION-win64.exe` below
+          - **Mac** (Apple Silicon and Intel): `OLAAF-VERSION-mac.pkg` below
+          - **Windows** (64-bit): `OLAAF-VERSION-win64.exe` below
 
           ### Install
           1. Quit REAPER.
-          2. Open the installer and click through. It puts olAAF into your REAPER UserPlugins folder.
-          3. Start REAPER and open **Extensions → olAAF: Import AAF…** (or drag an .aaf onto REAPER).
+          2. Open the installer and click through. It puts OLAAF into your REAPER UserPlugins folder.
+          3. Start REAPER and open **Extensions → OLAAF: Import AAF…** (or drag an .aaf onto REAPER).
 
           > [!CAUTION]
-          > **Mac: "olAAF can't be opened because it is from an unidentified developer"**
+          > **Mac: "OLAAF can't be opened because it is from an unidentified developer"**
           >
           > The installer is not signed by Apple. Do **not** double-click it again. Instead:
           > 1. **Right-click** (or Control-click) the .pkg and choose **Open**.
           > 2. Click **Open** in the warning.
           >
-          > Still blocked? Open **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to olAAF.
+          > Still blocked? Open **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to OLAAF.
 
           > [!CAUTION]
           > **Windows: "Windows protected your PC" (SmartScreen)**
@@ -137,6 +144,12 @@ jobs:
           >
           > If your browser blocks the download, choose **Keep** in the download list.
 
+          ### Uninstall
+          - **Mac:** quit REAPER, open `OLAAF-VERSION-mac-uninstall.pkg` and click through (same right-click → Open as above if macOS complains).
+          - **Windows:** quit REAPER, then **Settings → Apps → Installed apps → OLAAF → Uninstall** (or Control Panel → Programs).
+
+          Your REAPER projects and imported audio stay untouched.
+
           ### What it does
           - Preview of the whole AAF in an arrange view: choose tracks, folders, names and colors
           - Remove, mute or move single events, even onto new tracks (automation goes along)
@@ -146,6 +159,6 @@ jobs:
           V VERSION beta, developed with AI assistance · [dmajorsound.com](https://dmajorsound.com)
           NOTES
           sed -i "s/VERSION/${TAG#v}/g" notes.txt
-          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "olAAF ${TAG#v} beta" \
+          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "OLAAF ${TAG#v} beta" \
             --notes-file notes.txt --prerelease \
-            dl/olAAF-mac/*.pkg dl/olAAF-windows/installer/win/Output/*.exe
+            dl/OLAAF-mac/*.pkg dl/OLAAF-windows/installer/win/Output/*.exe

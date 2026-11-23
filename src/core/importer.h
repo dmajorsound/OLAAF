@@ -32,7 +32,7 @@ struct ImportOptions {
 struct MediaReport {
   int found = 0, missing = 0, copied = 0, converted = 0, extracted = 0, interleaved = 0;
   std::vector<std::string> missingNames;
-  std::string logPath; // "olAAF import log.txt" in the audio folder
+  std::string logPath; // "OLAAF import log.txt" in the audio folder
 };
 
 // one REAPER track to create

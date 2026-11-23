@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
-    <title>olAAF – AAF Import for Reaper</title>
+    <title>OLAAF – AAF Import for Reaper</title>
     <organization>com.dmajorsound</organization>
     <background file="background.tiff" alignment="bottomleft" scaling="none"/>
     <background-darkAqua file="background-darkAqua.tiff" alignment="bottomleft" scaling="none"/>
@@ -11,8 +11,8 @@
     <choices-outline>
         <line choice="default"/>
     </choices-outline>
-    <choice id="default" title="olAAF">
+    <choice id="default" title="OLAAF">
         <pkg-ref id="com.dmajorsound.olaaf"/>
     </choice>
-    <pkg-ref id="com.dmajorsound.olaaf" version="0.5.1" onConclusion="none">olaaf-component.pkg</pkg-ref>
+    <pkg-ref id="com.dmajorsound.olaaf" version="0.5.2" onConclusion="none">olaaf-component.pkg</pkg-ref>
 </installer-gui-script>

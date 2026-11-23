@@ -314,7 +314,7 @@ public:
     strncpy(d, desc.c_str(), 255);
     put(d, 256);
     char orig[32] = {0};
-    strncpy(orig, "olAAF", 31);
+    strncpy(orig, "OLAAF", 31);
     put(orig, 32);
     zero(32); // originator reference
     char date[11], tm[9];

@@ -3,7 +3,7 @@
 //
 // REAPER extension entry point.
 //  * File > Open project / drag and drop of an .aaf  -> opens the AAF as a new REAPER project
-//  * Action "olAAF: Import AAF into current project..." -> adds the AAF tracks to the open project
+//  * Action "OLAAF: Import AAF into current project..." -> adds the AAF tracks to the open project
 
 // C++ headers first: SWELL (mac/linux) and windows.h define min/max macros
 #include <algorithm>
@@ -228,7 +228,7 @@ static bool runImport(const std::string &aaf, ImportOptions &opt, Importer &imp,
 
 static void importIntoProject() {
   char fn[4096] = {0};
-  if (!GetUserFileNameForRead(fn, "olAAF: Import AAF", "aaf")) return;
+  if (!GetUserFileNameForRead(fn, "OLAAF: Import AAF", "aaf")) return;
 
   ImportOptions opt;
   char proj[4096] = {0};
@@ -240,7 +240,7 @@ static void importIntoProject() {
   int merged = 0;
   std::string err;
   if (!runImport(fn, opt, imp, rep, merged, err)) {
-    if (!err.empty()) ShowMessageBox(err.c_str(), "olAAF", 0);
+    if (!err.empty()) ShowMessageBox(err.c_str(), "OLAAF", 0);
     return;
   }
 
@@ -270,9 +270,9 @@ static void importIntoProject() {
   // build the waveforms right away instead of when the items are first drawn
   Main_OnCommand(40047, 0); // Peaks: Build any missing peaks
   UpdateArrange();
-  Undo_EndBlock2(nullptr, "olAAF: Import AAF", -1);
+  Undo_EndBlock2(nullptr, "OLAAF: Import AAF", -1);
 
-  ShowMessageBox(summary(imp, rep, merged).c_str(), "olAAF", 0);
+  ShowMessageBox(summary(imp, rep, merged).c_str(), "OLAAF", 0);
 }
 
 static bool onAction(KbdSectionInfo *sec, int command, int val, int val2, int relmode, HWND hwnd) {
@@ -294,7 +294,7 @@ static void menuHook(const char *menuId, void *menu, int flag) {
   mi.fMask = MIIM_TYPE | MIIM_ID;
   mi.fType = MFT_STRING;
   mi.wID = (UINT)g_cmdImport;
-  mi.dwTypeData = (char *)"olAAF: Import AAF...";
+  mi.dwTypeData = (char *)"OLAAF: Import AAF...";
   InsertMenuItem((HMENU)menu, GetMenuItemCount((HMENU)menu), TRUE, &mi);
 }
 
@@ -306,7 +306,7 @@ static bool wantProjectFile(const char *fn) {
 
 static const char *enumFileExtensions(int i, char **desc) {
   if (i == 0) {
-    if (desc) *desc = (char *)"AAF projects (olAAF)";
+    if (desc) *desc = (char *)"AAF projects (OLAAF)";
     return "AAF";
   }
   if (desc) *desc = nullptr;
@@ -321,7 +321,7 @@ static int loadProject(const char *fn, ProjectStateContext *ctx) {
   int merged = 0;
   std::string err;
   if (!runImport(fn, opt, imp, rep, merged, err)) {
-    if (!err.empty()) ShowMessageBox(err.c_str(), "olAAF", 0);
+    if (!err.empty()) ShowMessageBox(err.c_str(), "OLAAF", 0);
     return -1;
   }
   std::string rpp = imp.projectRpp(opt);
@@ -333,7 +333,7 @@ static int loadProject(const char *fn, ProjectStateContext *ctx) {
     ctx->AddLine("%s", line.c_str());
     p = e + 1;
   }
-  ShowMessageBox(summary(imp, rep, merged).c_str(), "olAAF", 0);
+  ShowMessageBox(summary(imp, rep, merged).c_str(), "OLAAF", 0);
   return 0;
 }
 
@@ -354,7 +354,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_H
   progressSetInstance((void *)hInstance);
   dialogSetInstance((void *)hInstance);
 
-  static custom_action_register_t act = {0, "DMAJORSOUND_OLAAF_IMPORT", "olAAF: Import AAF into current project...", nullptr};
+  static custom_action_register_t act = {0, "DMAJORSOUND_OLAAF_IMPORT", "OLAAF: Import AAF into current project...", nullptr};
   g_cmdImport = plugin_register("custom_action", &act);
   plugin_register("hookcommand2", (void *)onAction);
   plugin_register("projectimport", &g_projImport);

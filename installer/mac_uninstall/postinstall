@@ -1,0 +1,8 @@
+#!/bin/sh
+# OLAAF uninstaller: removes the extension from the REAPER UserPlugins folder of the logged-in user.
+USER_NAME=$(stat -f%Su /dev/console)
+USER_HOME=$(dscl . -read "/Users/$USER_NAME" NFSHomeDirectory | awk '{print $2}')
+rm -f "$USER_HOME/Library/Application Support/REAPER/UserPlugins/reaper_olaaf.dylib"
+pkgutil --forget com.dmajorsound.olaaf >/dev/null 2>&1
+pkgutil --forget com.dmajorsound.olaaf.uninstall >/dev/null 2>&1
+exit 0

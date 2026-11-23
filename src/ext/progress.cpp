@@ -25,7 +25,7 @@
 #endif
 #define IDD_OLAAF_PROGRESS 4711
 SWELL_DEFINE_DIALOG_RESOURCE_BEGIN(IDD_OLAAF_PROGRESS, SWELL_DLG_WS_FLIPPED | SWELL_DLG_WS_NOAUTOSIZE | SWELL_DLG_WS_OPAQUE,
-                                   "olAAF", 560, 340, 1.0)
+                                   "OLAAF", 560, 340, 1.0)
 BEGIN
 END
 SWELL_DEFINE_DIALOG_RESOURCE_END(IDD_OLAAF_PROGRESS)
@@ -153,11 +153,11 @@ void paint(HWND hwnd, HDC dc, Ui *ui) {
   fill(dc, S(22), S(24), S(31), S(27), kWhite);
   fill(dc, S(26), S(29), S(37), S(32), kWhite);
   fill(dc, S(22), S(34), S(29), S(37), kWhite);
-  text(dc, ui->fTitle, kInk, "olAAF", S(52), S(16), S(400), S(34), DT_LEFT);
+  text(dc, ui->fTitle, kInk, "OLAAF", S(52), S(16), S(400), S(34), DT_LEFT);
   {
     HGDIOBJ old = SelectObject(dc, ui->fTitle);
     RECT m = {0, 0, 4000, 100};
-    olDrawText(dc, "olAAF", &m, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+    olDrawText(dc, "OLAAF", &m, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
     SelectObject(dc, old);
     int tw = m.right - m.left;
     if (tw < S(20) || tw > S(200)) tw = S(46);
@@ -214,7 +214,7 @@ void paint(HWND hwnd, HDC dc, Ui *ui) {
 
   // footer
   fill(dc, pl, S(302), pr, S(303), kLine);
-  text(dc, ui->fTag, kMute, "V 0.5 beta developed with AI assistance", pl, S(306), pr, S(324), DT_LEFT);
+  text(dc, ui->fTag, kMute, "V 0.5.2 beta developed with AI assistance", pl, S(306), pr, S(324), DT_LEFT);
 
 }
 
@@ -241,7 +241,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 #else
     ui->scale = 1.0;
 #endif
-    SetWindowText(hwnd, "olAAF");
+    SetWindowText(hwnd, "OLAAF");
     ui->fTitle = makeFont(16, true, ui->scale);
     ui->fTag = makeFont(10, false, ui->scale);
     ui->fLogo = makeFont(10, false, ui->scale);
@@ -356,7 +356,7 @@ bool runWithProgress(HWND parent, const std::function<bool(const Progress &)> &w
     dt.t.style = WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME | DS_SETFONT * 0;
     dt.t.cx = 300;
     dt.t.cy = 180;
-    wcscpy(dt.title, L"olAAF");
+    wcscpy(dt.title, L"OLAAF");
     DialogBoxIndirectParam((HINSTANCE)g_hInst, &dt.t, parent, (DLGPROC)dlgProc, (LPARAM)&ui);
 #else
     DialogBoxParam(g_hInst, MAKEINTRESOURCE(IDD_OLAAF_PROGRESS), parent, dlgProc, (LPARAM)&ui);

@@ -31,7 +31,7 @@
 #endif
 #define IDD_OLAAF_IMPORT 4712
 SWELL_DEFINE_DIALOG_RESOURCE_BEGIN(IDD_OLAAF_IMPORT, SWELL_DLG_WS_FLIPPED | SWELL_DLG_WS_NOAUTOSIZE | SWELL_DLG_WS_OPAQUE | SWELL_DLG_WS_RESIZABLE,
-                                   "olAAF", 1180, 800, 1.0)
+                                   "OLAAF", 1180, 800, 1.0)
 BEGIN
 END
 SWELL_DEFINE_DIALOG_RESOURCE_END(IDD_OLAAF_IMPORT)
@@ -520,8 +520,8 @@ void paintHeader(State *st, const Gfx &g) {
   g.fill(23, 21, 33, 24.5, kWhite);
   g.fill(27, 26.4, 39, 29.9, kWhite);
   g.fill(23, 31.8, 30, 35.3, kWhite);
-  g.text(st->fTitle, kInk, "olAAF", 56, 6, 300, 32, DT_LEFT);
-  double tw = g.width(st->fTitle, "olAAF");
+  g.text(st->fTitle, kInk, "OLAAF", 56, 6, 300, 32, DT_LEFT);
+  double tw = g.width(st->fTitle, "OLAAF");
   if (tw < 20 || tw > 200) tw = 55;
   g.text(st->fTitleThin, kMute, "\xe2\x80\x93 AAF Import for Reaper", 56 + tw + 5, 6, 360, 32, DT_LEFT);
   g.text(st->fTag, kMute, "Do you wanna build a Reaper Session?", 56, 30, 360, 45, DT_LEFT);
@@ -937,7 +937,7 @@ void paintMediaBar(State *st, const Gfx &g) {
     g.text(st->fBody, kRed, txt, x, t, x + w, b, DT_LEFT);
     x += w + 4;
     button(st, g, x, mid - 15, x + 78, mid + 15, "Locate\xe2\x80\xa6", H_LOCATE, 0,
-           "Choose the folder that holds the media. All its subfolders are searched, and olAAF remembers it for the next import.");
+           "Choose the folder that holds the media. All its subfolders are searched, and OLAAF remembers it for the next import.");
     x += 86;
   }
   // copy / leave
@@ -988,7 +988,7 @@ void paintMediaBar(State *st, const Gfx &g) {
 void paintFooter(State *st, const Gfx &g) {
   g.fill(kL, kFootY, kR, kFootY + 1, kLine);
   double t = kFootY + 3, b = H - 6;
-  const char *v = "V 0.5 beta developed with AI assistance";
+  const char *v = "V 0.5.2 beta developed with AI assistance";
   double vw = g.width(st->fTag, v) + 10;
   if (vw < 100 || vw > 400) vw = 240;
   g.box(kR - 22, t + 2, kR, b - 2, kLine, kPanel);
@@ -1470,12 +1470,12 @@ void click(State *st, int x, int y, bool shift) {
   case H_SUBDIR: startEdit(st, 3, st->subRc, opt.subdir.empty() ? defaultSubdir(s) : opt.subdir); return;
   case H_DEST_CHOOSE: {
     std::string p;
-    if (pickFolder(st->hwnd, "olAAF: choose where the audio subfolder goes", opt.destDir, &p)) opt.destDir = p;
+    if (pickFolder(st->hwnd, "OLAAF: choose where the audio subfolder goes", opt.destDir, &p)) opt.destDir = p;
     break;
   }
   case H_LOCATE: {
     std::string p;
-    if (pickFolder(st->hwnd, "olAAF: choose the folder that holds the media", dirName(s.aafPath), &p)) {
+    if (pickFolder(st->hwnd, "OLAAF: choose the folder that holds the media", dirName(s.aafPath), &p)) {
       opt.searchFolders.insert(opt.searchFolders.begin(), p); // searched first, remembered for next time
       st->imp->locateMedia(opt);
     }
@@ -1544,7 +1544,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       SetWindowPos(hwnd, NULL, std::max((int)pr.left, (int)(pr.left + pr.right - w) / 2),
                    std::max((int)pr.top, (int)(pr.top + pr.bottom - h) / 2), w, h, SWP_NOZORDER);
 #endif
-    olSetText(hwnd, "olAAF \xe2\x80\x93 AAF Import for Reaper");
+    olSetText(hwnd, "OLAAF \xe2\x80\x93 AAF Import for Reaper");
     relayout(st);
     double a, b;
     sessionRange(st->imp->session(), &a, &b);
@@ -1939,7 +1939,7 @@ bool showImportDialog(HWND parent, Importer &imp, ImportOptions &opt, const Dial
   dt.t.style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX;
   dt.t.cx = 600;
   dt.t.cy = 400;
-  wcscpy(dt.title, L"olAAF");
+  wcscpy(dt.title, L"OLAAF");
   DialogBoxIndirectParam((HINSTANCE)g_hInst, &dt.t, parent, (DLGPROC)dlgProc, (LPARAM)&st);
 #else
   DialogBoxParam(g_hInst, MAKEINTRESOURCE(IDD_OLAAF_IMPORT), parent, dlgProc, (LPARAM)&st);

@@ -591,9 +591,9 @@ bool Importer::prepareMedia(const ImportOptions &opt, MediaReport *rep, const Pr
 
   // a plain text log next to the audio, so problems can be traced on any machine
   if (ensureDir()) {
-    r.logPath = joinPath(target, "olAAF import log.txt");
+    r.logPath = joinPath(target, "OLAAF import log.txt");
     if (FILE *lf = openUtf8(r.logPath, "wb")) {
-      fprintf(lf, "olAAF import log\nAAF: %s\n%s %s %s\n%d Hz, %.3g fps, start %s\ndestination: %s\n\n", s_.aafPath.c_str(),
+      fprintf(lf, "OLAAF import log\nAAF: %s\n%s %s %s\n%d Hz, %.3g fps, start %s\ndestination: %s\n\n", s_.aafPath.c_str(),
               s_.company.c_str(), s_.product.c_str(), s_.version.c_str(), s_.sampleRate, s_.fps,
               formatTC(s_.start, s_.fps).c_str(), target.c_str());
       for (int mi : used) {
@@ -762,7 +762,7 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
 }
 
 std::string Importer::projectRpp(const ImportOptions &opt) const {
-  std::string r = "<REAPER_PROJECT 0.1 \"7.0/olAAF\" 0\n";
+  std::string r = "<REAPER_PROJECT 0.1 \"7.0/OLAAF\" 0\n";
   r += strprintf("SAMPLERATE %d 0 0\n", s_.sampleRate);
   if (opt.markers) {
     int n = 1;
