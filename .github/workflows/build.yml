@@ -12,7 +12,7 @@ on:
 
 jobs:
   macos:
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Build (universal arm64 + x86_64)
