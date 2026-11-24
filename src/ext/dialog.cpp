@@ -2229,18 +2229,18 @@ void paintHelp(State *st, const Gfx &g) {
          l + w - 60, t + 58, DT_LEFT);
   button(st, g, l + w - 44, t + 14, l + w - 16, t + 42, "\xc3\x97", H_HELP_CLOSE, 0, "Close (Esc).");
 
-  struct Row { const char *keys; const char *what; };
+  struct KeyRow { const char *keys; const char *what; };
   // keys separated by '|', several ways by '/'
-  const Row play[] = {{"Space", "Play / stop from the playhead"},
+  const KeyRow play[] = {{"Space", "Play / stop from the playhead"},
                       {"Shift|Space", "Play / stop the selected event"},
                       {"Click ruler", "Move the playhead"}};
-  const Row view[] = {{"+/\xe2\x88\x92/T/R", "Zoom in / out (T in, R out)"},
+  const KeyRow view[] = {{"+/\xe2\x88\x92/T/R", "Zoom in / out (T in, R out)"},
                       {"Alt|Wheel", "Zoom (Option on the Mac)"},
                       {"Shift|Wheel", "Move through time"},
                       {"F", "Show the whole AAF"},
                       {"Z", "Zoom to the selection, playhead to it"},
                       {"A", "Show automation in the lanes"}};
-  const Row ev[] = {{"Click", "Select an event (Shift-click: more)"},
+  const KeyRow ev[] = {{"Click", "Select an event (Shift-click: more)"},
                     {"Drag", "Select in a frame (start on an empty lane)"},
                     {"Cmd/Ctrl|A", "Select all events"},
                     {"\xe2\x86\x91/\xe2\x86\x93", "Move the selection one track up / down"},
@@ -2250,14 +2250,14 @@ void paintHelp(State *st, const Gfx &g) {
                     {"Delete/Backspace", "Remove / restore"},
                     {"Drag names", "Order tracks, put them in folders"},
                     {"Double-click", "Rename a track"}};
-  const Row win[] = {{"Cmd/Ctrl|Z", "Undo (Shift: redo)"},
+  const KeyRow win[] = {{"Cmd/Ctrl|Z", "Undo (Shift: redo)"},
                      {"Return", "Import"},
                      {"O", "Options"},
                      {"H", "This help"},
                      {"1/2/3", "Show reel 1, 2, 3\xe2\x80\xa6"},
                      {"Shift|\xe2\x86\x90/\xe2\x86\x92", "Previous / next reel"},
                      {"Esc", "Close a panel, then the window"}};
-  auto block = [&](double x, double &y, const char *head, const Row *rows, int n) {
+  auto block = [&](double x, double &y, const char *head, const KeyRow *rows, int n) {
     g.text(st->fSmall, kMute, head, x, y, x + 380, y + 20, DT_LEFT);
     y += 24;
     for (int i = 0; i < n; i++) {
