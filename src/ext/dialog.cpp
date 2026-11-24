@@ -9,6 +9,7 @@
 // the lanes, like REAPER), a bar for the selected event and a bar for media and import.
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -187,6 +188,7 @@ struct State {
   double dragValue = 0;
   bool dragMoved = false;
   int dragRows = 0;        // tracks the events are being dragged by (in shown order)
+  bool dragBlocked = false; // ... onto a spot another event holds
   int dragFromPos = 0;     // shown position of the track the drag started on
   int pressedClip = 0;
   std::set<int> selTracks; // tracks selected by their names (to drag them into a folder)
@@ -1479,6 +1481,7 @@ void paintArrange(State *st, const Gfx &g) {
   addHit(st, kTlx, kLT, kTlr, kLB, H_LANES, 0,
          "Click selects, Shift-click adds. Drag or arrow up / down moves events to another track, M mutes, Delete removes.");
   bool dragging = st->drag == 3 && st->dragMoved && st->dragRows != 0;
+  std::vector<std::array<double, 4>> ghosts; // where dragged events would land
   for (int vr = 0; vr < kRows; vr++) {
     int ri = st->scrollRow + vr;
     double y = kLT + vr * kRowH;
@@ -1631,7 +1634,7 @@ void paintArrange(State *st, const Gfx &g) {
         int gv = tr2 - st->scrollRow;
         if (gv >= 0 && gv < kRows) {
           double gy = kLT + gv * kRowH;
-          g.box(x0, gy + 4, x1, gy + kRowH - 4, kBlue, kBlueSoft);
+          ghosts.push_back({x0, gy + 4, x1, gy + kRowH - 4}); // drawn over all rows, below
         }
       }
       COLORREF cc = on ? tc : theme().off;
@@ -1693,6 +1696,15 @@ void paintArrange(State *st, const Gfx &g) {
         }
       }
     if (opt.showAutomation && on) paintAutomation(st, g, tr, y, spp);
+  }
+  for (auto &gh : ghosts) { // red: that spot is taken
+    if (st->dragBlocked) { // a hole with a red frame and a cross: not here
+      g.rfill(gh[0] - 2, gh[1] - 2, gh[2] + 2, gh[3] + 2, 6, kRed);
+      g.rfill(gh[0], gh[1], gh[2], gh[3], 4, kPanel);
+      g.line(gh[0] + 3, gh[1] + 3, gh[2] - 3, gh[3] - 3, kRed);
+      g.line(gh[0] + 3, gh[3] - 3, gh[2] - 3, gh[1] + 3, kRed);
+    }
+    else g.rbox(gh[0], gh[1], gh[2], gh[3], 4, kBlue, kBlueSoft);
   }
 
   // the timeline playhead
@@ -2279,7 +2291,8 @@ void paintFooter(State *st, const Gfx &g) {
     hr = lr - lw - 20;
     if (!st->tip) hint = "Your choices from the last import of this AAF are back: names, folders, colors, removed and moved events.";
   }
-  g.text(st->fSmall, st->tip ? kInk : kMute, hint, kL, t + 1, hr, b, DT_LEFT);
+  bool taken = st->tip && strstr(st->tip, " is taken by ");
+  g.text(st->fSmall, taken ? kRed : (st->tip ? kInk : kMute), hint, kL, t + 1, hr, b, DT_LEFT);
 }
 
 // a short hint next to the mouse, after it rests a moment
@@ -2627,10 +2640,52 @@ void toggleExcluded(State *st) {
   if (!st->sel.empty()) st->edited = true;
 }
 
+// Would moving the selection by `delta` tracks put an event on top of one already there?
+// (Touching, or an overlap shorter than a frame, is fine.) Says which in `why`.
+bool moveBlocked(State *st, int delta, std::string *why) {
+  if (!delta || st->sel.empty()) return false;
+  Session &s = st->imp->session();
+  const double tol = 1.0 / std::max(1.0, s.fps > 0 ? s.fps : 25.0);
+  int lo = 1 << 30;
+  for (int id : st->sel) {
+    int t = -1;
+    if (st->imp->findClip(id, &t)) {
+      int p = posOfTrack(st, t);
+      if (p >= 0) lo = std::min(lo, p);
+    }
+  }
+  if (lo == 1 << 30) return false;
+  delta = std::max(delta, -lo);
+  for (int id : st->sel) {
+    int t = -1;
+    Clip *c = st->imp->findClip(id, &t);
+    if (!c || c->excluded) continue;
+    int to = posOfTrack(st, t) + delta;
+    if (to < 0 || to >= (int)st->order.size()) continue; // a new track: free
+    const Track &tt = s.tracks[(size_t)st->order[(size_t)to]];
+    for (auto &o : tt.clips) {
+      if (st->sel.count(o.id) || o.excluded) continue;
+      if (o.pos < c->pos + c->len - tol && c->pos < o.pos + o.len - tol) {
+        if (why)
+          *why = "That spot on " + tt.name + " is taken by " + (o.name.empty() ? std::string("another event") : o.name) +
+                 " (" + formatTC(o.pos + tcOffset(st), s.fps) + "). Nothing moved.";
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // moves the selection by `delta` tracks in the order the tracks are shown; below the last
 // track new tracks are added (outside any folder, so they show up at the bottom)
 void moveSelectionBy(State *st, int delta) {
   if (!delta || st->sel.empty()) return;
+  static std::string blockedTip;
+  buildRows(st);
+  if (moveBlocked(st, delta, &blockedTip)) { // never on top of another event
+    st->tip = blockedTip.c_str();
+    return;
+  }
   Session &s = st->imp->session();
   buildRows(st);
   int lo = 1 << 30, hi = -1;
@@ -3451,8 +3506,13 @@ void click(State *st, int x, int y, bool shift) {
     if (was) toggleTimeline(st);
     break;
   }
-  case H_EV_UP: moveSelectionBy(st, -1); break;
-  case H_EV_DOWN: moveSelectionBy(st, 1); break;
+  case H_EV_UP: case H_EV_DOWN: {
+    int d = id == H_EV_UP ? -1 : 1;
+    buildRows(st);
+    if (moveBlocked(st, d, nullptr) && !st->undo.empty()) st->undo.pop_back(); // nothing changes: no undo step
+    moveSelectionBy(st, d);
+    break;
+  }
   case H_EV_AUTOMATION: st->moveAutomation = !st->moveAutomation; break;
   case H_EV_RESET:
     keepTrackChoices(st, [&]() { st->imp->setMergeStereo(st->merge); });
@@ -3682,7 +3742,10 @@ bool handleKey(State *st, int vk) {
     return true;
   }
   if (st->sel.empty()) return false;
-  if (vk == VK_UP || vk == VK_DOWN || vk == 'M' || vk == 'm' || vk == VK_DELETE || vk == VK_BACK) pushUndo(st);
+  buildRows(st);
+  bool blockedMove = (vk == VK_UP || vk == VK_DOWN) && moveBlocked(st, vk == VK_UP ? -1 : 1, nullptr);
+  if ((vk == VK_UP || vk == VK_DOWN || vk == 'M' || vk == 'm' || vk == VK_DELETE || vk == VK_BACK) && !blockedMove)
+    pushUndo(st);
   if (vk == VK_UP) moveSelectionBy(st, -1);
   else if (vk == VK_DOWN) moveSelectionBy(st, 1);
   else if (vk == 'M' || vk == 'm') toggleMute(st);
@@ -3969,12 +4032,15 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     if (drag == 3) {
       if (moved && st->dragRows) {
-        pushUndo(st);
-        moveSelectionBy(st, st->dragRows);
+        std::string why;
+        if (!moveBlocked(st, st->dragRows, &why)) pushUndo(st);
+        moveSelectionBy(st, st->dragRows); // blocked: says why in the footer
       }
       else if (st->pressedClip) click(st, p.x, p.y, shiftDown());
+      bool keepTip = st->dragBlocked;
       st->dragRows = 0;
-      st->tip = nullptr;
+      st->dragBlocked = false;
+      if (!keepTip) st->tip = nullptr;
       InvalidateRect(hwnd, NULL, FALSE);
       return 0;
     }
@@ -4053,7 +4119,11 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       if (st->dragMoved) {
         int target = posAtY(st, my);
         st->dragRows = std::max(target, 0) - st->dragFromPos;
-        st->tip = "Release to move the selected events to this track. Below the last track a new one is added.";
+        static std::string dragTip;
+        st->dragBlocked = moveBlocked(st, st->dragRows, &dragTip);
+        if (st->dragBlocked) dragTip.replace(dragTip.find(" Nothing moved."), 15, " Release: nothing moves.");
+        st->tip = st->dragBlocked ? dragTip.c_str()
+                                  : "Release to move the selected events to this track. Below the last track a new one is added.";
         InvalidateRect(hwnd, NULL, FALSE);
       }
       return 0;
@@ -4259,6 +4329,19 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
     for (auto &tr : imp.session().tracks)
       if (tr.name == getenv("OLAAF_SOLO")) st.solo.insert(tr.uid);
   if (getenv("OLAAF_VIEW")) sscanf(getenv("OLAAF_VIEW"), "%lf,%lf", &st.viewStart, &st.viewLen);
+  if (const char *dr = getenv("OLAAF_DRAG")) { // the selection dragged by n tracks
+    buildRows(&st);
+    int t = -1;
+    if (!st.sel.empty() && imp.findClip(*st.sel.begin(), &t)) {
+      st.drag = 3;
+      st.dragMoved = true;
+      st.dragFromPos = posOfTrack(&st, t);
+      st.dragRows = atoi(dr);
+      static std::string why;
+      st.dragBlocked = moveBlocked(&st, st.dragRows, &why);
+      st.tip = st.dragBlocked ? why.c_str() : "Release to move the selected events to this track.";
+    }
+  }
   if (getenv("OLAAF_GONIO")) // the MUSIC pair, 20 s in
     for (auto &tr : imp.session().tracks)
       for (auto &c : tr.clips)
