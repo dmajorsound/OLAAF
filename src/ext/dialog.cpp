@@ -948,7 +948,7 @@ void paintGonio(State *st, const Gfx &g) {
   g.text(st->fSmall, kMute, "0", mid - 10, by + 18, mid + 10, by + 34, DT_CENTER);
   g.text(st->fSmall, kMute, "+1", br - 24, by + 18, br + 4, by + 34, DT_RIGHT);
   by += 16;
-  const char *what = st->playClip == 0 ? "Play the event (Space) to measure."
+  const char *what = st->playClip == 0 ? "Play the event (Shift + Space) to measure."
                      : c < 0         ? "Out of phase: one channel may be inverted."
                      : c < 0.3       ? "Wide or barely related channels."
                                      : "Coherent.";
@@ -1116,7 +1116,7 @@ void paintArrange(State *st, const Gfx &g) {
     }
 
   // the ruler: click puts the playhead there
-  addHit(st, kTlx, ry, kR - 360, kLT, H_RULER, 0, "Click to put the playhead here (and clear the selection); Space then plays from it.");
+  addHit(st, kTlx, ry, kR - 360, kLT, H_RULER, 0, "Click to put the playhead here. Space plays from the playhead.");
   // at the right end of the ruler: play, automation view and zoom
   {
     double bx = kR - 8, by0 = ry + 5, by1 = ry + kRuler - 5;
@@ -1129,7 +1129,7 @@ void paintArrange(State *st, const Gfx &g) {
       double px0 = kR - 350;
       if (st->host && st->host->playTimeline) {
         button(st, g, px0, by0, px0 + 30, by1, pl ? "\xe2\x96\xa0" : "\xe2\x96\xb6", H_TL_PLAY, 0,
-               pl ? "Stop (Space)." : "Play the timeline from the playhead (Space, with no event selected).", false, true, pl);
+               pl ? "Stop (Space)." : "Play the timeline from the playhead (Space).", false, true, pl);
         g.text(st->fMonoSmall, pl ? kBlue : kInk, tc, px0 + 36, ry, px0 + 120, ry + kRuler, DT_LEFT);
       }
     }
@@ -1464,7 +1464,7 @@ void paintEventBar(State *st, const Gfx &g) {
         const char *gl = "Meter";
         double gw = g.width(st->fBody, gl) + 26;
         button(st, g, right - gw, mid - 15, right, mid + 15, gl, H_GONIO_TOGGLE, 0,
-               st->gonioOpen ? "Hide the stereo meter (G)." : "Show the goniometer and correlation meter; Space plays the event (G).",
+               st->gonioOpen ? "Hide the stereo meter (G)." : "Show the goniometer and correlation meter; Shift + Space plays the event (G).",
                false, true, st->gonioOpen);
         right -= gw + 6;
       }
@@ -1472,7 +1472,7 @@ void paintEventBar(State *st, const Gfx &g) {
     if (st->host && st->host->playPreview) {
       bool pl = st->playClip != 0;
       button(st, g, right - 34, mid - 15, right, mid + 15, pl ? "\xe2\x96\xa0" : "\xe2\x96\xb6", H_EV_PLAY, 0,
-             pl ? "Stop (Space)." : "Listen to this event (Space).", false, true, pl);
+             pl ? "Stop (Shift + Space)." : "Listen to this event (Shift + Space).", false, true, pl);
       right -= 48;
     }
 
@@ -1653,8 +1653,8 @@ void paintHelp(State *st, const Gfx &g) {
 
   struct Row { const char *keys; const char *what; };
   // keys separated by '|', several ways by '/'
-  const Row play[] = {{"Space", "Play / stop the selected event"},
-                      {"Space", "Nothing selected: play from the playhead"},
+  const Row play[] = {{"Space", "Play / stop from the playhead"},
+                      {"Shift|Space", "Play / stop the selected event"},
                       {"Click ruler", "Move the playhead"}};
   const Row view[] = {{"+/\xe2\x88\x92", "Zoom in / out"},
                       {"Alt|Wheel", "Zoom (Option on the Mac)"},
@@ -1717,7 +1717,7 @@ void paintFooter(State *st, const Gfx &g) {
   g.fill(0, t, W, t + 1, kLine);
   drawDmajorLogo(g.dc, g.X(kR), g.Y((t + b) / 2), g.S(16), kMute, kMute, st->fSmall);
   const char *hint = st->tip ? st->tip
-                             : "Hover over anything for a hint. Space plays the selected event (or the timeline from the playhead), H "
+                             : "Hover over anything for a hint. Space plays from the playhead, Shift + Space the selected event, H "
                                "shows all shortcuts.";
   g.text(st->fSmall, st->tip ? kInk : kMute, hint, kL, t + 1, kR - 150, b, DT_LEFT);
 }
@@ -2517,7 +2517,6 @@ void click(State *st, int x, int y, bool shift) {
     bool was = st->playTL;
     if (was) stopPlay(st);
     st->playhead = std::max(0.0, st->viewStart + (lx - kTlx) * spp);
-    st->sel.clear(); // Space now plays the timeline
     if (was) toggleTimeline(st);
     break;
   }
@@ -2701,10 +2700,11 @@ bool handleKey(State *st, int vk) {
     closeDialog(st, true);
     return true;
   }
-  if (vk == VK_SPACE || vk == 'P' || vk == 'p') { // Space: the selected event, or the timeline when none is selected
+  if (vk == VK_SPACE || vk == 'P' || vk == 'p') { // Space: the timeline; Shift + Space (or P): the selected event
+    bool event = vk != VK_SPACE || (GetAsyncKeyState(VK_SHIFT) & 0x8000);
     if (st->playClip || st->playTL) stopPlay(st);
-    else if (!st->sel.empty()) togglePlay(st);
-    else if (vk == VK_SPACE) toggleTimeline(st);
+    else if (event) togglePlay(st);
+    else toggleTimeline(st);
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
   }
