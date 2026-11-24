@@ -925,7 +925,7 @@ void paintTopBar(State *st, const Gfx &g) {
   if (!u.empty()) updW = g.width(st->fSmall, u) + 30;
   const int nReels = reelCount(st);
   const char *plusTip = "Add reels: more AAFs in this import, each at its own timecode. Tracks with the same name share one "
-                        "REAPER track. [ and ] switch between them.";
+                        "REAPER track. 1, 2, 3\xe2\x80\xa6 (or [ and ]) switch between them.";
   double nmW = 0;
   if (nReels > 1) { // one tab per AAF (reel); the details below are the shown one's
     std::vector<std::string> labels;
@@ -978,7 +978,7 @@ void paintTopBar(State *st, const Gfx &g) {
       else g.rbox(x, mid - 22, x + w, mid, 8, kLine, kFace);
       g.text(tf, ink, use[(size_t)i], x + 10, mid - 22, x + w - (on && i > 0 ? xW : 0) - 6, mid, DT_LEFT);
       int ov = reelOverlaps(st, i);
-      tabTips[(size_t)i] = labels[(size_t)i] + (on ? "" : ": click to show it ( [ and ] switch).") +
+      tabTips[(size_t)i] = labels[(size_t)i] + (on ? "" : strprintf(": click to show it (key %d).", i + 1)) +
                            (ov >= 0 ? " It lands on top of " + labels[(size_t)ov] +
                                           " in REAPER: change where it starts (top right)."
                                     : "");
@@ -2270,7 +2270,7 @@ void paintHelp(State *st, const Gfx &g) {
                      {"Return", "Import"},
                      {"O", "Options"},
                      {"H", "This help"},
-                     {"[ / ]", "Previous / next reel (several AAFs)"},
+                     {"1/2/3", "Show reel 1, 2, 3\xe2\x80\xa6 ([ ] previous / next)"},
                      {"Esc", "Close a panel, then the window"}};
   auto block = [&](double x, double &y, const char *head, const Row *rows, int n) {
     g.text(st->fSmall, kMute, head, x, y, x + 380, y + 20, DT_LEFT);
@@ -3912,6 +3912,14 @@ bool handleKey(State *st, int vk) {
   }
   if (vk == 'A' && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) {
     st->opt->showAutomation = !st->opt->showAutomation;
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    return true;
+  }
+  // 1-9 on the number row (not the number pad): show that reel
+  if (vk >= '1' && vk <= '9' && !(GetAsyncKeyState(VK_CONTROL) & 0x8000) && reelCount(st) > 1) {
+    int r = vk - '1';
+    if (r < reelCount(st)) switchReel(st, r);
+    else st->tip = "There's no reel with that number.";
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
   }
