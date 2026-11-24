@@ -27,29 +27,90 @@ static std::vector<std::string> tokens(const std::string &name) {
   return out;
 }
 
-std::string trackGroup(const std::string &trackName) {
-  static const struct { const char *group; std::vector<std::string> keys; } table[] = {
-      {"MUSIC", {"mus", "music", "musik", "mx", "score", "song"}},
-      {"ATMO", {"atmo", "atmos", "amb", "ambi", "ambience", "bg", "bgs", "roomtone", "rt"}},
-      {"FOLEY", {"foley", "fol", "ger\xc3\xa4usche", "ger\xc3\xa4usch", "gerausche", "steps", "fs"}},
-      {"FX", {"sfx", "fx", "effect", "effects", "hardfx", "design", "sd"}},
-      {"DIALOG", {"dia", "dx", "dlg", "dial", "dialog", "dialogue", "boom", "lav", "anstecker", "fr", "vo", "adr",
-                  "voice", "ot", "guide", "sprache", "mic"}},
+// The sort rules: folder name, color and the words that send a track there (first rule wins).
+static std::vector<SortRule> g_rules = defaultSortRules();
+
+std::vector<SortRule> defaultSortRules() {
+  return {
+      {"DIA", 0x5580d4, {"dia", "dx", "dlg", "dial", "dialog", "dialogue", "boom", "lav", "anstecker", "fr", "vo", "adr", "voice",
+                         "ot", "o-ton", "oton", "guide", "sprache", "mic"}},
+      {"FX", 0xD9822B, {"sfx", "fx", "effect", "effects", "hardfx", "design", "sd", "foley", "fol", "ger\xc3\xa4usche",
+                        "ger\xc3\xa4usch", "gerausche", "steps", "fs"}},
+      {"MUS", 0xC8423B, {"mus", "music", "musik", "mx", "score", "song"}},
+      {"ATMO", 0x1F9A8A, {"atmo", "atmos", "amb", "ambi", "ambience", "bg", "bgs", "roomtone", "rt"}},
   };
+}
+void setSortRules(const std::vector<SortRule> &rules) { g_rules = rules.empty() ? defaultSortRules() : rules; }
+const std::vector<SortRule> &sortRules() { return g_rules; }
+
+// "DIA|5580d4|boom,lav,...;FX|d9822b|..." (for REAPER's settings)
+std::string sortRulesToText(const std::vector<SortRule> &rules) {
+  std::string out;
+  for (auto &r : rules) {
+    if (!out.empty()) out += ";";
+    out += r.name + "|" + strprintf("%06x", r.color & 0xffffff) + "|";
+    for (size_t i = 0; i < r.words.size(); i++) out += (i ? "," : "") + r.words[i];
+  }
+  return out;
+}
+
+std::vector<SortRule> sortRulesFromText(const std::string &text) {
+  std::vector<SortRule> out;
+  size_t a = 0;
+  while (a < text.size()) {
+    size_t e = text.find(';', a);
+    if (e == std::string::npos) e = text.size();
+    std::string row = text.substr(a, e - a);
+    size_t p1 = row.find('|'), p2 = p1 == std::string::npos ? p1 : row.find('|', p1 + 1);
+    if (p2 != std::string::npos) {
+      SortRule r;
+      r.name = row.substr(0, p1);
+      r.color = (uint32_t)strtoul(row.substr(p1 + 1, p2 - p1 - 1).c_str(), nullptr, 16);
+      r.words = splitWords(row.substr(p2 + 1));
+      if (!r.name.empty()) out.push_back(r);
+    }
+    a = e + 1;
+  }
+  return out;
+}
+
+// "boom, lav,  dia" -> {"boom", "lav", "dia"} (lower case, no empty ones)
+std::vector<std::string> splitWords(const std::string &text) {
+  std::vector<std::string> out;
+  std::string cur;
+  for (size_t i = 0; i <= text.size(); i++) {
+    char c = i < text.size() ? text[i] : ',';
+    if (c == ',' || c == ';') {
+      size_t b = cur.find_first_not_of(" \t"), e = cur.find_last_not_of(" \t");
+      if (b != std::string::npos) out.push_back(lower(cur.substr(b, e - b + 1)));
+      cur.clear();
+    } else
+      cur += c;
+  }
+  return out;
+}
+
+std::string trackGroup(const std::string &trackName) {
   auto tk = tokens(trackName);
-  for (auto &row : table)
-    for (auto &t : tk)
-      for (auto &k : row.keys)
-        if (t == k || (k.size() >= 4 && t.compare(0, k.size(), k) == 0)) return row.group;
+  std::string low = lower(trackName);
+  for (auto &row : g_rules) // words with a separator ("o-ton"): anywhere in the name
+    for (auto &k : row.words)
+      if (k.find_first_of(" -_.") != std::string::npos && low.find(lower(k)) != std::string::npos) return row.name;
+  // whole words first (so "FX Boom" is not caught by a longer word elsewhere), then word starts
+  for (int pass = 0; pass < 2; pass++)
+    for (auto &row : g_rules)
+      for (auto &t : tk)
+        for (auto &k : row.words) {
+          std::string kl = k;
+          for (auto &ch : kl) ch = (char)tolower((unsigned char)ch);
+          if (pass == 0 ? t == kl : (kl.size() >= 4 && t.compare(0, kl.size(), kl) == 0)) return row.name;
+        }
   return "OTHER";
 }
 
 uint32_t groupColor(const std::string &g) {
-  if (g == "DIALOG") return 0x5580d4;
-  if (g == "FOLEY") return 0x7A5AC8;
-  if (g == "FX") return 0xD9822B;
-  if (g == "ATMO") return 0x1F9A8A;
-  if (g == "MUSIC") return 0xC8423B;
+  for (auto &r : g_rules)
+    if (r.name == g) return r.color;
   return 0x6B7480;
 }
 
@@ -59,7 +120,6 @@ Folder *Session::folder(const std::string &key) {
   return nullptr;
 }
 
-static const char *kDefaultFolders[] = {"DIALOG", "FOLEY", "FX", "ATMO", "MUSIC", "OTHER"};
 
 void Importer::assignDefaultFolders() {
   std::set<std::string> present;
@@ -69,8 +129,9 @@ void Importer::assignDefaultFolders() {
     for (auto &t : s_.tracks) t.group.clear();
     return;
   }
-  for (const char *g : kDefaultFolders)
-    if (present.count(g)) s_.folders.push_back({g, g, groupColor(g)});
+  for (auto &r : g_rules)
+    if (present.count(r.name)) s_.folders.push_back({r.name, r.name, r.color});
+  if (present.count("OTHER")) s_.folders.push_back({"OTHER", "OTHER", groupColor("OTHER")});
   for (auto &t : s_.tracks) t.group = trackGroup(t.name);
 }
 
@@ -757,6 +818,8 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
                "ISBUS 1 1\nNCHAN 2\n>\n";
       f.folderDepth = 1;
       f.color = fd->color;
+      f.folderKey = grp;
+      f.isFolder = true;
       out.push_back(f);
     }
     std::string c;
@@ -830,6 +893,7 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
     TrackChunk tc;
     tc.text = c;
     tc.folderDepth = lastInGroup ? -1 : 0;
+    tc.folderKey = grp;
     tc.color = tcol;
     tc.targetGuid = t.target;
     tc.items = std::move(items);

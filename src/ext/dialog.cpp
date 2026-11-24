@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "dialog.h"
+#include "../core/track_template.h"
 #include "theme.h"
 #include "logo.h"
 #include "../core/util.h"
@@ -136,7 +137,7 @@ enum HitId {
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
   H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE,
-  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG
+  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE
 };
 
 struct Hit {
@@ -230,6 +231,9 @@ struct State {
   std::set<int> mqBase;                  // the selection before (Shift adds)
   bool showSamples = false;              // positions also in samples
   bool missingOpen = false;              // the list of missing media
+  bool rulesOpen = false;                // the folder sorting rules and the track template
+  std::string tplLoaded;                 // the template the list below is from
+  std::vector<olaaf::TemplateTrack> tplTracks;
   bool themeMenu = false;                // the look menu in the footer
   std::vector<std::string> nameTips;     // per track: the full name (for the footer) when it is shortened
   std::string headTip;                   // everything about the AAF, for the footer
@@ -1791,8 +1795,15 @@ void paintOptions(State *st, const Gfx &g) {
   std::string mLabel = s.markers.empty() ? "Markers (none in this AAF)" : strprintf("Markers (%zu)", s.markers.size());
   optRow(st, g, px, y, mLabel, opt.markers && !s.markers.empty(), !s.markers.empty(), H_MARKERS,
          "Markers from the edit become REAPER markers.");
-  optRow(st, g, px, y, "Folder tracks", opt.folders, true, H_FOLDERS,
-         "Folder tracks. Click a track name to choose its folder; the pencil renames a folder.");
+  {
+    double save = y;
+    optRow(st, g, px, y, "Folder tracks", opt.folders, true, H_FOLDERS,
+           "Folder tracks. Click a track name to choose its folder; the pencil renames a folder.");
+    std::string rl = opt.trackTemplate.empty() ? "Sorting\xe2\x80\xa6" : "Sorting + template\xe2\x80\xa6";
+    double bw = g.width(st->fBody, rl) + 24;
+    button(st, g, px + kOpW - 16 - bw, save + 1, px + kOpW - 16, save + 27, rl, H_RULES, 0,
+           "Which words send a track to DIA, FX, MUS or ATMO, and a REAPER track template with your stems and routing.");
+  }
   optRow(st, g, px, y, "Show positions in samples too", st->showSamples, true, H_SAMPLES,
          "The selected event's position and length also in samples (at the AAF's sample rate), for checking sync.");
   // clip gain: three ways
@@ -1875,6 +1886,102 @@ void paintOptions(State *st, const Gfx &g) {
   g.fill(px + 16, y, px + kOpW - 16, y + 1, kLine);
   g.text(st->fTag, kMute, "V 0.6 beta developed with AI assistance \xc2\xb7 dmajorsound.com", px + 16, y + 4, px + kOpW - 16,
          y + 24, DT_LEFT);
+}
+
+// ------------------------------------------------------------------ folder sorting and track template
+
+void loadTemplateList(State *st) {
+  const std::string &p = st->opt->trackTemplate;
+  if (p == st->tplLoaded) return;
+  st->tplLoaded = p;
+  st->tplTracks.clear();
+  if (!p.empty()) olaaf::readTrackTemplate(p, &st->tplTracks, nullptr);
+}
+
+void saveRules(State *st, const std::vector<SortRule> &rules) {
+  setSortRules(rules);
+  bool isDefault = sortRulesToText(rules) == sortRulesToText(defaultSortRules());
+  if (st->host && st->host->setSetting) st->host->setSetting("rules", isDefault ? "" : sortRulesToText(rules));
+}
+
+void paintRules(State *st, const Gfx &g) {
+  loadTemplateList(st);
+  const std::vector<SortRule> &rules = sortRules();
+  std::vector<Folder> asFolders;
+  for (auto &r : rules) asFolders.push_back({r.name, r.name, r.color});
+  std::map<std::string, int> match = olaaf::matchTemplate(st->tplTracks, asFolders);
+  const double w = 520, rowH = 50;
+  double h = 60 + rules.size() * rowH + 16 + 52 + 62 + 32 + 18;
+  double l = std::min(st->optsBtn.r - 60, kR - w), t = kTopH - 6;
+  g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 12, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
+  g.rbox(l, t, l + w, t + h, 12, kLine, kPop);
+  addHit(st, l, t, l + w, t + h, H_RULES_BG, 0, nullptr);
+  g.text(st->fBold, kInk, "Sorting tracks into folders", l + 16, t + 12, l + w - 60, t + 32, DT_LEFT);
+  g.text(st->fSmall, kMute, "A track goes into the folder when its name holds one of the words.", l + 16, t + 32, l + w - 60,
+         t + 50, DT_LEFT);
+  button(st, g, l + w - 44, t + 12, l + w - 16, t + 40, "\xc3\x97", H_RULES_CLOSE, 0, "Close (Esc).");
+  double y = t + 60;
+  const double nameR = l + 100, wordsL = l + 108, wordsR = l + w - (st->tplTracks.empty() ? 16 : 150);
+  for (size_t i = 0; i < rules.size(); i++) {
+    const SortRule &r = rules[i];
+    double cy = y + rowH / 2 - 4;
+    g.rfill(l + 16, cy - 8, l + 32, cy + 8, 8, rgbToRef(r.color));
+    addHit(st, l + 12, cy - 12, l + 36, cy + 12, H_RULE_COLOR, (int)i, "The folder's color. Click to change it.");
+    g.text(st->fBold, kInk, r.name, l + 42, y, nameR, y + rowH - 8, DT_LEFT);
+    addHit(st, l + 40, y + 4, nameR, y + rowH - 12, H_RULE_NAME, (int)i, "The folder's name. Click to rename it.");
+    std::string words;
+    for (size_t k = 0; k < r.words.size(); k++) words += (k ? ", " : "") + r.words[k];
+    if (words.empty()) words = "(no words: nothing goes here by itself)";
+    g.rbox(wordsL, y + 2, wordsR, y + rowH - 10, 8, kLine, kPanel);
+    bool cut = false;
+    std::vector<std::string> wl = fitLines(g, st->fSmall, words, wordsR - wordsL - 16, 2, &cut);
+    for (size_t k = 0; k < wl.size(); k++)
+      g.text(st->fSmall, r.words.empty() ? kMute : kInk, wl[k], wordsL + 8, y + 5 + k * 16, wordsR - 8, y + 21 + k * 16,
+             DT_LEFT);
+    static std::string wTip[16];
+    if (i < 16) wTip[i] = "Click to edit the words for " + r.name + ": " + words;
+    addHit(st, wordsL, y + 2, wordsR, y + rowH - 10, H_RULE_WORDS, (int)i, i < 16 ? wTip[i].c_str() : nullptr);
+    if (!st->tplTracks.empty()) {
+      auto m = match.find(r.name);
+      std::string to = m == match.end() ? "own folder" : "\xe2\x86\x92 " + st->tplTracks[(size_t)m->second].name;
+      std::vector<std::string> tl = fitLines(g, st->fSmall, to, 124, 1, &cut);
+      g.text(st->fSmall, m == match.end() ? kMute : kInk, tl.empty() ? to : tl[0], wordsR + 10, y, l + w - 16, y + rowH - 8,
+             DT_LEFT);
+    }
+    y += rowH;
+  }
+  g.text(st->fSmall, kMute, "Everything else goes to OTHER.", l + 16, y - 6, l + 300, y + 12, DT_LEFT);
+  y += 16;
+  button(st, g, l + 16, y, l + 186, y + 28, "Sort the tracks now", H_RULES_SORT, 0,
+         "Puts this AAF's tracks into the folders by these words again (Cmd/Ctrl+Z undoes it).");
+  button(st, g, l + 196, y, l + 336, y + 28, "Reset the words", H_RULES_RESET, 0,
+         "Back to OLAAF's own folders and words (DIA, FX, MUS, ATMO).");
+  y += 42;
+  g.fill(l + 16, y, l + w - 16, y + 1, kLine);
+  y += 10;
+  g.text(st->fBold, kInk, "Track template", l + 16, y, l + w - 16, y + 20, DT_LEFT);
+  g.text(st->fSmall, kMute, "A REAPER track template (.RTrackTemplate) with your stems and routing comes in first.",
+         l + 16, y + 20, l + w - 16, y + 38, DT_LEFT);
+  g.text(st->fSmall, kMute, "Each folder goes into its template track: \"Dialog Stem\" takes DIA.", l + 16, y + 36,
+         l + w - 16, y + 54, DT_LEFT);
+  y += 62;
+  const std::string &tp = st->opt->trackTemplate;
+  bool bad = !tp.empty() && st->tplTracks.empty();
+  double fr = l + w - (tp.empty() ? 126 : 212);
+  g.rbox(l + 16, y, fr, y + 32, 8, bad ? kRed : kLine, kPanel);
+  std::string shown = tp.empty() ? "None: OLAAF makes the folders"
+                                 : bad ? baseName(tp) + " (no tracks in it)"
+                                       : strprintf("%s  \xc2\xb7  %zu tracks", stemName(tp).c_str(), st->tplTracks.size());
+  bool cut = false;
+  std::vector<std::string> sl = fitLines(g, st->fBody, shown, fr - l - 40, 1, &cut);
+  g.text(st->fBody, tp.empty() ? kMute : (bad ? kRed : kInk), sl.empty() ? shown : sl[0], l + 26, y, fr - 8, y + 32, DT_LEFT);
+  static std::string tTip;
+  tTip = tp.empty() ? "No track template." : tp;
+  addHit(st, l + 16, y, fr, y + 32, H_RULES_BG, 0, tTip.c_str());
+  button(st, g, fr + 8, y + 2, fr + 110, y + 30, "Choose\xe2\x80\xa6", H_TPL_CHOOSE, 0,
+         "Choose a .RTrackTemplate file. OLAAF remembers it for the next imports.");
+  if (!tp.empty())
+    button(st, g, fr + 118, y + 2, l + w - 16, y + 30, "Remove", H_TPL_CLEAR, 0, "Import without a track template.");
 }
 
 // ------------------------------------------------------------------ missing media
@@ -2274,6 +2381,7 @@ void paint(State *st, HDC dc) {
   if (st->palTrack >= 0 || !st->palFolder.empty()) paintPalette(st, g);
   if (st->optsOpen) paintOptions(st, g);
   if (st->missingOpen) paintMissing(st, g);
+  if (st->rulesOpen) paintRules(st, g);
   if (st->helpOpen) paintHelp(st, g);
   paintFooter(st, g);
   if (st->themeMenu) { // System / Dark / Light, under the OLAAF logo
@@ -2354,7 +2462,7 @@ bool isEditHit(int id) {
   case H_TRACK_CHECK: case H_PAL: case H_PAL_CUSTOM: case H_PAL_NONE: case H_FOLD_ASSIGN: case H_FOLD_NONE:
   case H_FOLD_DELETE: case H_FOLD_NEW: case H_EV_REMOVE: case H_EV_RESTORE: case H_EV_UP: case H_EV_DOWN:
   case H_EV_RESET: case H_EV_MUTE: case H_NEW_FOLDER: case H_TRACK_DELETE: case H_DEST_NEW: case H_DEST_MATCHALL:
-  case H_DEST_PICK: case H_EV_SWAP: case H_TRACK_SWAP:
+  case H_DEST_PICK: case H_EV_SWAP: case H_TRACK_SWAP: case H_RULES_SORT:
     return true;
   }
   return false;
@@ -2567,6 +2675,11 @@ void click(State *st, int x, int y, bool shift) {
   }
   if (st->themeMenu && id != H_THEME && id != H_THEME_BG && id != H_THEME_PICK) {
     st->themeMenu = false;
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    if (id == H_LANES || id == H_NONE) return;
+  }
+  if (st->rulesOpen && !(id >= H_RULES && id <= H_RULES_CLOSE)) {
+    st->rulesOpen = false;
     InvalidateRect(st->hwnd, NULL, FALSE);
     if (id == H_LANES || id == H_NONE) return;
   }
@@ -2820,6 +2933,73 @@ void click(State *st, int x, int y, bool shift) {
     break;
   }
   case H_MISS_BG: return;
+  case H_RULES: st->rulesOpen = true; st->optsOpen = false; break;
+  case H_RULES_BG: return;
+  case H_RULES_CLOSE: st->rulesOpen = false; break;
+  case H_RULE_COLOR: case H_RULE_NAME: case H_RULE_WORDS: {
+    std::vector<SortRule> rules = sortRules();
+    int i = h ? h->idx : -1;
+    if (i < 0 || i >= (int)rules.size() || !st->host) break;
+    SortRule &r = rules[(size_t)i];
+    if (id == H_RULE_COLOR) {
+      uint32_t c = r.color;
+      if (!st->host->pickColor || !st->host->pickColor(st->hwnd, &c)) break;
+      r.color = c ? c : 1;
+    } else if (id == H_RULE_NAME) {
+      std::string v = r.name;
+      if (!st->host->askText || !st->host->askText("OLAAF: folder name", "Folder name", &v)) break;
+      size_t a = v.find_first_not_of(" \t"), b = v.find_last_not_of(" \t");
+      if (a == std::string::npos) break;
+      v = v.substr(a, b - a + 1);
+      for (auto &o : rules)
+        if (&o != &r && lower(o.name) == lower(v)) v.clear();
+      if (v.empty() || v.find_first_of("|;") != std::string::npos) {
+        st->tip = "That name is taken (or has | or ;).";
+        break;
+      }
+      r.name = v;
+    } else {
+      std::string v;
+      for (size_t k = 0; k < r.words.size(); k++) v += (k ? ", " : "") + r.words[k];
+      std::string title = "OLAAF: words for " + r.name;
+      if (!st->host->askText || !st->host->askText(title.c_str(), "Words (separated by commas)", &v)) break;
+      for (auto &ch : v)
+        if (ch == '|') ch = ',';
+      r.words = splitWords(v);
+    }
+    saveRules(st, rules);
+    break;
+  }
+  case H_RULES_RESET: saveRules(st, defaultSortRules()); st->tip = "OLAAF's own folders and words are back."; break;
+  case H_RULES_SORT:
+    st->imp->assignDefaultFolders();
+    if (!st->opt->folders) st->opt->folders = true;
+    st->edited = true;
+    buildRows(st);
+    st->tip = st->imp->session().folders.empty() ? "The names point to one folder only: the tracks stay as they are."
+                                                  : "The tracks are sorted into the folders again.";
+    break;
+  case H_TPL_CHOOSE: {
+    std::string p;
+    if (!st->host || !st->host->pickFile || !st->host->pickFile("OLAAF: choose a track template (.RTrackTemplate)", &p) ||
+        p.empty())
+      break;
+    std::vector<olaaf::TemplateTrack> tt;
+    std::string err;
+    if (!olaaf::readTrackTemplate(p, &tt, &err)) {
+      static std::string errTip;
+      errTip = err;
+      st->tip = errTip.c_str();
+      break;
+    }
+    st->opt->trackTemplate = p;
+    if (st->host->setSetting) st->host->setSetting("template", p);
+    break;
+  }
+  case H_TPL_CLEAR:
+    st->opt->trackTemplate.clear();
+    if (st->host && st->host->setSetting) st->host->setSetting("template", "");
+    break;
   case H_MISS_OPEN: st->missingOpen = !st->missingOpen; st->optsOpen = false; break;
   case H_MISS_PICK: {
     int mi = h ? h->idx : -1;
@@ -3708,6 +3888,8 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   if (getenv("OLAAF_OPTS")) st.optsOpen = true;
   if (getenv("OLAAF_HELP")) st.helpOpen = true;
   if (getenv("OLAAF_MISSING")) st.missingOpen = true;
+  if (getenv("OLAAF_RULES")) st.rulesOpen = true;
+  if (getenv("OLAAF_TPL")) st.opt->trackTemplate = getenv("OLAAF_TPL");
   if (getenv("OLAAF_THEMEMENU")) st.themeMenu = true;
   if (getenv("OLAAF_LONGNAME") && imp.session().tracks.size() > 1) {
     imp.session().tracks[0].name = "Dialog_Boom_Szene_12_Take_3_Close_Mic_Rechts";
@@ -3795,8 +3977,8 @@ int dialogTranslateKey(MSG *msg) {
     return -1;
   }
   if (msg->message == WM_KEYDOWN && msg->wParam == VK_ESCAPE) {
-    if (st->helpOpen || st->optsOpen || st->missingOpen || st->themeMenu || st->folderTrack >= 0 || st->destTrack >= 0 || st->palTrack >= 0 || !st->palFolder.empty()) {
-      st->optsOpen = st->helpOpen = st->missingOpen = st->themeMenu = false; // Esc closes an open panel first
+    if (st->helpOpen || st->optsOpen || st->missingOpen || st->rulesOpen || st->themeMenu || st->folderTrack >= 0 || st->destTrack >= 0 || st->palTrack >= 0 || !st->palFolder.empty()) {
+      st->optsOpen = st->helpOpen = st->missingOpen = st->rulesOpen = st->themeMenu = false; // Esc closes an open panel first
       st->folderTrack = st->destTrack = st->palTrack = -1;
       st->palFolder.clear();
       InvalidateRect(st->hwnd, NULL, FALSE);

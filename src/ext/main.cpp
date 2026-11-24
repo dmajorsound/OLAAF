@@ -10,6 +10,7 @@
 #include "../core/audiofile.h"
 #include "../core/importer.h"
 #include "../core/report.h"
+#include "../core/track_template.h"
 #include "../core/util.h"
 #include "progress.h"
 #include "dialog.h"
@@ -47,6 +48,7 @@
 #define REAPERAPI_WANT_StopPreview
 #define REAPERAPI_WANT_TimeMap_curFrameRate
 #define REAPERAPI_WANT_InsertTrackAtIndex
+#define REAPERAPI_WANT_ShowConsoleMsg
 #define REAPERAPI_WANT_AddProjectMarker2
 #define REAPERAPI_WANT_GetExtState
 #define REAPERAPI_WANT_SetExtState
@@ -460,6 +462,14 @@ static DialogHost makeHost() {
 static bool loadForImport(const std::string &aaf, ImportOptions &opt, Importer &imp, std::string &err,
                           std::string &defaultDest) {
   updateCheckStart(); // is there a newer OLAAF? (once per session, in the background)
+  { // the folder sort rules (edited in the dialog)
+    const char *r = GetExtState("olAAF", "rules");
+    setSortRules(r && *r ? sortRulesFromText(r) : std::vector<SortRule>());
+  }
+  { // the track template added on import (chosen in the dialog)
+    const char *t = GetExtState("olAAF", "template");
+    opt.trackTemplate = t ? t : "";
+  }
   // OLAAF wears the REAPER theme that is loaded right now
   { // the look chosen in the footer: system (REAPER's colors), dark or light
     const char *v = GetExtState("olAAF", "theme");
@@ -559,6 +569,14 @@ static void insertTracks(Importer &imp, ImportOptions &opt, const MediaReport &r
   PreventUIRefresh(1);
   int base = CountTracks(nullptr);
   auto chunks = imp.trackChunks(opt);
+  if (!opt.trackTemplate.empty()) { // stems and routing from the template, the AAF tracks inside them
+    std::vector<TemplateTrack> tpl;
+    std::string err;
+    if (readTrackTemplate(opt.trackTemplate, &tpl, &err))
+      chunks = applyTrackTemplate(chunks, tpl, opt.folders ? imp.session().folders : std::vector<Folder>(), base);
+    else
+      ShowConsoleMsg(("OLAAF: " + err + " The AAF is imported without it.\n").c_str());
+  }
   int added = 0;
   for (size_t i = 0; i < chunks.size(); i++) {
     if (!chunks[i].targetGuid.empty()) { // onto an existing track ("match tracks"): only the items

@@ -36,6 +36,7 @@ add_library(olaaf_core STATIC
   src/core/importer.cpp
   src/core/peaks.cpp
   src/core/report.cpp
+  src/core/track_template.cpp
   src/core/util.cpp)
 find_package(Threads REQUIRED)
 target_link_libraries(olaaf_core PUBLIC aaf Threads::Threads)

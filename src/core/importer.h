@@ -31,6 +31,7 @@ struct ImportOptions {
   std::vector<std::string> searchFolders; // extra places to look for linked media
   double tcOffset = 0.0;        // seconds added to every position
   std::string relativeTo;       // write media paths relative to this folder when they are inside it
+  std::string trackTemplate;    // a REAPER .RTrackTemplate added on import ("" = none)
 };
 
 struct MediaReport {
@@ -50,9 +51,24 @@ struct TrackChunk {
   std::vector<GainPoint> volEnv, panEnv; // absolute times (offset applied); pan in REAPER's direction (+1 = left)
   std::string volEnvChunk, panEnvChunk;  // the same as "<VOLENV2 ... >" / "<PANENV2 ... >" blocks
   double rangeStart = 0, rangeEnd = 0;   // where the track's events are (offset applied)
+  std::string folderKey; // the folder (Session::folders key) this track is in, or opens
+  bool isFolder = false; // the folder track itself
 };
 
-// folder a track belongs in, from its name ("Boom 1" -> DIALOG, "ATMO Stereo 2" -> ATMO)
+// Sorting tracks into folders by their names: each rule is a folder with the words that send a
+// track there ("Boom 1" -> DIA, "ATMO Stereo 2" -> ATMO). Editable in the dialog, remembered.
+struct SortRule {
+  std::string name;
+  uint32_t color;
+  std::vector<std::string> words;
+};
+std::vector<SortRule> defaultSortRules(); // DIA, FX, MUS, ATMO
+void setSortRules(const std::vector<SortRule> &rules);
+const std::vector<SortRule> &sortRules();
+std::string sortRulesToText(const std::vector<SortRule> &rules);
+std::vector<SortRule> sortRulesFromText(const std::string &text);
+std::vector<std::string> splitWords(const std::string &text);
+// folder a track belongs in, from its name; "OTHER" when no rule matches
 std::string trackGroup(const std::string &trackName);
 uint32_t groupColor(const std::string &group);
 
