@@ -884,10 +884,10 @@ void paintTopBar(State *st, const Gfx &g) {
   if (std::fabs(tcOffset(st)) > 1e-9) { // moved (typed or edit cursor): one click back to the AAF's own timecode
     static std::string rTip;
     rTip = "Back to the AAF's own timecode: it starts at " + formatTC(s.firstClip(), s.fps) + ".";
-    double rw = g.width(st->fBody, "Reset to AAFs TC") + 24; // not just "Reset": the event bar has one too
+    double rw = g.width(st->fBody, "Reset to AAF\xe2\x80\x99s TC") + 24; // not just "Reset": the event bar has one too
     double used = std::max(g.width(st->fMonoBig, land), g.width(st->fSmall, "Starts in REAPER at")) + 12;
     double bR = r - std::min(tw, used);   // right next to the timecode
-    button(st, g, bR - rw, mid - 13, bR, mid + 13, "Reset to AAFs TC", H_TC_RESET, 0, rTip.c_str());
+    button(st, g, bR - rw, mid - 13, bR, mid + 13, "Reset to AAF\xe2\x80\x99s TC", H_TC_RESET, 0, rTip.c_str());
     infoR = std::min(infoR, bR - rw - 16);
   }
 
