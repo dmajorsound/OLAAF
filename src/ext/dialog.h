@@ -48,6 +48,8 @@ struct DialogHost {
   std::function<void(const char *key, const std::string &value)> setSetting;
   // frame rate of the REAPER project (and whether it is drop frame); empty = unknown
   std::function<double(bool *dropFrame)> projectFps;
+  // sample rate the REAPER project runs at (the project's own or the audio device's); 0 = unknown
+  std::function<double()> projectSrate;
   // listening through REAPER's preview: start (false if REAPER can't read the file), stop,
   // and how far it got in seconds (-1 when it has stopped)
   std::function<bool(const std::vector<PreviewPart> &parts)> playPreview;

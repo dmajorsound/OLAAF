@@ -135,7 +135,7 @@ enum HitId {
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
   H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE,
-  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE
+  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES
 };
 
 struct Hit {
@@ -215,6 +215,20 @@ struct State {
   std::string updTag, updUrl;            // a newer OLAAF on GitHub
   int updPolls = 0;
   // the stereo meter while a stereo event plays
+  // undo / redo of the edits made here (tracks, folders and the selection as they were)
+  struct Snap {
+    std::vector<Track> tracks;
+    std::vector<Folder> folders;
+    std::set<int> sel;
+    bool edited;
+  };
+  std::vector<Snap> undo, redo;
+  // drag to select events
+  bool marquee = false;
+  double mqX0 = 0, mqY0 = 0, mqX1 = 0, mqY1 = 0; // device pixels
+  std::set<int> mqBase;                  // the selection before (Shift adds)
+  bool showSamples = false;              // positions also in samples
+  std::set<int> solo;                   // soloed tracks (uid): only these play; listening only, not the import
   bool gonioOpen = false;               // the stereo meter is wanted (shows while a stereo event is selected)
   PcmReader rdL, rdR;                    // the files the meter reads (one stereo file: both the same)
   int rdChL = 0, rdChR = 1;
@@ -631,6 +645,15 @@ bool fpsMismatch(State *st, double *projFps = nullptr) {
   return std::fabs(pf - s.fps) > 0.01 || (drop != s.dropFrame && std::fabs(s.fps - 29.97) < 0.02);
 }
 
+// the AAF's sample rate against the REAPER project's
+bool srMismatch(State *st, double *projSr = nullptr) {
+  if (!st->host || !st->host->projectSrate) return false;
+  double pr = st->host->projectSrate();
+  if (projSr) *projSr = pr;
+  const Session &s = st->imp->session();
+  return pr > 0 && s.sampleRate > 0 && std::fabs(pr - s.sampleRate) > 1;
+}
+
 std::string fpsShort(double f) {
   if (std::fabs(f - std::lround(f)) < 0.001) return strprintf("%d", (int)std::lround(f));
   return strprintf("%.3f", f);
@@ -740,7 +763,10 @@ void paintTopBar(State *st, const Gfx &g) {
   bool fpsBad = fpsMismatch(st, &proj);
   std::string a = s.product.empty() ? std::string() : s.product + " \xc2\xb7 ";
   std::string f = fpsText(s);
-  std::string b = strprintf(" \xc2\xb7 %g kHz / %d bit \xc2\xb7 ", s.sampleRate / 1000.0, s.bits);
+  double projSr = 0;
+  bool srBad = srMismatch(st, &projSr);
+  std::string srT = strprintf("%g kHz", s.sampleRate / 1000.0);
+  std::string b = strprintf(" / %d bit \xc2\xb7 ", s.bits);
   double y0 = mid + 2, y1 = mid + 19;
   auto seg = [&](const std::string &t, COLORREF c) {
     double w = g.width(st->fSmall, t);
@@ -755,6 +781,13 @@ void paintTopBar(State *st, const Gfx &g) {
     static std::string fTip;
     fTip = strprintf("The REAPER project runs at %s fps, the AAF at %s.", fpsShort(proj).c_str(), fpsText(s).c_str());
     addHit(st, fx, y0, x, y1, H_FPS_SHOW, 0, fTip.c_str());
+  }
+  seg(" \xc2\xb7 ", kMute);
+  double sx = seg(srT, srBad ? kWarn : kMute);
+  if (srBad) {
+    static std::string sTip;
+    sTip = strprintf("The REAPER project runs at %g kHz, the AAF at %g kHz.", projSr / 1000.0, s.sampleRate / 1000.0);
+    addHit(st, sx, y0, x, y1, H_FPS_SHOW, 0, sTip.c_str());
   }
   seg(b, kMute);
   int ok = 0, total = 0;
@@ -1219,6 +1252,25 @@ void paintArrange(State *st, const Gfx &g) {
       g.rbox(hx + 20, cy + 1, hx + 36, cy + 17, 4, theme().empty, kPanel);
     addHit(st, hx + 16, y + 2, hx + 42, y + kRowH - 2, H_TRACK_CHECK, row.track, "Import this track or leave it out.");
     double nameR = tr.created ? kL + kHdr - 34 : kL + kHdr - 8;
+    { // solo: for listening here only
+      bool so = st->solo.count(tr.uid) > 0;
+      double sr = nameR, sl = sr - 22;
+      if (so || st->hoverRow == ri || trSel) {
+        COLORREF soC = RGB(0xe8, 0xc5, 0x47);
+        if (so) {
+          g.rfill(sl, y + 8, sr, y + kRowH - 8, 5, soC);
+          g.text(st->fSmall, RGB(0x22, 0x1c, 0x08), "S", sl, y + 8, sr, y + kRowH - 8, DT_CENTER);
+        } else {
+          g.rbox(sl, y + 8, sr, y + kRowH - 8, 5, kLine, kPanel);
+          g.text(st->fSmall, kMute, "S", sl, y + 8, sr, y + kRowH - 8, DT_CENTER);
+        }
+      }
+      addHit(st, sl, y + 6, sr, y + kRowH - 6, H_TRACK_SOLO, row.track,
+             so ? "Solo is on: only this track plays. Click to turn it off (Shift + S)."
+                : "Solo: only this track plays (Shift + S for the selected event's track). One track at a time; listening only, "
+                  "the import is not changed.");
+      nameR = sl - 4;
+    }
     bool hot = st->hoverRow == ri || trSel; // the track's tools show under the mouse
     if (st->host && st->host->projectTracks) { // put the events on an existing REAPER track
       bool matched = !tr.target.empty();
@@ -1407,6 +1459,14 @@ void paintArrange(State *st, const Gfx &g) {
   st->hTrack = devRect(st, hl, ht, hr, hb);
   st->hThumb = devRect(st, tx, ht, tx + tw, hb);
   addHit(st, hl, ht, hr, hb, H_NONE, 0, "Drag to move through time, or use + and \xe2\x88\x92 to zoom.");
+  if (st->marquee) { // the selection frame
+    double l = (std::min(st->mqX0, st->mqX1) - g.ox) / g.s, r = (std::max(st->mqX0, st->mqX1) - g.ox) / g.s;
+    double t = (std::min(st->mqY0, st->mqY1) - g.oy) / g.s, b = (std::max(st->mqY0, st->mqY1) - g.oy) / g.s;
+    g.fill(l, t, r, t + 1, kBlue);
+    g.fill(l, b - 1, r, b, kBlue);
+    g.fill(l, t, l + 1, b, kBlue);
+    g.fill(r - 1, t, r, b, kBlue);
+  }
   olRoundCorners(g.dc, g.X(kL), g.Y(kAT), g.X(kR), g.Y(kAB), 12 * g.s, kFace, kLine);
 }
 
@@ -1495,6 +1555,9 @@ void paintEventBar(State *st, const Gfx &g) {
                     formatTC(c->pos + tcOffset(st), s.fps).c_str(), formatTC(c->len, s.fps).c_str(), dbText(c->gain).c_str(),
                     c->gainEnv.empty() ? "" : " + curve",
                     c->excluded ? " \xc2\xb7 removed" : (c->mute ? " \xc2\xb7 muted" : ""));
+    if (st->showSamples && s.sampleRate > 0)
+      det += strprintf(" \xc2\xb7 %lld / %lld smp", (long long)std::llround((c->pos + tcOffset(st)) * s.sampleRate),
+                       (long long)std::llround(c->len * s.sampleRate));
   } else {
     std::set<int> trs;
     for (int id : ids) {
@@ -1535,7 +1598,7 @@ void paintOptions(State *st, const Gfx &g) {
   Session &s = st->imp->session();
   ImportOptions &opt = *st->opt;
   double px = std::min(st->optsBtn.r - 60, kR - kOpW), py = kTopH - 6;
-  double ph = 398;
+  double ph = 426;
   // shadow, then the panel
   g.rfill(px - 1, py + 1, px + kOpW + 3, py + ph + 5, 12, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
   g.rbox(px, py, px + kOpW, py + ph, 12, kLine, kPop);
@@ -1550,6 +1613,8 @@ void paintOptions(State *st, const Gfx &g) {
          "Markers from the edit become REAPER markers.");
   optRow(st, g, px, y, "Folder tracks", opt.folders, true, H_FOLDERS,
          "Folder tracks. Click a track name to choose its folder; the pencil renames a folder.");
+  optRow(st, g, px, y, "Show positions in samples too", st->showSamples, true, H_SAMPLES,
+         "The selected event's position and length also in samples (at the AAF's sample rate), for checking sync.");
   // clip gain: three ways
   {
     double sy = y + 4, sl = px + 96, sr = px + kOpW - 16;
@@ -1642,8 +1707,8 @@ void keyCap(State *st, const Gfx &g, double &x, double y, const std::string &k) 
 }
 
 void paintHelp(State *st, const Gfx &g) {
-  double w = 820, h = 530;
-  double l = (W - w) / 2, t = kTopH + 14;
+  double w = 860, h = 650;
+  double l = (W - w) / 2, t = kTopH + 6;
   g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 16, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
   g.rbox(l, t, l + w, t + h, 16, kLine, kPop);
   addHit(st, l, t, l + w, t + h, H_HELP_BG, 0, nullptr);
@@ -1663,13 +1728,17 @@ void paintHelp(State *st, const Gfx &g) {
                       {"F", "Show the whole AAF"},
                       {"A", "Show automation in the lanes"}};
   const Row ev[] = {{"Click", "Select an event (Shift-click: more)"},
+                    {"Drag", "Select events in a frame (from empty lane)"},
+                    {"Cmd/Ctrl|A", "Select all events"},
                     {"\xe2\x86\x91/\xe2\x86\x93", "Move the selection one track up / down"},
                     {"M", "Mute / unmute"},
                     {"G", "Stereo meter for a stereo event"},
+                    {"Shift|S", "Solo the selected event's track"},
                     {"Delete/Backspace", "Remove / restore"},
                     {"Drag names", "Order tracks, put them in folders"},
                     {"Double-click", "Rename a track"}};
-  const Row win[] = {{"Return", "Import"},
+  const Row win[] = {{"Cmd/Ctrl|Z", "Undo (Shift: redo)"},
+                     {"Return", "Import"},
                      {"O", "Options"},
                      {"H", "This help"},
                      {"Esc", "Close a panel, then the window"}};
@@ -1700,8 +1769,8 @@ void paintHelp(State *st, const Gfx &g) {
   double y1 = t + 74, y2 = t + 74;
   block(l + 24, y1, "Listening", play, 3);
   block(l + 24, y1, "View", view, 5);
-  block(l + 424, y2, "Events and tracks", ev, 6);
-  block(l + 424, y2, "Window", win, 4);
+  block(l + 424, y2, "Events and tracks", ev, 10);
+  block(l + 424, y2, "Window", win, 5);
   double y = std::max(y1, y2) + 2;
   g.fill(l + 24, y, l + w - 24, y + 1, kLine);
   g.text(st->fSmall, kMute,
@@ -1760,27 +1829,46 @@ void paintTooltip(State *st, const Gfx &g) {
 // ------------------------------------------------------------------ frame rate warning
 
 void paintFpsWarning(State *st, const Gfx &g) {
-  double proj = 0;
-  if (st->fpsDismissed || !fpsMismatch(st, &proj)) return;
+  double proj = 0, projSr = 0;
+  bool fps = fpsMismatch(st, &proj), sr = srMismatch(st, &projSr);
+  if (st->fpsDismissed || (!fps && !sr)) return;
   Session &s = st->imp->session();
-  double w = 470, h = 150;
+  double w = 500, h = fps && sr ? 182 : 150;
   double cx = (kTlx + kTlr) / 2 - 40, cy = (kLT + kLB) / 2;
   double l = cx - w / 2, t = cy - h / 2;
   g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 14, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
   g.rbox(l, t, l + w, t + h, 14, kWarn, kPop);
   addHit(st, l, t, l + w, t + h, H_OPTS_BG, 0, nullptr);
-  // the triangle
-  double tx = l + 44, ty = t + 46;
+  double tx = l + 44, ty = t + 46; // the triangle
   g.poly({{tx, ty - 22}, {tx + 24, ty + 18}, {tx - 24, ty + 18}}, kWarn);
   g.fill(tx - 1.6, ty - 8, tx + 1.6, ty + 6, kPop);
   g.fill(tx - 1.6, ty + 9, tx + 1.6, ty + 12.5, kPop);
-  g.text(st->fHead, kInk, "Frame rate mismatch", l + 84, t + 18, l + w - 16, t + 40, DT_LEFT);
-  std::string line1 = strprintf("The AAF runs at %s, this REAPER project at %s fps.", fpsText(s).c_str(), fpsShort(proj).c_str());
-  g.text(st->fBody, kInk, line1, l + 84, t + 44, l + w - 16, t + 64, DT_LEFT);
-  g.text(st->fSmall, kMute, "Timecode and frame edges won't line up. Set the project's frame rate", l + 84, t + 66, l + w - 16,
-         t + 84, DT_LEFT);
-  g.text(st->fSmall, kMute, "in File \xe2\x80\xba Project settings \xe2\x80\xba Video, or export the AAF again.", l + 84, t + 82,
-         l + w - 16, t + 100, DT_LEFT);
+  const char *title = fps && sr ? "Frame rate and sample rate don't match" : fps ? "Frame rate mismatch" : "Sample rate mismatch";
+  g.text(st->fHead, kInk, title, l + 84, t + 18, l + w - 16, t + 40, DT_LEFT);
+  double y = t + 44;
+  if (fps) {
+    g.text(st->fBody, kInk,
+           strprintf("The AAF runs at %s, this REAPER project at %s fps.", fpsText(s).c_str(), fpsShort(proj).c_str()), l + 84,
+           y, l + w - 16, y + 20, DT_LEFT);
+    y += 22;
+  }
+  if (sr) {
+    g.text(st->fBody, kInk,
+           strprintf("The AAF is %g kHz, this REAPER project %g kHz.", s.sampleRate / 1000.0, projSr / 1000.0), l + 84, y,
+           l + w - 16, y + 20, DT_LEFT);
+    y += 22;
+  }
+  if (fps) {
+    g.text(st->fSmall, kMute, "Frame rate: timecode and frame edges won't line up.", l + 84, y, l + w - 16, y + 18, DT_LEFT);
+    y += 16;
+  }
+  if (sr) {
+    g.text(st->fSmall, kMute, "Sample rate: REAPER resamples on playback, which can cost quality.", l + 84,
+           y, l + w - 16, y + 18, DT_LEFT);
+    y += 16;
+  }
+  g.text(st->fSmall, kMute, "Set both in File \xe2\x80\xba Project settings, or export the AAF again.", l + 84, y, l + w - 16,
+         y + 18, DT_LEFT);
   button(st, g, l + w - 116, t + h - 44, l + w - 16, t + h - 14, "Got it", H_FPS_OK, 0, "Hide this warning.", true);
 }
 
@@ -1969,6 +2057,49 @@ const ClipHit *clipAt(State *st, int x, int y) {
 
 std::vector<int> selection(State *st) { return std::vector<int>(st->sel.begin(), st->sel.end()); }
 
+void stopPlay(State *st);
+void buildRows(State *st);
+
+void pushUndo(State *st) {
+  Session &s = st->imp->session();
+  st->undo.push_back({s.tracks, s.folders, st->sel, st->edited});
+  if (st->undo.size() > 100) st->undo.erase(st->undo.begin());
+  st->redo.clear();
+}
+
+void undoRedo(State *st, bool isUndo) {
+  auto &from = isUndo ? st->undo : st->redo;
+  auto &to = isUndo ? st->redo : st->undo;
+  if (from.empty()) {
+    st->tip = isUndo ? "Nothing to undo." : "Nothing to redo.";
+    return;
+  }
+  Session &s = st->imp->session();
+  to.push_back({s.tracks, s.folders, st->sel, st->edited});
+  State::Snap &sn = from.back();
+  s.tracks = sn.tracks;
+  s.folders = sn.folders;
+  st->sel = sn.sel;
+  st->edited = sn.edited;
+  from.pop_back();
+  if (st->playClip || st->playTL) stopPlay(st);
+  st->selTracks.clear();
+  st->folderTrack = st->destTrack = st->palTrack = -1;
+  st->palFolder.clear();
+  buildRows(st);
+}
+
+bool isEditHit(int id) {
+  switch (id) {
+  case H_TRACK_CHECK: case H_PAL: case H_PAL_CUSTOM: case H_PAL_NONE: case H_FOLD_ASSIGN: case H_FOLD_NONE:
+  case H_FOLD_DELETE: case H_FOLD_NEW: case H_EV_REMOVE: case H_EV_RESTORE: case H_EV_UP: case H_EV_DOWN:
+  case H_EV_RESET: case H_EV_MUTE: case H_NEW_FOLDER: case H_TRACK_DELETE: case H_DEST_NEW: case H_DEST_MATCHALL:
+  case H_DEST_PICK: case H_EV_SWAP: case H_TRACK_SWAP:
+    return true;
+  }
+  return false;
+}
+
 void toggleMute(State *st) {
   bool all = true;
   for (int id : st->sel)
@@ -2106,6 +2237,7 @@ void endEdit(State *st, bool apply) {
     } else
       st->tip = "That is not a timecode. Use HH:MM:SS:FF or just the digits.";
   }
+  if (apply && (kind == 2 || kind == 4) && !v.empty()) pushUndo(st);
   if (apply && kind == 2)
     if (Folder *f = st->imp->session().folder(st->editKey))
       if (!v.empty()) f->name = v;
@@ -2164,7 +2296,8 @@ void click(State *st, int x, int y, bool shift) {
     InvalidateRect(st->hwnd, NULL, FALSE);
     if (id == H_LANES || id == H_NONE || id == H_FOLD_POP) return;
   }
-  bool inOpts = id == H_OPTS_BG || id == H_FADES || id == H_MERGE || id == H_MARKERS || id == H_FOLDERS || id == H_GAIN_ITEMS ||
+  if (isEditHit(id)) pushUndo(st);
+  bool inOpts = id == H_OPTS_BG || id == H_FADES || id == H_MERGE || id == H_MARKERS || id == H_FOLDERS || id == H_SAMPLES || id == H_GAIN_ITEMS ||
                 id == H_GAIN_TRACK || id == H_GAIN_OFF || id == H_VIDEO || id == H_VIDEO_CHOOSE || id == H_COPY_YES ||
                 id == H_COPY_NO || id == H_SUBDIR || id == H_DEST_CHOOSE || id == H_LOCATE;
   if (st->helpOpen && id != H_HELP_BG && id != H_HELP) { // a click anywhere else closes the help
@@ -2384,7 +2517,9 @@ void click(State *st, int x, int y, bool shift) {
   }
   case H_ZOOM_IN: zoomBy(st, 0.5, (kTlx + kTlr) / 2); break;
   case H_ZOOM_OUT: zoomBy(st, 2.0, (kTlx + kTlr) / 2); break;
-  case H_MERGE: {
+  case H_MERGE:
+    st->undo.clear();
+    st->redo.clear(); {
     st->merge = !st->merge;
     keepTrackChoices(st, [&]() { st->imp->setMergeStereo(st->merge); });
     opt.mergeStereo = st->merge;
@@ -2409,6 +2544,21 @@ void click(State *st, int x, int y, bool shift) {
   case H_GONIO_BG: return;
   case H_GONIO_CLOSE: st->gonioOpen = false; break;
   case H_GONIO_TOGGLE: st->gonioOpen = !st->gonioOpen; break;
+  case H_TRACK_SOLO: {
+    int idx = h ? h->idx : -1;
+    if (idx < 0 || idx >= (int)s.tracks.size()) break;
+    int uid = s.tracks[(size_t)idx].uid;
+    bool was = st->solo.count(uid) > 0; // one track at a time
+    st->solo.clear();
+    if (!was) st->solo.insert(uid);
+    if (st->playTL) { // hear it right away
+      double at = st->playhead;
+      stopPlay(st);
+      st->playhead = at;
+      toggleTimeline(st);
+    }
+    break;
+  }
   case H_EV_SWAP: {
     bool any = false, all = true;
     for (int sid : st->sel)
@@ -2441,6 +2591,10 @@ void click(State *st, int x, int y, bool shift) {
   case H_UPDATE:
     if (st->host && st->host->openUrl && !st->updUrl.empty()) st->host->openUrl(st->updUrl);
     return;
+  case H_SAMPLES:
+    st->showSamples = !st->showSamples;
+    if (st->host && st->host->setSetting) st->host->setSetting("samples", st->showSamples ? "1" : "0");
+    break;
   case H_GAIN_ITEMS: opt.clipGain = true; opt.clipGainToTrack = false; break;
   case H_GAIN_TRACK: opt.clipGain = true; opt.clipGainToTrack = true; break;
   case H_GAIN_OFF: opt.clipGain = false; break;
@@ -2575,6 +2729,7 @@ void toggleTimeline(State *st) {
   double end = 0;
   for (auto &tr : s.tracks) {
     if (!tr.import) continue;
+    if (!st->solo.empty() && !st->solo.count(tr.uid)) continue; // solo
     for (auto &c : tr.clips) {
       if (c.excluded || c.mute) continue;
       bool pair = c.sources.size() == 2;
@@ -2686,12 +2841,29 @@ bool handleKey(State *st, int vk) {
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
   }
+  if (vk == 'S' && (GetAsyncKeyState(VK_SHIFT) & 0x8000)) { // Shift + S: solo the selected event's track
+    int ti = -1;
+    if (!st->sel.empty() && st->imp->findClip(*st->sel.begin(), &ti) && ti >= 0) {
+      int uid = st->imp->session().tracks[(size_t)ti].uid;
+      bool was = st->solo.count(uid) > 0; // one track at a time
+      st->solo.clear();
+      if (!was) st->solo.insert(uid);
+      if (st->playTL) {
+        double at = st->playhead;
+        stopPlay(st);
+        st->playhead = at;
+        toggleTimeline(st);
+      }
+      InvalidateRect(st->hwnd, NULL, FALSE);
+    }
+    return true;
+  }
   if (vk == 'G') { // the stereo meter
     st->gonioOpen = !st->gonioOpen;
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
   }
-  if (vk == 'A') {
+  if (vk == 'A' && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) {
     st->opt->showAutomation = !st->opt->showAutomation;
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
@@ -2709,7 +2881,22 @@ bool handleKey(State *st, int vk) {
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
   }
+  bool cmd = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0; // Cmd on the Mac, Ctrl on Windows
+  bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+  if (cmd && (vk == 'Z' || vk == 'Y')) {
+    undoRedo(st, vk == 'Z' && !shift);
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    return true;
+  }
+  if (cmd && vk == 'A') { // select every event (that is not removed)
+    st->sel.clear();
+    for (auto &tr : st->imp->session().tracks)
+      for (auto &c : tr.clips) st->sel.insert(c.id);
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    return true;
+  }
   if (st->sel.empty()) return false;
+  if (vk == VK_UP || vk == VK_DOWN || vk == 'M' || vk == 'm' || vk == VK_DELETE || vk == VK_BACK) pushUndo(st);
   if (vk == VK_UP) moveSelectionBy(st, -1);
   else if (vk == VK_DOWN) moveSelectionBy(st, 1);
   else if (vk == 'M' || vk == 'm') toggleMute(st);
@@ -2761,6 +2948,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     st->viewLen = (b - a) * 1.04;
     st->tcAbs = std::fabs(st->opt->tcOffset);
     st->tcMinus = st->opt->tcOffset < 0;
+    if (st->host && st->host->getSetting) st->showSamples = st->host->getSetting("samples") == "1";
     st->peaks.start(st->imp->session()); // waveforms fill in as the files are read
     SetTimer(hwnd, kPeakTimer, 150, NULL);
     SetTimer(hwnd, kUpdTimer, 1000, NULL); // is there a newer OLAAF?
@@ -2908,6 +3096,14 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         st->dragFromY = p.y;
         st->dragRows = 0;
         SetCapture(hwnd);
+      } else if (const Hit *hl = hitAt(st, p.x, p.y)) {
+        if (hl->id == H_LANES) { // empty lane: drag a frame to select events (click alone: playhead)
+          st->drag = 7;
+          st->mqX0 = st->mqX1 = p.x;
+          st->mqY0 = st->mqY1 = p.y;
+          st->mqBase = shiftDown() ? st->sel : std::set<int>();
+          SetCapture(hwnd);
+        }
       }
     }
     InvalidateRect(hwnd, NULL, FALSE);
@@ -2940,7 +3136,10 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         st->lastNameClick = now;
         st->lastNameTrack = hitTrack;
       }
-      if (drag == 4 && moved && st->dropRow >= 0) dropTracks(st, st->dropRow);
+      if (drag == 4 && moved && st->dropRow >= 0) {
+        pushUndo(st);
+        dropTracks(st, st->dropRow);
+      }
       else if (drag != 5 && st->pressedTrack >= 0) {
         int t = st->pressedTrack;
         if (shiftDown()) { // Shift: everything from the last clicked track to this one (as shown)
@@ -2965,8 +3164,17 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       InvalidateRect(hwnd, NULL, FALSE);
       return 0;
     }
+    if (drag == 7) {
+      st->marquee = false;
+      if (!moved) click(st, p.x, p.y, shiftDown());
+      InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
+    }
     if (drag == 3) {
-      if (moved && st->dragRows) moveSelectionBy(st, st->dragRows);
+      if (moved && st->dragRows) {
+        pushUndo(st);
+        moveSelectionBy(st, st->dragRows);
+      }
       else if (st->pressedClip) click(st, p.x, p.y, shiftDown());
       st->dragRows = 0;
       st->tip = nullptr;
@@ -2979,6 +3187,24 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return 0;
   }
   case WM_MOUSEMOVE: {
+    if (st && st->drag == 7) {
+      double mx = (short)LOWORD(lp), my = (short)HIWORD(lp);
+      if (std::fabs(mx - st->mqX0) + std::fabs(my - st->mqY0) > 5 * st->scale) st->dragMoved = true;
+      if (st->dragMoved) {
+        st->marquee = true;
+        st->mqX1 = mx;
+        st->mqY1 = my;
+        RECT q = {(LONG)std::min(st->mqX0, mx), (LONG)std::min(st->mqY0, my), (LONG)std::max(st->mqX0, mx),
+                  (LONG)std::max(st->mqY0, my)};
+        st->sel = st->mqBase;
+        for (auto &ch : st->clipHits) {
+          RECT x;
+          if (IntersectRect(&x, &q, &ch.r)) st->sel.insert(ch.id);
+        }
+        InvalidateRect(hwnd, NULL, FALSE);
+      }
+      return 0;
+    }
     int mx = (short)LOWORD(lp), my = (short)HIWORD(lp);
     if (st->drag == 1) {
       double span = (double)(st->vTrack.bottom - st->vTrack.top) - (double)(st->vThumb.bottom - st->vThumb.top);
@@ -3177,6 +3403,9 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   if (getenv("OLAAF_SHOWAUTO")) opt.showAutomation = true;
   if (getenv("OLAAF_OPTS")) st.optsOpen = true;
   if (getenv("OLAAF_HELP")) st.helpOpen = true;
+  if (getenv("OLAAF_SOLO"))
+    for (auto &tr : imp.session().tracks)
+      if (tr.name == getenv("OLAAF_SOLO")) st.solo.insert(tr.uid);
   if (getenv("OLAAF_VIEW")) sscanf(getenv("OLAAF_VIEW"), "%lf,%lf", &st.viewStart, &st.viewLen);
   if (getenv("OLAAF_GONIO")) // the MUSIC pair, 20 s in
     for (auto &tr : imp.session().tracks)
@@ -3205,6 +3434,7 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   host.playPreview = [](const std::vector<PreviewPart> &) { return false; };
   st.playhead = imp.session().firstClip() + 9.5;
   if (getenv("OLAAF_FPS")) host.projectFps = [](bool *d) { *d = false; return 24.0; };
+  if (getenv("OLAAF_SR")) host.projectSrate = []() { return 44100.0; };
   if (getenv("OLAAF_HOVER")) st.hoverRow = atoi(getenv("OLAAF_HOVER"));
   if (getenv("OLAAF_DEST")) { // the "put on" popover with a made-up project
     host.projectTracks = []() {

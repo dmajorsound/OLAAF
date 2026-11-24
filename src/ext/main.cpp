@@ -37,6 +37,8 @@
 #define REAPERAPI_WANT_GetTrack
 #define REAPERAPI_WANT_GetUserFileNameForRead
 #define REAPERAPI_WANT_GetThemeColor
+#define REAPERAPI_WANT_GetSetProjectInfo
+#define REAPERAPI_WANT_GetAudioDeviceInfo
 #define REAPERAPI_WANT_PCM_Source_CreateFromFileEx
 #define REAPERAPI_WANT_PlayPreview
 #define REAPERAPI_WANT_StopPreview
@@ -405,6 +407,12 @@ static DialogHost makeHost() {
   };
   h.editCursor = []() { return GetCursorPosition(); };
   h.projectFps = [](bool *drop) { return TimeMap_curFrameRate(nullptr, drop); };
+  h.projectSrate = []() {
+    if (GetSetProjectInfo(nullptr, "PROJECT_SRATE_USE", 0, false) >= 0.5) return GetSetProjectInfo(nullptr, "PROJECT_SRATE", 0, false);
+    char buf[64] = "";
+    if (GetAudioDeviceInfo("SRATE", buf, sizeof(buf))) return atof(buf); // the project follows the audio device
+    return 0.0;
+  };
   h.playPreview = [](const std::vector<PreviewPart> &p) { return preview::play(p); };
   h.stopPreview = []() { preview::stop(); };
   h.previewPos = []() { return preview::pos(); };
