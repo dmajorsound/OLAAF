@@ -188,7 +188,8 @@ struct State {
   double dragValue = 0;
   bool dragMoved = false;
   int dragRows = 0;        // tracks the events are being dragged by (in shown order)
-  bool dragBlocked = false; // ... onto a spot another event holds
+  bool dragBlocked = false; // ... onto a spot another event holds, with no free track beyond
+  int dragEff = 0;          // where they really go (the next free track when the spot is taken)
   int dragFromPos = 0;     // shown position of the track the drag started on
   int pressedClip = 0;
   std::set<int> selTracks; // tracks selected by their names (to drag them into a folder)
@@ -1638,7 +1639,8 @@ void paintArrange(State *st, const Gfx &g) {
       double y0 = y + 4, y1 = y + kRowH - 4;
       double wy = (x1 - x0 > 30 && !c.name.empty()) ? y0 + 11 : y0; // waveform under the name
       if (selected && dragging) { // ghost where the event would land
-        int tr2 = rowOfPos(st, st->dragFromPos + st->dragRows + (posOfTrack(st, row.track) - st->dragFromPos));
+        int eff = st->dragBlocked ? st->dragRows : st->dragEff;
+        int tr2 = rowOfPos(st, st->dragFromPos + eff + (posOfTrack(st, row.track) - st->dragFromPos));
         int gv = tr2 - st->scrollRow;
         if (gv >= 0 && gv < kRows) {
           double gy = kLT + gv * kRowH;
@@ -2233,7 +2235,7 @@ void keyCap(State *st, const Gfx &g, double &x, double y, const std::string &k) 
 
 void paintHelp(State *st, const Gfx &g) {
   // three blocks left, one right; drawn over everything (footer too), always inside the window
-  const double rowH = 28, w = 860, h = 74 + (24 + 3 * rowH + 10) + (24 + 5 * rowH + 10) + (24 + 6 * rowH + 10) + 52;
+  const double rowH = 26, w = 860, h = 74 + (24 + 3 * rowH + 10) + (24 + 6 * rowH + 10) + (24 + 6 * rowH + 10) + 52;
   double l = (W - w) / 2, t = std::max(8.0, std::min(kTopH + 6, H - h - 8));
   g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 16, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
   g.rbox(l, t, l + w, t + h, 16, kLine, kPop);
@@ -2248,10 +2250,11 @@ void paintHelp(State *st, const Gfx &g) {
   const Row play[] = {{"Space", "Play / stop from the playhead"},
                       {"Shift|Space", "Play / stop the selected event"},
                       {"Click ruler", "Move the playhead"}};
-  const Row view[] = {{"+/\xe2\x88\x92", "Zoom in / out"},
+  const Row view[] = {{"+/\xe2\x88\x92/R/T", "Zoom in / out (R in, T out)"},
                       {"Alt|Wheel", "Zoom (Option on the Mac)"},
                       {"Shift|Wheel", "Move through time"},
                       {"F", "Show the whole AAF"},
+                      {"Z", "Zoom to the selection, playhead to it"},
                       {"A", "Show automation in the lanes"}};
   const Row ev[] = {{"Click", "Select an event (Shift-click: more)"},
                     {"Drag", "Select in a frame (start on an empty lane)"},
@@ -2295,7 +2298,7 @@ void paintHelp(State *st, const Gfx &g) {
   };
   double y1 = t + 74, y2 = t + 74;
   block(l + 24, y1, "Listening", play, 3);
-  block(l + 24, y1, "View", view, 5);
+  block(l + 24, y1, "View", view, 6);
   block(l + 24, y1, "Window", win, 6);
   block(l + 424, y2, "Events and tracks", ev, 10);
   double y = std::max(y1, y2) + 2;
@@ -2327,7 +2330,7 @@ void paintFooter(State *st, const Gfx &g) {
     hr = lr - lw - 20;
     if (!st->tip) hint = "Your choices from the last import of this AAF are back: names, folders, colors, removed and moved events.";
   }
-  bool taken = st->tip && strstr(st->tip, " is taken by ");
+  bool taken = st->tip && strstr(st->tip, " is taken by ") && strstr(st->tip, "nothing mov");
   if (st->peaks.busy() && st->peaks.total() > 0) { // the waveforms are still being read
     int dn = std::min(st->peaks.done(), st->peaks.total()), tot = st->peaks.total();
     std::string pl = strprintf("Creating waveforms\xe2\x80\xa6 %d of %d", dn, tot);
@@ -2776,6 +2779,35 @@ void clipMenu(State *st, POINT screen, int clipId) {
   InvalidateRect(st->hwnd, NULL, FALSE);
 }
 
+// Z: zooms to the selected events (their length fills the lanes) and puts the playhead at their start
+void zoomToSelection(State *st) {
+  double a = 1e300, b = -1e300;
+  int firstTrack = -1;
+  for (int id : st->sel) {
+    int t = -1;
+    if (Clip *c = st->imp->findClip(id, &t)) {
+      if (c->pos < a) firstTrack = t;
+      a = std::min(a, c->pos);
+      b = std::max(b, c->pos + c->len);
+    }
+  }
+  if (b < a) {
+    st->tip = "Select an event first: Z zooms to it.";
+    return;
+  }
+  double len = std::max(0.2, b - a), pad = len * 0.04;
+  st->viewStart = a - pad;
+  st->viewLen = len + 2 * pad;
+  bool was = st->playTL;
+  if (was || st->playClip) stopPlay(st);
+  st->playhead = a;
+  if (firstTrack >= 0) { // its track in view too
+    buildRows(st);
+    int r = rowOfPos(st, posOfTrack(st, firstTrack));
+    if (r >= 0 && (r < st->scrollRow || r >= st->scrollRow + kRows)) st->scrollRow = std::max(0, r - kRows / 2);
+  }
+}
+
 // Would moving the selection by `delta` tracks put an event on top of one already there?
 // (Touching, or an overlap shorter than a frame, is fine.) Says which in `why`.
 bool moveBlocked(State *st, int delta, std::string *why) {
@@ -2812,16 +2844,53 @@ bool moveBlocked(State *st, int delta, std::string *why) {
   return false;
 }
 
+// Where the selection really goes when moved by `delta` tracks: on a taken spot it goes on in the
+// same direction to the next track that is free there (below the last track: a new one). 0 = no free
+// track (upwards). `note` says what happened.
+int freeDelta(State *st, int delta, std::string *note) {
+  if (note) note->clear();
+  if (!delta || st->sel.empty()) return 0;
+  std::string why;
+  if (!moveBlocked(st, delta, &why)) return delta;
+  int lo = 1 << 30, firstPos = -1;
+  double firstT = 1e300;
+  for (int id : st->sel) {
+    int t = -1;
+    if (Clip *c = st->imp->findClip(id, &t)) {
+      int p = posOfTrack(st, t);
+      if (p < 0) continue;
+      lo = std::min(lo, p);
+      if (c->pos < firstT) {
+        firstT = c->pos;
+        firstPos = p;
+      }
+    }
+  }
+  int dir = delta > 0 ? 1 : -1, n = (int)st->order.size();
+  std::string taken = why.substr(0, why.find(". Nothing moved."));
+  for (int d = delta + dir; dir > 0 || lo + d >= 0; d += dir) {
+    if (moveBlocked(st, d, nullptr)) continue;
+    if (note) {
+      int to = firstPos + d;
+      std::string where = to >= 0 && to < n ? st->imp->session().tracks[(size_t)st->order[(size_t)to]].name : "";
+      *note = taken + ": " + (st->sel.size() == 1 ? "the event" : "the events") +
+              (where.empty() ? " went to a new track." : " went to " + where + ", the next free track.");
+    }
+    return d;
+  }
+  if (note) *note = taken + ". There's no free track above: nothing moved.";
+  return 0;
+}
+
 // moves the selection by `delta` tracks in the order the tracks are shown; below the last
 // track new tracks are added (outside any folder, so they show up at the bottom)
 void moveSelectionBy(State *st, int delta) {
   if (!delta || st->sel.empty()) return;
-  static std::string blockedTip;
+  static std::string moveNote;
   buildRows(st);
-  if (moveBlocked(st, delta, &blockedTip)) { // never on top of another event
-    st->tip = blockedTip.c_str();
-    return;
-  }
+  delta = freeDelta(st, delta, &moveNote); // never on top of another event: on to the next free track
+  st->tip = moveNote.empty() ? nullptr : moveNote.c_str();
+  if (!delta) return;
   Session &s = st->imp->session();
   buildRows(st);
   int lo = 1 << 30, hi = -1;
@@ -3636,7 +3705,7 @@ void click(State *st, int x, int y, bool shift) {
   case H_EV_UP: case H_EV_DOWN: {
     int d = id == H_EV_UP ? -1 : 1;
     buildRows(st);
-    if (moveBlocked(st, d, nullptr) && !st->undo.empty()) st->undo.pop_back(); // nothing changes: no undo step
+    if (!freeDelta(st, d, nullptr) && !st->undo.empty()) st->undo.pop_back(); // nothing changes: no undo step
     moveSelectionBy(st, d);
     break;
   }
@@ -3785,6 +3854,10 @@ bool handleKey(State *st, int vk) {
   in = in || vk == '+' || vk == '=';
   out = out || vk == '-';
 #endif
+  if (!(GetAsyncKeyState(VK_CONTROL) & 0x8000)) { // R zooms in, T zooms out (as + and -)
+    in = in || vk == 'R' || vk == 'r';
+    out = out || vk == 'T' || vk == 't';
+  }
   if (in || out) {
     zoomBy(st, in ? 0.5 : 2.0, (kTlx + kTlr) / 2);
     InvalidateRect(st->hwnd, NULL, FALSE);
@@ -3799,6 +3872,11 @@ bool handleKey(State *st, int vk) {
   if (vk == 'O') {
     st->optsOpen = !st->optsOpen;
     st->helpOpen = false;
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    return true;
+  }
+  if (vk == 'Z' && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) { // Z: the selected events fill the view, playhead at the start
+    zoomToSelection(st);
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
   }
@@ -3876,7 +3954,7 @@ bool handleKey(State *st, int vk) {
   }
   if (st->sel.empty()) return false;
   buildRows(st);
-  bool blockedMove = (vk == VK_UP || vk == VK_DOWN) && moveBlocked(st, vk == VK_UP ? -1 : 1, nullptr);
+  bool blockedMove = (vk == VK_UP || vk == VK_DOWN) && !freeDelta(st, vk == VK_UP ? -1 : 1, nullptr);
   if ((vk == VK_UP || vk == VK_DOWN || vk == 'M' || vk == 'm' || vk == VK_DELETE || vk == VK_BACK) && !blockedMove)
     pushUndo(st);
   if (vk == VK_UP) moveSelectionBy(st, -1);
@@ -4165,12 +4243,11 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     if (drag == 3) {
       if (moved && st->dragRows) {
-        std::string why;
-        if (!moveBlocked(st, st->dragRows, &why)) pushUndo(st);
-        moveSelectionBy(st, st->dragRows); // blocked: says why in the footer
+        if (freeDelta(st, st->dragRows, nullptr)) pushUndo(st);
+        moveSelectionBy(st, st->dragRows); // a taken spot: the next free track, the footer says so
       }
       else if (st->pressedClip) click(st, p.x, p.y, shiftDown());
-      bool keepTip = st->dragBlocked;
+      bool keepTip = st->tip && strstr(st->tip, " is taken by ");
       st->dragRows = 0;
       st->dragBlocked = false;
       if (!keepTip) st->tip = nullptr;
@@ -4253,10 +4330,14 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         int target = posAtY(st, my);
         st->dragRows = std::max(target, 0) - st->dragFromPos;
         static std::string dragTip;
-        st->dragBlocked = moveBlocked(st, st->dragRows, &dragTip);
-        if (st->dragBlocked) dragTip.replace(dragTip.find(" Nothing moved."), 15, " Release: nothing moves.");
-        st->tip = st->dragBlocked ? dragTip.c_str()
-                                  : "Release to move the selected events to this track. Below the last track a new one is added.";
+        st->dragEff = freeDelta(st, st->dragRows, &dragTip);
+        st->dragBlocked = st->dragRows != 0 && st->dragEff == 0;
+        if (!dragTip.empty()) { // "went to" while still dragging: "goes to"
+          size_t w = dragTip.find(" went to ");
+          if (w != std::string::npos) dragTip.replace(w, 9, " goes to ");
+        }
+        st->tip = !dragTip.empty() ? dragTip.c_str()
+                                   : "Release to move the selected events to this track. Below the last track a new one is added.";
         InvalidateRect(hwnd, NULL, FALSE);
       }
       return 0;
@@ -4498,8 +4579,9 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
       st.dragFromPos = posOfTrack(&st, t);
       st.dragRows = atoi(dr);
       static std::string why;
-      st.dragBlocked = moveBlocked(&st, st.dragRows, &why);
-      st.tip = st.dragBlocked ? why.c_str() : "Release to move the selected events to this track.";
+      st.dragEff = freeDelta(&st, st.dragRows, &why);
+      st.dragBlocked = st.dragEff == 0;
+      st.tip = !why.empty() ? why.c_str() : "Release to move the selected events to this track.";
     }
   }
   if (getenv("OLAAF_GONIO")) // the MUSIC pair, 20 s in
@@ -4528,6 +4610,10 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   host.playTimeline = [](const std::vector<MixEvent> &, double, double) { return false; };
   host.playPreview = [](const std::vector<PreviewPart> &) { return false; };
   st.playhead = imp.session().firstClip() + 9.5;
+  if (getenv("OLAAF_ZOOMSEL")) {
+    relayout(&st);
+    zoomToSelection(&st);
+  }
   if (getenv("OLAAF_FPS")) host.projectFps = [](bool *d) { *d = false; return 24.0; };
   if (getenv("OLAAF_SR")) host.projectSrate = []() { return 44100.0; };
   if (getenv("OLAAF_HOVER")) st.hoverRow = atoi(getenv("OLAAF_HOVER"));
