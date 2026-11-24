@@ -11,6 +11,8 @@
 #include "../core/importer.h"
 #include "../core/report.h"
 #include "../core/track_template.h"
+#include "../core/reels.h"
+#include <memory>
 #include "../core/util.h"
 #include "progress.h"
 #include "dialog.h"
@@ -24,6 +26,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <commdlg.h>
 #endif
 
 #define REAPERAPI_IMPLEMENT
@@ -537,6 +540,135 @@ static bool finishImport(Importer &imp, ImportOptions &opt, MediaReport &rep, in
   return ok;
 }
 
+// ---------------------------------------------------------------- reels (several AAFs in one import)
+
+struct ReelSet {
+  Importer *first = nullptr;
+  ImportOptions *firstOpt = nullptr;
+  std::vector<std::unique_ptr<Importer>> imps;
+  std::vector<std::unique_ptr<ImportOptions>> opts;
+  int count() const { return 1 + (int)imps.size(); }
+  Importer &imp(int i) { return i == 0 ? *first : *imps[(size_t)i - 1]; }
+  ImportOptions &opt(int i) { return i == 0 ? *firstOpt : *opts[(size_t)i - 1]; }
+};
+
+// AAFs from the file dialog, several at once (GetOpenFileName style: one path, or folder + names)
+static std::vector<std::string> pickAafs(HWND parent) {
+  std::vector<std::string> out;
+#ifdef _WIN32
+  std::vector<wchar_t> buf(65536, 0);
+  OPENFILENAMEW ofn;
+  memset(&ofn, 0, sizeof(ofn));
+  ofn.lStructSize = sizeof(ofn);
+  ofn.hwndOwner = parent;
+  ofn.lpstrFilter = L"AAF files (*.aaf)\0*.aaf\0All files\0*.*\0\0";
+  ofn.lpstrFile = buf.data();
+  ofn.nMaxFile = (DWORD)buf.size();
+  ofn.lpstrTitle = L"OLAAF: add reels (choose one or more AAFs)";
+  ofn.Flags = OFN_ALLOWMULTISELECT | OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
+  if (!GetOpenFileNameW(&ofn)) return out;
+  auto utf8 = [](const wchar_t *w) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
+    std::string r((size_t)std::max(0, n - 1), '\0');
+    if (n > 1) WideCharToMultiByte(CP_UTF8, 0, w, -1, &r[0], n, NULL, NULL);
+    return r;
+  };
+  std::vector<std::string> parts;
+  for (const wchar_t *p = buf.data(); *p; p += wcslen(p) + 1) parts.push_back(utf8(p));
+#else
+  (void)parent;
+  char *res = BrowseForFiles("OLAAF: add reels (choose one or more AAFs)", NULL, NULL, true, "AAF files (*.aaf)\0*.aaf\0\0");
+  if (!res) return out;
+  std::vector<std::string> parts;
+  for (const char *p = res; *p; p += strlen(p) + 1) parts.push_back(p);
+  free(res);
+#endif
+  if (parts.size() == 1) out.push_back(parts[0]);
+  else
+    for (size_t i = 1; i < parts.size(); i++) out.push_back(joinPath(parts[0], parts[i]));
+  return out;
+}
+
+static void attachReels(DialogHost &h, ReelSet *rs) {
+  h.reelCount = [rs]() { return rs->count(); };
+  h.reelAt = [rs](int i, Importer **imp, ImportOptions **opt) {
+    if (i < 0 || i >= rs->count()) return false;
+    *imp = &rs->imp(i);
+    *opt = &rs->opt(i);
+    return true;
+  };
+  h.removeReel = [rs](int i) {
+    if (i < 1 || i >= rs->count()) return;
+    rs->imps.erase(rs->imps.begin() + (i - 1));
+    rs->opts.erase(rs->opts.begin() + (i - 1));
+  };
+  h.addReels = [rs](HWND parent, std::string *message) {
+    std::vector<std::string> files = pickAafs(parent);
+    int added = 0;
+    std::vector<std::string> skipped, failed;
+    for (auto &f : files) {
+      bool dup = false;
+      for (int i = 0; i < rs->count(); i++) dup |= lower(rs->imp(i).session().aafPath) == lower(f);
+      if (dup) {
+        skipped.push_back(baseName(f));
+        continue;
+      }
+      std::unique_ptr<Importer> imp(new Importer);
+      std::unique_ptr<ImportOptions> opt(new ImportOptions(*rs->firstOpt)); // the same options, the same offset
+      std::string err;
+      bool cancelled = false;
+      bool ok = runWithProgress(parent, [&](const Progress &progress) {
+        progress(0.0, "Reading " + baseName(f));
+        if (!imp->load(f, *opt, &err)) return false;
+        progress(0.6, "Looking for linked media");
+        imp->locateMedia(*opt);
+        imp->setMergeStereo(opt->mergeStereo);
+        return true;
+      }, &cancelled);
+      if (cancelled) break;
+      if (!ok) {
+        failed.push_back(baseName(f) + (err.empty() ? std::string() : ": " + err));
+        continue;
+      }
+      rs->imps.push_back(std::move(imp));
+      rs->opts.push_back(std::move(opt));
+      added++;
+    }
+    message->clear();
+    if (!skipped.empty()) *message += "Already in this import: " + skipped[0] + (skipped.size() > 1 ? " and more." : ".") + " ";
+    if (!failed.empty()) *message += "Not added: " + failed[0] + (failed.size() > 1 ? " (and more)." : ".");
+    return added;
+  };
+}
+
+// after the dialog: every reel's media, then one session with all of them (on the first reel)
+static bool finishReels(ReelSet &rs, MediaReport &rep, int &merged, std::string &err) {
+  rep = MediaReport();
+  merged = 0;
+  std::vector<Session> sessions;
+  std::vector<double> shift;
+  for (int i = 0; i < rs.count(); i++) {
+    MediaReport r;
+    int m = 0;
+    if (!finishImport(rs.imp(i), rs.opt(i), r, m, err)) return false;
+    rep.found += r.found;
+    rep.missing += r.missing;
+    rep.copied += r.copied;
+    rep.converted += r.converted;
+    rep.extracted += r.extracted;
+    rep.interleaved += r.interleaved;
+    rep.missingNames.insert(rep.missingNames.end(), r.missingNames.begin(), r.missingNames.end());
+    if (rep.logPath.empty()) rep.logPath = r.logPath;
+    merged += m;
+    if (rs.count() > 1) {
+      sessions.push_back(rs.imp(i).session());
+      shift.push_back(rs.opt(i).tcOffset - rs.opt(0).tcOffset);
+    }
+  }
+  if (rs.count() > 1) rs.first->adoptSession(combineReels(sessions, shift));
+  return true;
+}
+
 // all three steps with a modal dialog (File > Open project: REAPER waits for the result)
 static bool runImport(const std::string &aaf, ImportOptions &opt, Importer &imp, MediaReport &rep, int &merged,
                       std::string &err) {
@@ -544,6 +676,10 @@ static bool runImport(const std::string &aaf, ImportOptions &opt, Importer &imp,
   if (!loadForImport(aaf, opt, imp, err, defaultDest)) return false;
   DialogHost host = makeHost();
   host.projectTracks = nullptr; // a new project: no existing tracks to put the AAF on
+  ReelSet rs;
+  rs.first = &imp;
+  rs.firstOpt = &opt;
+  attachReels(host, &rs);
   bool accepted = showImportDialog(GetMainHwnd(), imp, opt, host);
   saveSettings(opt, defaultDest);
   saveMediaFolders(opt.searchFolders); // Locate puts its folder first
@@ -551,7 +687,7 @@ static bool runImport(const std::string &aaf, ImportOptions &opt, Importer &imp,
     err.clear(); // closed without importing
     return false;
   }
-  return finishImport(imp, opt, rep, merged, err);
+  return finishReels(rs, rep, merged, err);
 }
 
 // "Overwrite envelopes": the AAF's volume / pan automation replaces what the existing track has over the
@@ -662,6 +798,7 @@ struct PendingImport {
   Importer imp;
   DialogHost host;
   std::string defaultDest;
+  ReelSet reels;
 };
 
 static void importIntoProject() {
@@ -679,6 +816,9 @@ static void importIntoProject() {
     delete p;
     return;
   }
+  p->reels.first = &p->imp;
+  p->reels.firstOpt = &p->opt;
+  attachReels(p->host, &p->reels);
   HWND h = openImportDialog(GetMainHwnd(), p->imp, p->opt, p->host, [p](bool accepted) {
     saveSettings(p->opt, p->defaultDest);
     saveMediaFolders(p->opt.searchFolders);
@@ -686,7 +826,7 @@ static void importIntoProject() {
       MediaReport rep;
       int merged = 0;
       std::string e;
-      if (finishImport(p->imp, p->opt, rep, merged, e)) insertTracks(p->imp, p->opt, rep, merged);
+      if (finishReels(p->reels, rep, merged, e)) insertTracks(p->imp, p->opt, rep, merged);
       else if (!e.empty()) ShowMessageBox(e.c_str(), "OLAAF", 0);
     }
     delete p;

@@ -78,6 +78,8 @@ class Importer {
 public:
   bool load(const std::string &aafPath, const ImportOptions &opt, std::string *error);
   Session &session() { return s_; }
+  // reels: the combined session of all AAFs (after their media is ready) replaces this one
+  void adoptSession(Session s) { s_ = std::move(s); haveUnmerged_ = false; }
 
   // Locates linked media (search folders + AAF folder). Cheap, no file writes. Call before preview.
   void locateMedia(const ImportOptions &opt);

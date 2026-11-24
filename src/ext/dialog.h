@@ -64,6 +64,11 @@ struct DialogHost {
   // the choices made for one AAF (file name from choicesFileName), kept between imports
   std::function<std::string(const std::string &name)> loadChoices;
   std::function<void(const std::string &name, const std::string &text)> saveChoices;
+  // reels: more AAFs in the same import. Reel 0 is the one the window opened with.
+  std::function<int()> reelCount;
+  std::function<bool(int i, Importer **imp, ImportOptions **opt)> reelAt;
+  std::function<int(HWND parent, std::string *message)> addReels; // asks for AAFs; returns how many were added
+  std::function<void(int i)> removeReel;                          // i >= 1
 };
 
 // Shows the dialog. Returns true when the user pressed Import; `opt` and the session's

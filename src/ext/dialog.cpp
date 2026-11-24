@@ -21,6 +21,7 @@
 #include "dialog.h"
 #include "../core/track_template.h"
 #include "../core/choices.h"
+#include "../core/reels.h"
 #include "theme.h"
 #include "logo.h"
 #include "../core/util.h"
@@ -138,7 +139,7 @@ enum HitId {
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
   H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE,
-  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH
+  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE
 };
 
 struct Hit {
@@ -236,6 +237,19 @@ struct State {
   bool choicesBack = false;              // the last import's choices for this AAF were put back
   struct Fresh { std::vector<Track> tracks; std::vector<Folder> folders; std::vector<VideoClip> video; ImportOptions opt; };
   Fresh fresh;                           // how it was before, for "Start fresh"
+  // reels: what each AAF tab had when another one was shown
+  struct ReelView {
+    bool inited = false;
+    int scrollRow = 0;
+    double viewStart = 0, viewLen = 60, tcAbs = 0, playhead = -1;
+    bool tcMinus = false, edited = false, merge = true, choicesBack = false;
+    std::set<int> sel, solo;
+    std::vector<Snap> undo, redo;
+    Fresh fresh;
+  };
+  std::vector<ReelView> reelViews;
+  int reel = 0;                          // the AAF shown
+  std::string reelMsg;
   std::string tplLoaded;                 // the template the list below is from
   std::vector<olaaf::TemplateTrack> tplTracks;
   bool themeMenu = false;                // the look menu in the footer
@@ -543,6 +557,38 @@ double niceStep(double secPerPx) {
 }
 
 double tcOffset(const State *st) { return st->tcMinus ? -st->tcAbs : st->tcAbs; }
+
+int reelCount(const State *st) { return st->host && st->host->reelCount ? std::max(1, st->host->reelCount()) : 1; }
+
+bool reelAt(const State *st, int i, Importer **imp, ImportOptions **opt) {
+  if (i == st->reel) {
+    *imp = st->imp;
+    *opt = st->opt;
+    return true;
+  }
+  return st->host && st->host->reelAt && st->host->reelAt(i, imp, opt);
+}
+
+// where reel i lands in REAPER (the shown one: with the offset being typed)
+bool reelSpan(const State *st, int i, double *a, double *b) {
+  Importer *imp;
+  ImportOptions *opt;
+  if (!reelAt(st, i, &imp, &opt)) return false;
+  const Session &s = imp->session();
+  double off = i == st->reel ? tcOffset(st) : opt->tcOffset;
+  *a = s.firstClip() + off;
+  *b = std::max(s.end, s.firstClip()) + off;
+  return true;
+}
+
+int reelOverlaps(const State *st, int i) { // the first reel it lands on top of, or -1
+  double a0, a1, b0, b1;
+  if (!reelSpan(st, i, &a0, &a1)) return -1;
+  for (int k = 0; k < reelCount(st); k++)
+    if (k != i && reelSpan(st, k, &b0, &b1) && reelsOverlap(a0, a1, b0, b1)) return k;
+  return -1;
+}
+
 
 void sessionRange(const Session &s, double *a, double *b) {
   bool any = false;
@@ -866,18 +912,98 @@ void paintTopBar(State *st, const Gfx &g) {
   double updW = 0;
   std::string u = st->updTag.empty() ? std::string() : "Update " + st->updTag;
   if (!u.empty()) updW = g.width(st->fSmall, u) + 30;
-  // name: the largest type that fits, else shortened
-  HFONT nf = st->fHead;
-  for (HFONT f : {st->fHead, st->fBold, st->fName, st->fTiny, st->fMicro}) {
-    nf = f;
-    if (g.width(f, name) <= avail - updW) break;
+  const int nReels = reelCount(st);
+  const char *plusTip = "Add reels: more AAFs in this import, each at its own timecode. Tracks with the same name share one "
+                        "REAPER track. [ and ] switch between them.";
+  double nmW = 0;
+  if (nReels > 1) { // one tab per AAF (reel); the details below are the shown one's
+    std::vector<std::string> labels;
+    std::vector<bool> over;
+    for (int i = 0; i < nReels; i++) {
+      Importer *ri;
+      ImportOptions *ro;
+      labels.push_back(reelAt(st, i, &ri, &ro) ? reelLabel(ri->session(), i) : strprintf("Reel %d", i + 1));
+      over.push_back(reelOverlaps(st, i) >= 0);
+    }
+    const double plusW = 26, gap = 4, xW = 16;
+    auto tabsW = [&](HFONT f, const std::vector<std::string> &l) {
+      double w = plusW;
+      for (int i = 0; i < nReels; i++) w += g.width(f, l[(size_t)i]) + 20 + (i == st->reel && i > 0 ? xW : 0) + gap;
+      return w;
+    };
+    HFONT tf = st->fBold;
+    std::vector<std::string> use = labels;
+    double room = avail - updW;
+    bool fit = false;
+    std::vector<std::string> shortL = reelShortLabels(labels);
+    for (int pass = 0; pass < 3 && !fit; pass++) {
+      if (pass == 1) use = shortL;
+      if (pass == 2)
+        for (int i = 0; i < nReels; i++) use[(size_t)i] = strprintf("Reel %d", i + 1);
+      for (HFONT f : {st->fBold, st->fName, st->fTiny})
+        if (tabsW(f, use) <= room) {
+          tf = f;
+          fit = true;
+          break;
+        }
+    }
+    if (!fit) { // many reels: equal tabs with shortened names
+      tf = st->fTiny;
+      double each = std::max(30.0, (room - plusW) / nReels - gap - 20);
+      for (int i = 0; i < nReels; i++) {
+        bool c2 = false;
+        std::vector<std::string> fl = fitLines(g, tf, use[(size_t)i], each - (i == st->reel && i > 0 ? xW : 0), 1, &c2);
+        if (!fl.empty()) use[(size_t)i] = fl[0];
+      }
+    }
+    static std::vector<std::string> tabTips;
+    tabTips.resize((size_t)nReels);
+    double x = x0;
+    for (int i = 0; i < nReels; i++) {
+      bool on = i == st->reel;
+      double w = g.width(tf, use[(size_t)i]) + 20 + (on && i > 0 ? xW : 0);
+      COLORREF ink = over[(size_t)i] ? kWarn : (on ? kInk : kMute);
+      if (on) g.rbox(x, mid - 22, x + w, mid, 8, over[(size_t)i] ? kWarn : kBlue, kBlueSoft);
+      else g.rbox(x, mid - 22, x + w, mid, 8, kLine, kFace);
+      g.text(tf, ink, use[(size_t)i], x + 10, mid - 22, x + w - (on && i > 0 ? xW : 0) - 6, mid, DT_LEFT);
+      int ov = reelOverlaps(st, i);
+      tabTips[(size_t)i] = labels[(size_t)i] + (on ? "" : ": click to show it ( [ and ] switch).") +
+                           (ov >= 0 ? " It lands on top of " + labels[(size_t)ov] +
+                                          " in REAPER: change where it starts (top right)."
+                                    : "");
+      addHit(st, x, mid - 22, x + w - (on && i > 0 ? xW : 0), mid, H_REEL, i, tabTips[(size_t)i].c_str());
+      if (on && i > 0) {
+        g.text(st->fBody, kMute, "\xc3\x97", x + w - xW - 6, mid - 22, x + w - 4, mid, DT_CENTER);
+        addHit(st, x + w - xW - 6, mid - 22, x + w, mid, H_REEL_REMOVE, i, "Take this reel out of the import.");
+      }
+      x += w + gap;
+    }
+    g.rbox(x, mid - 21, x + plusW - 4, mid - 1, 10, kLine, kFace);
+    g.text(st->fBody, kInk, "+", x, mid - 22, x + plusW - 4, mid - 1, DT_CENTER);
+    addHit(st, x, mid - 22, x + plusW - 4, mid, H_REEL_ADD, 0, plusTip);
+    nmW = x + plusW - x0;
+  } else {
+    // name: the largest type that fits, else shortened (room for the + of the reels)
+    const double plusW = 26;
+    HFONT nf = st->fHead;
+    for (HFONT f : {st->fHead, st->fBold, st->fName, st->fTiny, st->fMicro}) {
+      nf = f;
+      if (g.width(f, name) <= avail - updW - plusW) break;
+    }
+    bool cut = false;
+    std::vector<std::string> nl = fitLines(g, nf, name, avail - updW - plusW, 1, &cut);
+    std::string shown = nl.empty() ? name : nl[0];
+    nmW = g.width(nf, shown) + 4;
+    g.text(nf, kInk, shown, x0, mid - 20, x0 + nmW, mid + 1, DT_LEFT);
+    addHit(st, x0, mid - 20, x0 + nmW, mid, H_NONE, 0, st->headTip.c_str());
+    if (st->host && st->host->addReels) {
+      double px = x0 + nmW + 4;
+      g.rbox(px, mid - 19, px + 20, mid - 1, 9, kLine, kFace);
+      g.text(st->fBody, kMute, "+", px, mid - 20, px + 20, mid - 1, DT_CENTER);
+      addHit(st, px - 2, mid - 21, px + 22, mid + 1, H_REEL_ADD, 0, plusTip);
+      nmW += plusW;
+    }
   }
-  bool cut = false;
-  std::vector<std::string> nl = fitLines(g, nf, name, avail - updW, 1, &cut);
-  std::string shown = nl.empty() ? name : nl[0];
-  double nmW = g.width(nf, shown) + 4;
-  g.text(nf, kInk, shown, x0, mid - 20, x0 + nmW, mid + 1, DT_LEFT);
-  addHit(st, x0, mid - 20, x0 + nmW, mid, H_NONE, 0, st->headTip.c_str());
   if (!u.empty()) { // a newer OLAAF is out
     double ux = x0 + nmW + 10, uw = updW - 10;
     g.rfill(ux, mid - 19, ux + uw, mid - 1, 9, kBlue);
@@ -2093,6 +2219,7 @@ void paintHelp(State *st, const Gfx &g) {
                      {"Return", "Import"},
                      {"O", "Options"},
                      {"H", "This help"},
+                     {"[ / ]", "Previous / next reel (several AAFs)"},
                      {"Esc", "Close a panel, then the window"}};
   auto block = [&](double x, double &y, const char *head, const Row *rows, int n) {
     g.text(st->fSmall, kMute, head, x, y, x + 380, y + 20, DT_LEFT);
@@ -2632,6 +2759,98 @@ void endEdit(State *st, bool apply) {
   InvalidateRect(st->hwnd, NULL, FALSE);
 }
 
+// the options every reel shares (not where it lands, its .L / .R setting or its picture)
+void copyShared(const ImportOptions &from, ImportOptions &to) {
+  ImportOptions keep = to;
+  to = from;
+  to.tcOffset = keep.tcOffset;
+  to.mergeStereo = keep.mergeStereo;
+  to.video = keep.video;
+  to.read = keep.read;
+}
+
+void restoreChoices(State *st);
+void stopPlay(State *st);
+void buildRows(State *st);
+
+// a reel shown for the first time: its whole edit in view, its last choices back
+void initReelView(State *st) {
+  restoreChoices(st);
+  double a, b;
+  sessionRange(st->imp->session(), &a, &b);
+  st->viewStart = a - (b - a) * 0.02;
+  st->viewLen = (b - a) * 1.04;
+  st->tcAbs = std::fabs(st->opt->tcOffset);
+  st->tcMinus = st->opt->tcOffset < 0;
+  st->scrollRow = 0;
+  st->playhead = -1;
+  st->sel.clear();
+  st->solo.clear();
+  st->undo.clear();
+  st->redo.clear();
+  st->edited = false;
+}
+
+void switchReel(State *st, int to) {
+  int n = reelCount(st);
+  if (to < 0 || to >= n || to == st->reel) return;
+  Importer *imp;
+  ImportOptions *opt;
+  if (!st->host || !st->host->reelAt || !st->host->reelAt(to, &imp, &opt)) return;
+  stopPlay(st);
+  if (st->editKind) endEdit(st, true);
+  st->optsOpen = st->helpOpen = st->missingOpen = st->rulesOpen = st->themeMenu = false;
+  st->palTrack = st->folderTrack = st->destTrack = -1;
+  st->palFolder.clear();
+  st->opt->tcOffset = tcOffset(st);
+  if ((int)st->reelViews.size() < n) st->reelViews.resize((size_t)n);
+  State::ReelView &v = st->reelViews[(size_t)st->reel];
+  v.inited = true;
+  v.scrollRow = st->scrollRow;
+  v.viewStart = st->viewStart;
+  v.viewLen = st->viewLen;
+  v.tcAbs = st->tcAbs;
+  v.tcMinus = st->tcMinus;
+  v.playhead = st->playhead;
+  v.edited = st->edited;
+  v.merge = st->merge;
+  v.choicesBack = st->choicesBack;
+  v.sel = st->sel;
+  v.solo = st->solo;
+  v.undo = std::move(st->undo);
+  v.redo = std::move(st->redo);
+  v.fresh = st->fresh;
+  copyShared(*st->opt, *opt);
+  st->reel = to;
+  st->imp = imp;
+  st->opt = opt;
+  State::ReelView &w = st->reelViews[(size_t)to];
+  if (!w.inited) {
+    ImportOptions shared = *opt;
+    initReelView(st); // its own last choices may set other options: the shared ones stay as shown
+    copyShared(shared, *opt);
+  } else {
+    st->scrollRow = w.scrollRow;
+    st->viewStart = w.viewStart;
+    st->viewLen = w.viewLen;
+    st->tcAbs = w.tcAbs;
+    st->tcMinus = w.tcMinus;
+    st->playhead = w.playhead;
+    st->edited = w.edited;
+    st->merge = w.merge;
+    st->choicesBack = w.choicesBack;
+    st->sel = w.sel;
+    st->solo = w.solo;
+    st->undo = std::move(w.undo);
+    st->redo = std::move(w.redo);
+    st->fresh = w.fresh;
+  }
+  st->merge = st->opt->mergeStereo;
+  buildRows(st);
+  st->peaks.start(st->imp->session());
+  st->peakSeen = -1;
+}
+
 // the last import's choices for this AAF, when it is the same edit
 void restoreChoices(State *st) {
   Session &s = st->imp->session();
@@ -2647,8 +2866,15 @@ void restoreChoices(State *st) {
 // closes the window: modal -> EndDialog, modeless -> destroy it, then hand the result on
 void closeDialog(State *st, bool accepted) {
   st->accepted = accepted;
-  if (accepted && st->host && st->host->saveChoices)
-    st->host->saveChoices(choicesFileName(st->imp->session().aafPath), choicesToText(st->imp->session(), *st->opt));
+  st->opt->tcOffset = tcOffset(st);
+  for (int i = 0; i < reelCount(st); i++) { // every reel: the shared options, and its choices kept for next time
+    Importer *imp;
+    ImportOptions *opt;
+    if (!reelAt(st, i, &imp, &opt)) continue;
+    if (i != st->reel) copyShared(*st->opt, *opt);
+    if (accepted && st->host && st->host->saveChoices)
+      st->host->saveChoices(choicesFileName(imp->session().aafPath), choicesToText(imp->session(), *opt));
+  }
   if (!st->modeless) {
     EndDialog(st->hwnd, accepted ? 1 : 0);
     return;
@@ -2962,6 +3188,34 @@ void click(State *st, int x, int y, bool shift) {
     break;
   }
   case H_MISS_BG: return;
+  case H_REEL: switchReel(st, h ? h->idx : 0); break;
+  case H_REEL_ADD: {
+    if (!st->host || !st->host->addReels) break;
+    stopPlay(st);
+    int before = reelCount(st);
+    int added = st->host->addReels(st->hwnd, &st->reelMsg);
+    st->reelViews.resize((size_t)reelCount(st));
+    if (added > 0) {
+      switchReel(st, before);
+      if (st->reelMsg.empty())
+        st->reelMsg = strprintf("%d reel%s added at %s own timecode. Tracks with the same name share one REAPER track.", added,
+                                added == 1 ? "" : "s", added == 1 ? "its" : "their");
+    }
+    st->tip = st->reelMsg.empty() ? nullptr : st->reelMsg.c_str();
+    break;
+  }
+  case H_REEL_REMOVE: {
+    int i = h ? h->idx : 0;
+    if (i < 1 || i >= reelCount(st) || !st->host->removeReel) break;
+    if (st->reel == i) switchReel(st, i - 1);
+    int shown = st->reel;
+    if (shown > i) shown--;
+    st->host->removeReel(i);
+    if (i < (int)st->reelViews.size()) st->reelViews.erase(st->reelViews.begin() + i);
+    st->reel = shown;
+    st->tip = "Reel removed from this import.";
+    break;
+  }
   case H_FRESH: { // back to the AAF as it is (undoable, unless the .L / .R setting changes with it)
     if (opt.mergeStereo != st->fresh.opt.mergeStereo) {
       st->undo.clear();
@@ -3390,6 +3644,16 @@ bool handleKey(State *st, int vk) {
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
   }
+#ifdef _WIN32
+  const bool prevReel = vk == 0xDB, nextReel = vk == 0xDD; // [ ]
+#else
+  const bool prevReel = vk == '[', nextReel = vk == ']';
+#endif
+  if ((prevReel || nextReel) && reelCount(st) > 1) {
+    switchReel(st, (st->reel + (nextReel ? 1 : reelCount(st) - 1)) % reelCount(st));
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    return true;
+  }
   if (vk == VK_RETURN) {
     st->opt->tcOffset = tcOffset(st);
     closeDialog(st, true);
@@ -3451,6 +3715,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 #endif
     olSetText(hwnd, "OLAAF \xe2\x80\x93 AAF Import for Reaper");
     restoreChoices(st);
+    st->reelViews.resize((size_t)reelCount(st));
     // the size it had last time (whole window, as the system measures it), centered on REAPER
     if (st->host && st->host->getSetting) {
       int w = atoi(st->host->getSetting("winW").c_str()), h = atoi(st->host->getSetting("winH").c_str());
@@ -3911,6 +4176,10 @@ struct DlgTemplate {
 // palTrack: >= 0 color popover of that track, <= -2 folder popover of track (-2 - n)
 void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, const char *tip) {
   static DialogHost host;
+  static Importer *firstImp;
+  static ImportOptions *firstOpt;
+  firstImp = &imp;
+  firstOpt = &opt;
   State st;
   st.imp = &imp;
   st.opt = &opt;
@@ -3940,6 +4209,48 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   if (getenv("OLAAF_CHOICES")) st.choicesBack = true;
   if (getenv("OLAAF_TPL")) st.opt->trackTemplate = getenv("OLAAF_TPL");
   if (getenv("OLAAF_THEMEMENU")) st.themeMenu = true;
+  host.addReels = [](HWND, std::string *) { return 0; };
+  static std::vector<std::unique_ptr<Importer>> moreImp;
+  static std::vector<std::unique_ptr<ImportOptions>> moreOpt;
+  if (const char *rl = getenv("OLAAF_REELS")) { // "Name 1,Name 2,...": the same AAF as several reels
+    std::vector<std::string> names;
+    for (const char *p = rl; *p;) {
+      const char *e = strchr(p, ',');
+      names.push_back(e ? std::string(p, e) : std::string(p));
+      if (!e) break;
+      p = e + 1;
+    }
+    std::string dir = dirName(imp.session().aafPath), src = imp.session().aafPath;
+    for (size_t i = 0; i < names.size(); i++) {
+      if (i == 0) {
+        imp.session().aafPath = joinPath(dir, names[0] + ".aaf");
+        continue;
+      }
+      std::unique_ptr<Importer> ri(new Importer);
+      std::unique_ptr<ImportOptions> ro(new ImportOptions(opt));
+      std::string e;
+      ri->load(src, *ro, &e);
+      ri->locateMedia(*ro);
+      ri->setMergeStereo(true);
+      ri->session().aafPath = joinPath(dir, names[i] + ".aaf");
+      ro->tcOffset = getenv("OLAAF_REELOVER") ? 0 : 3600.0 * (double)i;
+      moreImp.push_back(std::move(ri));
+      moreOpt.push_back(std::move(ro));
+    }
+    host.reelCount = []() { return 1 + (int)moreImp.size(); };
+    host.reelAt = [](int i, Importer **ri, ImportOptions **ro) {
+      if (i == 0) {
+        *ri = firstImp;
+        *ro = firstOpt;
+        return true;
+      }
+      if (i < 1 || i - 1 >= (int)moreImp.size()) return false;
+      *ri = moreImp[(size_t)i - 1].get();
+      *ro = moreOpt[(size_t)i - 1].get();
+      return true;
+    };
+    st.reelViews.resize(1 + moreImp.size());
+  }
   if (getenv("OLAAF_LONGNAME") && imp.session().tracks.size() > 1) {
     imp.session().tracks[0].name = "Dialog_Boom_Szene_12_Take_3_Close_Mic_Rechts";
     imp.session().tracks[1].name = "Lavalier_Anna_Szene_12_alle_Takes_mit_Wind";
