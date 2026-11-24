@@ -105,7 +105,7 @@ const COLORREF kWhiteFixed = RGB(0xff, 0xff, 0xff);
 // text on the blue accent: white in light mode, near-black on the brighter dark-mode blue
 #define kWhite (olaaf::darkTheme() ? RGB(0x12, 0x1a, 0x26) : kWhiteFixed)
 #define kWarn (olaaf::darkTheme() ? RGB(0xf0, 0xb2, 0x4a) : RGB(0xc7, 0x7c, 0x0e))
-#define kPop (mixColor(kPanel, kInk, 0.05))
+#define kPop (olaaf::darkTheme() ? mixColor(kPanel, kInk, 0.05) : kPanel) // light: white like the window
 COLORREF mixColor(COLORREF a, COLORREF b, double t);
 #define kFadeLine (mixColor(kInk, kPanel, 0.45)) // fade curves: quieter than text
 #define kCounterBg kPanel
@@ -2014,7 +2014,7 @@ void paintOptions(State *st, const Gfx &g) {
          "Choose a folder that holds media. All its subfolders are searched, and OLAAF remembers it for the next import.");
   y += 28;
   g.fill(px + 16, y, px + kOpW - 16, y + 1, kLine);
-  g.text(st->fTag, kMute, "V 0.6 beta developed with AI assistance \xc2\xb7 dmajorsound.com", px + 16, y + 4, px + kOpW - 16,
+  g.text(st->fTag, kMute, "V " OLAAF_VERSION_STRING " beta developed with AI assistance \xc2\xb7 dmajorsound.com", px + 16, y + 4, px + kOpW - 16,
          y + 24, DT_LEFT);
 }
 
@@ -2256,7 +2256,7 @@ void paintHelp(State *st, const Gfx &g) {
          "Set where the AAF starts in REAPER on top, choose what comes along under Options, then Import. "
          "Clip gain, fades, folders and video",
          l + 24, y + 8, l + w - 24, y + 26, DT_LEFT);
-  g.text(st->fSmall, kMute, "come into REAPER as you see them here. V 0.6 beta \xc2\xb7 dmajorsound.com", l + 24, y + 26,
+  g.text(st->fSmall, kMute, "come into REAPER as you see them here. V " OLAAF_VERSION_STRING " beta \xc2\xb7 dmajorsound.com", l + 24, y + 26,
          l + w - 24, y + 44, DT_LEFT);
 }
 
