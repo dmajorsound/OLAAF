@@ -103,6 +103,7 @@ const COLORREF kWhiteFixed = RGB(0xff, 0xff, 0xff);
 #define kWarn (olaaf::darkTheme() ? RGB(0xf0, 0xb2, 0x4a) : RGB(0xc7, 0x7c, 0x0e))
 #define kPop (mixColor(kPanel, kInk, 0.05))
 COLORREF mixColor(COLORREF a, COLORREF b, double t);
+#define kFadeLine (mixColor(kInk, kPanel, 0.45)) // fade curves: quieter than text
 #define kCounterBg kPanel
 #define kCounterInk kBlue
 
@@ -998,7 +999,7 @@ void paintFade(const Gfx &g, double a, double b, double y0, double y1, int shape
     area.push_back(g.Y(ye));
     olPolyFill(g.dc, area.data(), (int)area.size() / 2, shadeC);
   }
-  olPolyline(g.dc, curve.data(), (int)curve.size() / 2, lineC, 1.3 * g.s);
+  olPolyline(g.dc, curve.data(), (int)curve.size() / 2, lineC, 0.75 * g.s); // a fine line, as in REAPER
 }
 
 // The waveform of one event: one lane per channel for mono and stereo (two small waveforms for
@@ -1307,8 +1308,8 @@ void paintArrange(State *st, const Gfx &g) {
         if (opt.fades) { // smooth fades, the faded part darker (crossfade lines are drawn once the track is done)
           double cx1 = cx0 + c.len / spp, fi = c.fadeIn.len / spp, fo = c.fadeOut.len / spp;
           COLORREF sh = mixColor(tint, olaaf::darkTheme() ? RGB(0, 0, 0) : kPanel, olaaf::darkTheme() ? 0.45 : 0.6);
-          paintFade(g, cx0, cx0 + fi, y0, y1, c.fadeIn.shape, true, true, sh, kInk);
-          paintFade(g, cx1 - fo, cx1, y0, y1, c.fadeOut.shape, false, true, sh, kInk);
+          paintFade(g, cx0, cx0 + fi, y0, y1, c.fadeIn.shape, true, true, sh, kFadeLine);
+          paintFade(g, cx1 - fo, cx1, y0, y1, c.fadeOut.shape, false, true, sh, kFadeLine);
         }
       }
       if (x1 - x0 > 30 && !c.name.empty())
@@ -1334,8 +1335,8 @@ void paintArrange(State *st, const Gfx &g) {
           COLORREF pc = on ? tc : theme().off;
           COLORREF ptint = mixColor(pc, kPanel, olaaf::darkTheme() ? 0.55 : 0.72);
           bool inside = pe - fo >= qs - 1; // the fade-out lies within the overlap
-          paintFade(g, pe - fo, pe, y0, y1, p.fadeOut.shape, false, inside, ptint, kInk, true);
-          paintFade(g, qs, qs + fi, y0, y1, q.fadeIn.shape, true, false, 0, kInk);
+          paintFade(g, pe - fo, pe, y0, y1, p.fadeOut.shape, false, inside, ptint, kFadeLine, true);
+          paintFade(g, qs, qs + fi, y0, y1, q.fadeIn.shape, true, false, 0, kFadeLine);
           double qe = std::min((double)kTlr, kTlx + (q.pos + q.len - st->viewStart) / spp), qx = std::max((double)kTlx, qs);
           if (qe - qx > 30 && !q.name.empty()) g.text(st->fClip, kInk, q.name, qx + 4, y0, qe - 3, y0 + 12, DT_LEFT);
         }
