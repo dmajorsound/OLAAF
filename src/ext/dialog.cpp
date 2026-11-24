@@ -20,6 +20,7 @@
 
 #include "dialog.h"
 #include "../core/track_template.h"
+#include "../core/choices.h"
 #include "theme.h"
 #include "logo.h"
 #include "../core/util.h"
@@ -137,7 +138,7 @@ enum HitId {
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
   H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE,
-  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE
+  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH
 };
 
 struct Hit {
@@ -232,6 +233,9 @@ struct State {
   bool showSamples = false;              // positions also in samples
   bool missingOpen = false;              // the list of missing media
   bool rulesOpen = false;                // the folder sorting rules and the track template
+  bool choicesBack = false;              // the last import's choices for this AAF were put back
+  struct Fresh { std::vector<Track> tracks; std::vector<Folder> folders; std::vector<VideoClip> video; ImportOptions opt; };
+  Fresh fresh;                           // how it was before, for "Start fresh"
   std::string tplLoaded;                 // the template the list below is from
   std::vector<olaaf::TemplateTrack> tplTracks;
   bool themeMenu = false;                // the look menu in the footer
@@ -2137,7 +2141,18 @@ void paintFooter(State *st, const Gfx &g) {
   const char *hint = st->tip ? st->tip
                              : "Hover over anything for a hint. Space plays from the playhead, Shift + Space the selected event, H "
                                "shows all shortcuts.";
-  g.text(st->fSmall, st->tip ? kInk : kMute, hint, kL, t + 1, kR - 150, b, DT_LEFT);
+  double hr = kR - 150;
+  if (st->choicesBack) {
+    const char *ll = "Start fresh";
+    double lw = g.width(st->fSmall, ll);
+    double lr = kR - 170;
+    g.text(st->fSmall, kBlue, ll, lr - lw, t + 1, lr, b, DT_RIGHT);
+    addHit(st, lr - lw - 4, t + 4, lr + 4, b - 4, H_FRESH, 0,
+           "Forget the last import's choices for this AAF and start with the AAF as it is (Cmd/Ctrl+Z brings them back).");
+    hr = lr - lw - 20;
+    if (!st->tip) hint = "Your choices from the last import of this AAF are back: names, folders, colors, removed and moved events.";
+  }
+  g.text(st->fSmall, st->tip ? kInk : kMute, hint, kL, t + 1, hr, b, DT_LEFT);
 }
 
 // a short hint next to the mouse, after it rests a moment
@@ -2617,9 +2632,23 @@ void endEdit(State *st, bool apply) {
   InvalidateRect(st->hwnd, NULL, FALSE);
 }
 
+// the last import's choices for this AAF, when it is the same edit
+void restoreChoices(State *st) {
+  Session &s = st->imp->session();
+  st->fresh = {s.tracks, s.folders, s.video, *st->opt};
+  if (!st->host || !st->host->loadChoices) return;
+  std::string text = st->host->loadChoices(choicesFileName(s.aafPath));
+  if (text.empty()) return;
+  std::string why;
+  st->choicesBack = applyChoices(text, *st->imp, *st->opt, &why);
+  st->merge = st->opt->mergeStereo;
+}
+
 // closes the window: modal -> EndDialog, modeless -> destroy it, then hand the result on
 void closeDialog(State *st, bool accepted) {
   st->accepted = accepted;
+  if (accepted && st->host && st->host->saveChoices)
+    st->host->saveChoices(choicesFileName(st->imp->session().aafPath), choicesToText(st->imp->session(), *st->opt));
   if (!st->modeless) {
     EndDialog(st->hwnd, accepted ? 1 : 0);
     return;
@@ -2933,6 +2962,24 @@ void click(State *st, int x, int y, bool shift) {
     break;
   }
   case H_MISS_BG: return;
+  case H_FRESH: { // back to the AAF as it is (undoable, unless the .L / .R setting changes with it)
+    if (opt.mergeStereo != st->fresh.opt.mergeStereo) {
+      st->undo.clear();
+      st->redo.clear();
+      st->imp->setMergeStereo(st->fresh.opt.mergeStereo);
+    } else
+      pushUndo(st);
+    s.tracks = st->fresh.tracks;
+    s.folders = st->fresh.folders;
+    s.video = st->fresh.video;
+    opt = st->fresh.opt;
+    st->merge = opt.mergeStereo;
+    st->choicesBack = false;
+    st->sel.clear();
+    buildRows(st);
+    st->tip = "Started fresh: the AAF as it is.";
+    break;
+  }
   case H_RULES: st->rulesOpen = true; st->optsOpen = false; break;
   case H_RULES_BG: return;
   case H_RULES_CLOSE: st->rulesOpen = false; break;
@@ -3403,6 +3450,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                    std::max((int)pr.top, (int)(pr.top + pr.bottom - h) / 2), w, h, SWP_NOZORDER);
 #endif
     olSetText(hwnd, "OLAAF \xe2\x80\x93 AAF Import for Reaper");
+    restoreChoices(st);
     // the size it had last time (whole window, as the system measures it), centered on REAPER
     if (st->host && st->host->getSetting) {
       int w = atoi(st->host->getSetting("winW").c_str()), h = atoi(st->host->getSetting("winH").c_str());
@@ -3889,6 +3937,7 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   if (getenv("OLAAF_HELP")) st.helpOpen = true;
   if (getenv("OLAAF_MISSING")) st.missingOpen = true;
   if (getenv("OLAAF_RULES")) st.rulesOpen = true;
+  if (getenv("OLAAF_CHOICES")) st.choicesBack = true;
   if (getenv("OLAAF_TPL")) st.opt->trackTemplate = getenv("OLAAF_TPL");
   if (getenv("OLAAF_THEMEMENU")) st.themeMenu = true;
   if (getenv("OLAAF_LONGNAME") && imp.session().tracks.size() > 1) {

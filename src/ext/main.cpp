@@ -49,6 +49,7 @@
 #define REAPERAPI_WANT_TimeMap_curFrameRate
 #define REAPERAPI_WANT_InsertTrackAtIndex
 #define REAPERAPI_WANT_ShowConsoleMsg
+#define REAPERAPI_WANT_GetResourcePath
 #define REAPERAPI_WANT_AddProjectMarker2
 #define REAPERAPI_WANT_GetExtState
 #define REAPERAPI_WANT_SetExtState
@@ -437,6 +438,25 @@ static DialogHost makeHost() {
   h.playTimeline = [](const std::vector<MixEvent> &e, double a, double b) { return preview::playTimeline(e, a, b); };
   h.updateState = [](std::string *tag, std::string *url) { return updateCheckState(tag, url); };
   h.openUrl = [](const std::string &url) { openWebPage(url); };
+  // the choices per AAF: <REAPER resource folder>/OLAAF/choices/<name>
+  h.loadChoices = [](const std::string &name) {
+    std::string text;
+    if (FILE *f = openUtf8(joinPath(joinPath(GetResourcePath(), "OLAAF/choices"), name), "rb")) {
+      char buf[65536];
+      size_t n;
+      while ((n = fread(buf, 1, sizeof(buf), f)) > 0) text.append(buf, n);
+      fclose(f);
+    }
+    return text;
+  };
+  h.saveChoices = [](const std::string &name, const std::string &text) {
+    std::string dir = joinPath(GetResourcePath(), "OLAAF/choices");
+    makeDirs(dir);
+    if (FILE *f = openUtf8(joinPath(dir, name), "wb")) {
+      fwrite(text.data(), 1, text.size(), f);
+      fclose(f);
+    }
+  };
   h.getSetting = [](const char *key) {
     const char *v = GetExtState("olAAF", key);
     return std::string(v ? v : "");

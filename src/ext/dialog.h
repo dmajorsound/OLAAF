@@ -61,6 +61,9 @@ struct DialogHost {
   // update check on GitHub: 0 still asking, 1 a newer release (tag, page), 2 nothing newer or no answer
   std::function<int(std::string *tag, std::string *url)> updateState;
   std::function<void(const std::string &url)> openUrl;
+  // the choices made for one AAF (file name from choicesFileName), kept between imports
+  std::function<std::string(const std::string &name)> loadChoices;
+  std::function<void(const std::string &name, const std::string &text)> saveChoices;
 };
 
 // Shows the dialog. Returns true when the user pressed Import; `opt` and the session's

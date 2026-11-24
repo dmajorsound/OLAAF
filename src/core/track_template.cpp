@@ -2,9 +2,10 @@
 // Copyright (C) 2026 dmajorsound. Licensed under the GNU GPL v2 or later.
 
 #include "track_template.h"
+#include "audiofile.h"
 #include "util.h"
 
-#include <fstream>
+#include <cstdio>
 #include <set>
 #include <sstream>
 
@@ -55,14 +56,17 @@ std::vector<TemplateTrack> parseTrackTemplate(const std::string &text) {
 }
 
 bool readTrackTemplate(const std::string &path, std::vector<TemplateTrack> *out, std::string *error) {
-  std::ifstream f(path, std::ios::binary);
+  FILE *f = openUtf8(path, "rb");
   if (!f) {
     if (error) *error = "The track template " + baseName(path) + " can't be opened.";
     return false;
   }
-  std::stringstream ss;
-  ss << f.rdbuf();
-  *out = parseTrackTemplate(ss.str());
+  std::string text;
+  char buf[65536];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof(buf), f)) > 0) text.append(buf, n);
+  fclose(f);
+  *out = parseTrackTemplate(text);
   if (out->empty()) {
     if (error) *error = baseName(path) + " holds no tracks.";
     return false;
