@@ -535,24 +535,6 @@ void button(State *st, const Gfx &g, double l, double t, double r, double b, con
   if (enabled) addHit(st, l, t, r, b, id, idx, tip);
 }
 
-// a switch in the toolbar: a plain checkbox with its label; returns its right edge
-double chip(State *st, const Gfx &g, double x, double t, const std::string &label, bool on, bool enabled, int id,
-            const char *tip) {
-  double tw = g.width(st->fBody, label);
-  if (tw < 4 || tw > 220) tw = 7 * label.size();
-  double w = 16 + 7 + tw + 14;
-  double cy = t + 13 - 8;
-  if (!enabled) g.box(x, cy, x + 16, cy + 16, kLine, kFace);
-  else if (on) {
-    g.fill(x, cy, x + 16, cy + 16, kBlue);
-    g.check(x, cy, kWhite);
-  } else
-    g.box(x, cy, x + 16, cy + 16, theme().empty, kPanel);
-  g.text(st->fBody, enabled ? kInk : theme().empty, label, x + 23, t, x + w, t + 26, DT_LEFT);
-  addHit(st, x - 2, t, x + w - 8, t + 26, enabled ? id : H_NONE, 0, tip);
-  return x + w;
-}
-
 double niceStep(double secPerPx) {
   static const double steps[] = {0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600};
   for (double s : steps)
@@ -902,9 +884,11 @@ void paintTopBar(State *st, const Gfx &g) {
   if (std::fabs(tcOffset(st)) > 1e-9) { // moved (typed or edit cursor): one click back to the AAF's own timecode
     static std::string rTip;
     rTip = "Back to the AAF's own timecode: it starts at " + formatTC(s.firstClip(), s.fps) + ".";
-    double rw = g.width(st->fBody, "Reset") + 24;
-    button(st, g, r - tw - 8 - rw, mid - 13, r - tw - 8, mid + 13, "Reset", H_TC_RESET, 0, rTip.c_str());
-    infoR -= rw + 8;
+    double rw = g.width(st->fBody, "Reset to AAF") + 24; // not just "Reset": the event bar has one too
+    double used = std::max(g.width(st->fMonoBig, land), g.width(st->fSmall, "Starts in REAPER at")) + 12;
+    double bR = r - std::min(tw, used);   // right next to the timecode
+    button(st, g, bR - rw, mid - 13, bR, mid + 13, "Reset to AAF", H_TC_RESET, 0, rTip.c_str());
+    infoR = std::min(infoR, bR - rw - 16);
   }
 
   // left: the AAF and what it is - it always fits (smaller type, fewer details); all of it is in the footer on hover
@@ -1257,8 +1241,8 @@ void paintGonio(State *st, const Gfx &g) {
   double px = mid + c * (br - bl) / 2;
   if (px > mid) g.rfill(mid, by, px, by + 14, 5, cc);
   else g.rfill(px, by, mid, by + 14, 5, cc);
-  for (int k = 0; k <= 4; k++) { // ticks at -1, -0.5, 0, +0.5, +1
-    double tx = bl + (br - bl) * k / 4.0;
+  for (int q = 0; q <= 4; q++) { // ticks at -1, -0.5, 0, +0.5, +1
+    double tx = bl + (br - bl) * q / 4.0;
     g.fill(tx - 0.5, by + 14, tx + 0.5, by + 18, kMute);
   }
   g.fill(mid - 1, by - 2, mid + 1, by + 16, kInk);
@@ -1639,8 +1623,8 @@ void paintArrange(State *st, const Gfx &g) {
       double y0 = y + 4, y1 = y + kRowH - 4;
       double wy = (x1 - x0 > 30 && !c.name.empty()) ? y0 + 11 : y0; // waveform under the name
       if (selected && dragging) { // ghost where the event would land
-        int eff = st->dragBlocked ? st->dragRows : st->dragEff;
-        int tr2 = rowOfPos(st, st->dragFromPos + eff + (posOfTrack(st, row.track) - st->dragFromPos));
+        int lands = st->dragBlocked ? st->dragRows : st->dragEff;
+        int tr2 = rowOfPos(st, st->dragFromPos + lands + (posOfTrack(st, row.track) - st->dragFromPos));
         int gv = tr2 - st->scrollRow;
         if (gv >= 0 && gv < kRows) {
           double gy = kLT + gv * kRowH;
@@ -1792,11 +1776,11 @@ void paintArrange(State *st, const Gfx &g) {
   addHit(st, hl, ht, hr, hb, H_NONE, 0, "Drag to move through time, or use + and \xe2\x88\x92 to zoom.");
   if (st->marquee) { // the selection frame
     double l = (std::min(st->mqX0, st->mqX1) - g.ox) / g.s, r = (std::max(st->mqX0, st->mqX1) - g.ox) / g.s;
-    double t = (std::min(st->mqY0, st->mqY1) - g.oy) / g.s, b = (std::max(st->mqY0, st->mqY1) - g.oy) / g.s;
+    double t = (std::min(st->mqY0, st->mqY1) - g.oy) / g.s, mb = (std::max(st->mqY0, st->mqY1) - g.oy) / g.s;
     g.fill(l, t, r, t + 1, kBlue);
-    g.fill(l, b - 1, r, b, kBlue);
-    g.fill(l, t, l + 1, b, kBlue);
-    g.fill(r - 1, t, r, b, kBlue);
+    g.fill(l, mb - 1, r, mb, kBlue);
+    g.fill(l, t, l + 1, mb, kBlue);
+    g.fill(r - 1, t, r, mb, kBlue);
   }
   olRoundCorners(g.dc, g.X(kL), g.Y(kAT), g.X(kR), g.Y(kAB), 12 * g.s, kFace, kLine);
 }
@@ -2250,7 +2234,7 @@ void paintHelp(State *st, const Gfx &g) {
   const Row play[] = {{"Space", "Play / stop from the playhead"},
                       {"Shift|Space", "Play / stop the selected event"},
                       {"Click ruler", "Move the playhead"}};
-  const Row view[] = {{"+/\xe2\x88\x92/R/T", "Zoom in / out (R in, T out)"},
+  const Row view[] = {{"+/\xe2\x88\x92/T/R", "Zoom in / out (T in, R out)"},
                       {"Alt|Wheel", "Zoom (Option on the Mac)"},
                       {"Shift|Wheel", "Move through time"},
                       {"F", "Show the whole AAF"},
@@ -2343,40 +2327,6 @@ void paintFooter(State *st, const Gfx &g) {
     hr = bx - 24 - pw;
   }
   g.text(st->fSmall, taken ? kRed : (st->tip ? kInk : kMute), hint, kL, t + 1, hr, b, DT_LEFT);
-}
-
-// a short hint next to the mouse, after it rests a moment
-void paintTooltip(State *st, const Gfx &g) {
-  if (!st->tip || !st->tipVisible || st->mouseLX < 0) return;
-  std::string text = st->tip;
-  // wrap at about 320 units
-  std::vector<std::string> lines;
-  std::string cur;
-  size_t i = 0;
-  while (i <= text.size()) {
-    size_t sp = text.find(' ', i);
-    std::string word = text.substr(i, sp == std::string::npos ? std::string::npos : sp - i);
-    std::string tryLine = cur.empty() ? word : cur + " " + word;
-    if (!cur.empty() && g.width(st->fSmall, tryLine) > 320) {
-      lines.push_back(cur);
-      cur = word;
-    } else
-      cur = tryLine;
-    if (sp == std::string::npos) break;
-    i = sp + 1;
-  }
-  if (!cur.empty()) lines.push_back(cur);
-  double w = 0;
-  for (auto &ln : lines) w = std::max(w, g.width(st->fSmall, ln));
-  w = std::min(340.0, w + 20);
-  double h = lines.size() * 16 + 12;
-  double x = st->mouseLX + 14, y = st->mouseLY + 20;
-  if (x + w > W - 8) x = W - 8 - w;
-  if (y + h > H - 6) y = st->mouseLY - h - 10;
-  g.rfill(x + 1, y + 2, x + w + 2, y + h + 3, 8, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
-  g.rbox(x, y, x + w, y + h, 8, kLine, kPop);
-  for (size_t k = 0; k < lines.size(); k++)
-    g.text(st->fSmall, kInk, lines[k], x + 10, y + 6 + k * 16, x + w - 8, y + 22 + k * 16, DT_LEFT);
 }
 
 // ------------------------------------------------------------------ frame rate warning
@@ -3333,8 +3283,8 @@ void click(State *st, int x, int y, bool shift) {
     for (size_t i = 0; i < st->rows.size(); i++)
       if (st->rows[i].kind == 1 && st->rows[i].folder == key) ri = (int)i;
     if (ri < st->scrollRow || ri >= st->scrollRow + kRows) st->scrollRow = std::max(0, ri - 2);
-    double y = kLT + (ri - st->scrollRow) * kRowH;
-    startEdit(st, 2, devRect(st, kL + 26, y + 4, kL + kHdr - 32, y + kRowH - 4), "New folder", key);
+    double ry = kLT + (ri - st->scrollRow) * kRowH;
+    startEdit(st, 2, devRect(st, kL + 26, ry + 4, kL + kHdr - 32, ry + kRowH - 4), "New folder", key);
     return;
   }
   case H_TRACK_COLOR: {
@@ -3567,8 +3517,7 @@ void click(State *st, int x, int y, bool shift) {
   case H_MISS_OPEN: st->missingOpen = !st->missingOpen; st->optsOpen = false; break;
   case H_MISS_PICK: locateOne(st, h ? h->idx : -1); break;
   case H_HELP: st->helpOpen = !st->helpOpen; st->optsOpen = false; break;
-  case H_HELP_BG: return;
-  case H_GONIO_BG: return;
+  case H_HELP_BG: case H_GONIO_BG: return;
   case H_GONIO_CLOSE: st->gonioOpen = false; break;
   case H_GONIO_TOGGLE: st->gonioOpen = !st->gonioOpen; break;
   case H_TRACK_SOLO: {
@@ -3855,9 +3804,9 @@ bool handleKey(State *st, int vk) {
   in = in || vk == '+' || vk == '=';
   out = out || vk == '-';
 #endif
-  if (!(GetAsyncKeyState(VK_CONTROL) & 0x8000)) { // R zooms in, T zooms out (as + and -)
-    in = in || vk == 'R' || vk == 'r';
-    out = out || vk == 'T' || vk == 't';
+  if (!(GetAsyncKeyState(VK_CONTROL) & 0x8000)) { // as in Pro Tools: T zooms in, R zooms out
+    in = in || vk == 'T' || vk == 't';
+    out = out || vk == 'R' || vk == 'r';
   }
   if (in || out) {
     zoomBy(st, in ? 0.5 : 2.0, (kTlx + kTlr) / 2);
@@ -3978,6 +3927,7 @@ State *g_open = nullptr; // the dialog that is open (for REAPER's keyboard hook)
 
 INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   State *st = (State *)OL_GETUSER(hwnd);
+  if (!st && msg != WM_INITDIALOG) return 0; // before set-up or after the window is gone: the default handling
   switch (msg) {
   case WM_INITDIALOG: {
     st = (State *)lp;
