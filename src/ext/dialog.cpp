@@ -925,7 +925,7 @@ void paintTopBar(State *st, const Gfx &g) {
   if (!u.empty()) updW = g.width(st->fSmall, u) + 30;
   const int nReels = reelCount(st);
   const char *plusTip = "Add reels: more AAFs in this import, each at its own timecode. Tracks with the same name share one "
-                        "REAPER track. 1, 2, 3\xe2\x80\xa6 (or [ and ]) switch between them.";
+                        "REAPER track. 1, 2, 3\xe2\x80\xa6 or Shift + \xe2\x86\x90 / \xe2\x86\x92 switch between them.";
   double nmW = 0;
   if (nReels > 1) { // one tab per AAF (reel); the details below are the shown one's
     std::vector<std::string> labels;
@@ -2235,7 +2235,7 @@ void keyCap(State *st, const Gfx &g, double &x, double y, const std::string &k) 
 
 void paintHelp(State *st, const Gfx &g) {
   // three blocks left, one right; drawn over everything (footer too), always inside the window
-  const double rowH = 26, w = 860, h = 74 + (24 + 3 * rowH + 10) + (24 + 6 * rowH + 10) + (24 + 6 * rowH + 10) + 52;
+  const double rowH = 26, w = 860, h = 74 + (24 + 3 * rowH + 10) + (24 + 6 * rowH + 10) + (24 + 7 * rowH + 10) + 52;
   double l = (W - w) / 2, t = std::max(8.0, std::min(kTopH + 6, H - h - 8));
   g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 16, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
   g.rbox(l, t, l + w, t + h, 16, kLine, kPop);
@@ -2270,7 +2270,8 @@ void paintHelp(State *st, const Gfx &g) {
                      {"Return", "Import"},
                      {"O", "Options"},
                      {"H", "This help"},
-                     {"1/2/3", "Show reel 1, 2, 3\xe2\x80\xa6 ([ ] previous / next)"},
+                     {"1/2/3", "Show reel 1, 2, 3\xe2\x80\xa6"},
+                     {"Shift|\xe2\x86\x90/\xe2\x86\x92", "Previous / next reel"},
                      {"Esc", "Close a panel, then the window"}};
   auto block = [&](double x, double &y, const char *head, const Row *rows, int n) {
     g.text(st->fSmall, kMute, head, x, y, x + 380, y + 20, DT_LEFT);
@@ -2299,7 +2300,7 @@ void paintHelp(State *st, const Gfx &g) {
   double y1 = t + 74, y2 = t + 74;
   block(l + 24, y1, "Listening", play, 3);
   block(l + 24, y1, "View", view, 6);
-  block(l + 24, y1, "Window", win, 6);
+  block(l + 24, y1, "Window", win, 7);
   block(l + 424, y2, "Events and tracks", ev, 10);
   double y = std::max(y1, y2) + 2;
   g.fill(l + 24, y, l + w - 24, y + 1, kLine);
@@ -3916,18 +3917,17 @@ bool handleKey(State *st, int vk) {
     return true;
   }
   // 1-9 on the number row (not the number pad): show that reel
-  if (vk >= '1' && vk <= '9' && !(GetAsyncKeyState(VK_CONTROL) & 0x8000) && reelCount(st) > 1) {
+  if (vk >= '1' && vk <= '9' && !(GetAsyncKeyState(VK_CONTROL) & 0x8000) && !(GetAsyncKeyState(VK_MENU) & 0x8000) &&
+      !(GetAsyncKeyState(VK_SHIFT) & 0x8000) && reelCount(st) > 1) {
     int r = vk - '1';
     if (r < reelCount(st)) switchReel(st, r);
     else st->tip = "There's no reel with that number.";
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
   }
-#ifdef _WIN32
-  const bool prevReel = vk == 0xDB, nextReel = vk == 0xDD; // [ ]
-#else
-  const bool prevReel = vk == '[', nextReel = vk == ']';
-#endif
+  // Shift + left / right: previous / next reel (the same on every keyboard layout)
+  const bool shiftKey = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+  const bool prevReel = shiftKey && vk == VK_LEFT, nextReel = shiftKey && vk == VK_RIGHT;
   if ((prevReel || nextReel) && reelCount(st) > 1) {
     switchReel(st, (st->reel + (nextReel ? 1 : reelCount(st) - 1)) % reelCount(st));
     InvalidateRect(st->hwnd, NULL, FALSE);
