@@ -14,6 +14,10 @@ using std::min;
 
 #include "round.h"
 
+#ifdef __APPLE__
+#include <CoreGraphics/CoreGraphics.h>
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -101,6 +105,44 @@ void olPolyline(HDC dc, const double *xy, int n, COLORREF c, double width) {
   g.DrawLines(&pen, p.data(), n);
 }
 #else
+#ifdef __APPLE__
+// macOS: draw with Core Graphics directly, with sub-pixel coordinates (sharp on Retina screens);
+// SWELL's DC coordinates map 1:1 to the context
+static CGContextRef cgOf(HDC dc) { return (CGContextRef)SWELL_GetCtxGC(dc); }
+static bool cgPath(HDC dc, const double *xy, int n, COLORREF c, bool fill, double width) {
+  CGContextRef ctx = cgOf(dc);
+  if (!ctx || n < 2) return false;
+  CGContextSaveGState(ctx);
+  CGContextSetShouldAntialias(ctx, true);
+  CGContextBeginPath(ctx);
+  CGContextMoveToPoint(ctx, xy[0], xy[1]);
+  for (int i = 1; i < n; i++) CGContextAddLineToPoint(ctx, xy[2 * i], xy[2 * i + 1]);
+  double r = GetRValue(c) / 255.0, g = GetGValue(c) / 255.0, b = GetBValue(c) / 255.0;
+  if (fill) {
+    CGContextClosePath(ctx);
+    CGContextSetRGBFillColor(ctx, r, g, b, 1.0);
+    CGContextFillPath(ctx);
+  } else {
+    CGContextSetRGBStrokeColor(ctx, r, g, b, 1.0);
+    CGContextSetLineWidth(ctx, width);
+    CGContextSetLineJoin(ctx, kCGLineJoinRound);
+    CGContextStrokePath(ctx);
+  }
+  CGContextRestoreGState(ctx);
+  return true;
+}
+static void roundPts(std::vector<double> &xy, double l, double t, double r, double b, double rad) {
+  rad = std::max(0.0, std::min(rad, std::min(r - l, b - t) / 2));
+  double cx[4] = {l + rad, r - rad, r - rad, l + rad}, cy[4] = {t + rad, t + rad, b - rad, b - rad};
+  double a0[4] = {180, 270, 0, 90};
+  for (int k = 0; k < 4; k++)
+    for (int i = 0; i <= 10; i++) {
+      double a = (a0[k] + 9.0 * i) * 3.14159265358979323846 / 180.0;
+      xy.push_back(cx[k] + rad * std::cos(a));
+      xy.push_back(cy[k] + rad * std::sin(a));
+    }
+}
+#endif
 // SWELL draws polygons with Core Graphics (smooth edges on macOS)
 static void arc(std::vector<POINT> &pts, double cx, double cy, double rad, double a0) {
   const int n = 8;
@@ -122,6 +164,13 @@ static void poly(HDC dc, std::vector<POINT> &pts, COLORREF c) {
 
 void olRoundFill(HDC dc, double l, double t, double r, double b, double rad, COLORREF c) {
   if (r <= l || b <= t) return;
+#ifdef __APPLE__
+  {
+    std::vector<double> xy;
+    roundPts(xy, l, t, r, b, rad);
+    if (cgPath(dc, xy.data(), (int)xy.size() / 2, c, true, 0)) return;
+  }
+#endif
   rad = std::min(rad, std::min(r - l, b - t) / 2);
   std::vector<POINT> pts;
   arc(pts, l + rad, t + rad, rad, 180);
@@ -132,6 +181,28 @@ void olRoundFill(HDC dc, double l, double t, double r, double b, double rad, COL
 }
 
 void olRoundCorners(HDC dc, double l, double t, double r, double b, double rad, COLORREF bg, COLORREF line) {
+#ifdef __APPLE__
+  if (cgOf(dc)) {
+    double cx[4] = {l + rad, r - rad, r - rad, l + rad}, cy[4] = {t + rad, t + rad, b - rad, b - rad};
+    double kx[4] = {l, r, r, l}, ky[4] = {t, t, b, b};
+    double a0[4] = {180, 270, 0, 90};
+    for (int k = 0; k < 4; k++) {
+      std::vector<double> xy = {kx[k], ky[k]};
+      for (int i = 0; i <= 10; i++) {
+        double a = (a0[k] + 9.0 * i) * 3.14159265358979323846 / 180.0;
+        xy.push_back(cx[k] + rad * std::cos(a));
+        xy.push_back(cy[k] + rad * std::sin(a));
+      }
+      cgPath(dc, xy.data(), (int)xy.size() / 2, bg, true, 0);
+    }
+    std::vector<double> o;
+    roundPts(o, l + 0.5, t + 0.5, r - 0.5, b - 0.5, rad - 0.5);
+    o.push_back(o[0]);
+    o.push_back(o[1]);
+    cgPath(dc, o.data(), (int)o.size() / 2, line, false, 1.0);
+    return;
+  }
+#endif
   double cx[4] = {l + rad, r - rad, r - rad, l + rad}, cy[4] = {t + rad, t + rad, b - rad, b - rad};
   double kx[4] = {l, r, r, l}, ky[4] = {t, t, b, b};
   double a0[4] = {180, 270, 0, 90};
@@ -164,6 +235,9 @@ void olRoundCorners(HDC dc, double l, double t, double r, double b, double rad, 
 
 void olPolyFill(HDC dc, const double *xy, int n, COLORREF c) {
   if (n < 3) return;
+#ifdef __APPLE__
+  if (cgPath(dc, xy, n, c, true, 0)) return;
+#endif
   std::vector<POINT> pts((size_t)n);
   for (int i = 0; i < n; i++) pts[(size_t)i] = {(LONG)std::lround(xy[2 * i]), (LONG)std::lround(xy[2 * i + 1])};
   poly(dc, pts, c);
@@ -171,6 +245,9 @@ void olPolyFill(HDC dc, const double *xy, int n, COLORREF c) {
 
 void olPolyline(HDC dc, const double *xy, int n, COLORREF c, double width) {
   if (n < 2) return;
+#ifdef __APPLE__
+  if (cgPath(dc, xy, n, c, false, width)) return;
+#endif
   HPEN pen = CreatePen(PS_SOLID, std::max(1, (int)std::lround(width)), c);
   HGDIOBJ op = SelectObject(dc, pen);
   MoveToEx(dc, (int)std::lround(xy[0]), (int)std::lround(xy[1]), NULL);

@@ -16,6 +16,8 @@ static double lum(COLORREF c) { return (0.299 * GetRValue(c) + 0.587 * GetGValue
 static Theme g_theme;
 static bool g_dark = true;
 static bool g_set = false; // a theme was chosen
+static int (*g_reaper)(const char *) = nullptr; // where REAPER's colors come from
+static int g_mode = 0; // 0 REAPER's colors (system), 1 dark, 2 light
 
 // Everything else is derived from four colors: window background, lane background, ruler / header
 // background and text. One blue marks what is chosen.
@@ -47,7 +49,13 @@ static void buildDefaultDark() { build(RGB(0x33, 0x33, 0x33), RGB(0x2a, 0x2a, 0x
 static void buildDefaultLight() { build(RGB(0xf4, 0xf4, 0xf4), RGB(0xff, 0xff, 0xff), RGB(0xec, 0xec, 0xee), RGB(0x1f, 0x22, 0x26)); }
 
 void setThemeFromReaper(int (*get)(const char *key)) {
+  g_reaper = get;
+  if (g_mode == 2) {
+    buildDefaultLight();
+    return;
+  }
   buildDefaultDark();
+  if (g_mode == 1) return; // OLAAF's own dark
   if (!get) return;
   auto c = [&](const char *key, COLORREF def) {
     int v = get(key);
@@ -59,6 +67,12 @@ void setThemeFromReaper(int (*get)(const char *key)) {
   COLORREF ink = c("col_main_text2", g_theme.ink);
   build(face, panel, track, ink);
 }
+
+void setThemeMode(int mode) {
+  g_mode = mode < 0 || mode > 2 ? 0 : mode;
+  setThemeFromReaper(g_reaper);
+}
+int themeMode() { return g_mode; }
 
 void setDarkTheme(bool dark) {
   if (dark) buildDefaultDark();

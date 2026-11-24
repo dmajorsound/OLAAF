@@ -55,6 +55,9 @@ struct Theme {
 // The colors follow REAPER's current theme: get(key) returns REAPER's color for a theme key
 // (GetThemeColor) or -1. Missing keys fall back to REAPER 7's default theme.
 void setThemeFromReaper(int (*get)(const char *key));
+// the look, chosen in the footer: 0 System (REAPER's theme colors), 1 Dark, 2 Light
+void setThemeMode(int mode);
+int themeMode();
 // tests: false = a light theme, true = REAPER 7's default theme
 void setDarkTheme(bool dark);
 bool darkTheme(); // dark background (text and tints follow it)

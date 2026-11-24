@@ -5,6 +5,7 @@
 // Used for testing without REAPER and for batch conversion.
 
 #include "../core/importer.h"
+#include "../core/report.h"
 #include "../core/util.h"
 
 #include <cmath>
@@ -111,5 +112,7 @@ int main(int argc, char **argv) {
   fwrite(rpp.data(), 1, rpp.size(), f);
   fclose(f);
   printf("project: %s\n", out.c_str());
+  std::string rp = writeImportReport(s, opt, rep, merged, 0, 0, out, "cli");
+  if (!rp.empty()) printf("report: %s\n", rp.c_str());
   return 0;
 }

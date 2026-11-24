@@ -26,6 +26,7 @@
 #include "../core/peaks.h"
 #include "fonts.h"
 #include "round.h"
+#include "update.h"
 
 
 #ifndef _WIN32
@@ -135,7 +136,7 @@ enum HitId {
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
   H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE,
-  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES
+  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG
 };
 
 struct Hit {
@@ -228,6 +229,11 @@ struct State {
   double mqX0 = 0, mqY0 = 0, mqX1 = 0, mqY1 = 0; // device pixels
   std::set<int> mqBase;                  // the selection before (Shift adds)
   bool showSamples = false;              // positions also in samples
+  bool missingOpen = false;              // the list of missing media
+  bool themeMenu = false;                // the look menu in the footer
+  std::vector<std::string> nameTips;     // per track: the full name (for the footer) when it is shortened
+  std::string headTip;                   // everything about the AAF, for the footer
+  double missingX = 0;
   std::set<int> solo;                   // soloed tracks (uid): only these play; listening only, not the import
   bool gonioOpen = false;               // the stereo meter is wanted (shows while a stereo event is selected)
   PcmReader rdL, rdR;                    // the files the meter reads (one stereo file: both the same)
@@ -256,7 +262,7 @@ struct State {
   HBRUSH editBrush = nullptr;
   HFONT fTheme = nullptr, fCheck = nullptr, fClip = nullptr, fTitle = nullptr, fTitleThin = nullptr, fTag = nullptr,
         fBody = nullptr, fBold = nullptr, fSmall = nullptr, fSec = nullptr, fMono = nullptr, fMonoBig = nullptr,
-        fMonoSmall = nullptr, fHead = nullptr, fWord = nullptr, fKey = nullptr;
+        fMonoSmall = nullptr, fHead = nullptr, fWord = nullptr, fKey = nullptr, fName = nullptr, fTiny = nullptr, fMicro = nullptr;
 };
 
 HFONT makeFont(double px, bool bold, double scale, bool mono = false) {
@@ -283,11 +289,14 @@ void makeFonts(State *st) {
   st->fHead = makeFont(15, true, s);
   st->fWord = makeFont(20, true, s);
   st->fKey = makeFont(11.5, true, s, true);
+  st->fName = makeFont(11.5, false, s);
+  st->fTiny = makeFont(9.5, false, s);
+  st->fMicro = makeFont(8.5, false, s);
 }
 
 void freeFonts(State *st) {
   HFONT *fs[] = {&st->fTheme, &st->fCheck, &st->fClip, &st->fTitle, &st->fTitleThin, &st->fTag, &st->fBody,
-                 &st->fBold, &st->fSmall, &st->fSec, &st->fMono, &st->fMonoBig, &st->fMonoSmall, &st->fHead, &st->fWord, &st->fKey};
+                 &st->fBold, &st->fSmall, &st->fSec, &st->fMono, &st->fMonoBig, &st->fMonoSmall, &st->fHead, &st->fWord, &st->fKey, &st->fName, &st->fTiny, &st->fMicro};
   for (HFONT *f : fs) {
     if (*f) DeleteObject(*f);
     *f = nullptr;
@@ -296,6 +305,21 @@ void freeFonts(State *st) {
 
 // The layout is drawn at a fixed size (W x H) and zoomed to the window: everything, type included,
 // grows with the window. The zoomed layout is centered in the window.
+#ifdef _WIN32
+// DPI of the monitor the window is on (Windows 10 1607+), else the system DPI
+static UINT windowDpi(HWND h) {
+  typedef UINT(WINAPI * GetDpiForWindowFn)(HWND);
+  static GetDpiForWindowFn fn = (GetDpiForWindowFn)GetProcAddress(GetModuleHandleA("user32.dll"), "GetDpiForWindow");
+  UINT d = fn ? fn(h) : 0;
+  if (!d) {
+    HDC dc = GetDC(h);
+    d = (UINT)GetDeviceCaps(dc, LOGPIXELSX);
+    ReleaseDC(h, dc);
+  }
+  return d ? d : 96;
+}
+#endif
+
 void relayout(State *st) {
   RECT cr;
   GetClientRect(st->hwnd, &cr);
@@ -343,6 +367,20 @@ struct Gfx {
     olDrawText(dc, str.c_str(), &rc, align | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
     SelectObject(dc, old);
   }
+  // text placed by its baseline (layout y), for type that must line up with a graphic
+  void textBase(HFONT f, COLORREF c, const std::string &str, double x, double baseline) const {
+    HGDIOBJ old = SelectObject(dc, f);
+    TEXTMETRIC tm;
+    memset(&tm, 0, sizeof(tm));
+    GetTextMetrics(dc, &tm);
+    int asc = tm.tmAscent > 0 ? tm.tmAscent : S(12);
+    int hgt = tm.tmHeight > 0 ? tm.tmHeight : asc + asc / 4;
+    SetTextColor(dc, c);
+    SetBkMode(dc, TRANSPARENT);
+    RECT rc = {X(x), Y(baseline) - asc, X(x) + S(600), Y(baseline) - asc + hgt};
+    olDrawText(dc, str.c_str(), &rc, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
+    SelectObject(dc, old);
+  }
   double width(HFONT f, const std::string &str) const {
     HGDIOBJ old = SelectObject(dc, f);
     RECT rc = {0, 0, 4000, 100};
@@ -366,6 +404,15 @@ struct Gfx {
     rfill(l, t, r, b, rad, line);
     double i = 1.0 / s;
     rfill(l + i, t + i, r - i, b - i, std::max(0.0, rad - i), in);
+  }
+  // a smooth (anti-aliased, sub-pixel) polygon
+  void polyAA(const std::vector<std::pair<double, double>> &pts, COLORREF c) const {
+    std::vector<double> xy;
+    for (auto &q : pts) {
+      xy.push_back(q.first * s + ox);
+      xy.push_back(q.second * s + oy);
+    }
+    olPolyFill(dc, xy.data(), (int)pts.size(), c);
   }
   void poly(const std::vector<std::pair<double, double>> &pts, COLORREF c) const {
     std::vector<POINT> p;
@@ -634,6 +681,46 @@ int rowAtY(const State *st, int y) {
 
 // ------------------------------------------------------------------ painting
 
+// Splits text into at most maxLines lines that fit `width` (at spaces, _ - . or anywhere if needed);
+// *cut is set when the last line had to be shortened.
+std::vector<std::string> fitLines(const Gfx &g, HFONT f, const std::string &text, double width, int maxLines, bool *cut) {
+  std::vector<std::string> lines;
+  if (cut) *cut = false;
+  size_t i = 0;
+  while (i < text.size() && (int)lines.size() < maxLines) {
+    // longest prefix (whole UTF-8 characters) that fits
+    size_t best = i, j = i;
+    while (j < text.size()) {
+      size_t k = j + 1;
+      while (k < text.size() && ((unsigned char)text[k] & 0xC0) == 0x80) k++;
+      if (g.width(f, text.substr(i, k - i)) > width) break;
+      best = j = k;
+    }
+    if (best == i) best = i + 1; // at least one character
+    if (best < text.size() && (int)lines.size() + 1 < maxLines) { // break after a separator if there is one
+      for (size_t k = best; k > i + 3; k--)
+        if (strchr(" _-.", text[k - 1])) {
+          best = k;
+          break;
+        }
+    }
+    if ((int)lines.size() + 1 == maxLines && best < text.size()) { // the last line: shorten with an ellipsis
+      std::string l = text.substr(i, best - i);
+      while (!l.empty() && g.width(f, l + "\xe2\x80\xa6") > width) {
+        l.pop_back();
+        while (!l.empty() && ((unsigned char)l.back() & 0xC0) == 0x80) l.pop_back();
+      }
+      lines.push_back(l + "\xe2\x80\xa6");
+      if (cut) *cut = true;
+      return lines;
+    }
+    lines.push_back(text.substr(i, best - i));
+    i = best;
+    while (i < text.size() && text[i] == ' ') i++;
+  }
+  return lines;
+}
+
 // the AAF's frame rate against the REAPER project's (0 when unknown or equal)
 bool fpsMismatch(State *st, double *projFps = nullptr) {
   if (!st->host || !st->host->projectFps) return false;
@@ -694,14 +781,26 @@ void paintTopBar(State *st, const Gfx &g) {
   g.fill(0, 0, W, kTopH, kFace);
   g.fill(0, kTopH - 1, W, kTopH, kLine);
   double mid = kTopH / 2;
-  // OLAAF mark
-  g.rfill(16, mid - 15, 46, mid + 15, 8, kBlue);
-  g.fill(23, mid - 7, 33, mid - 3.5, kWhiteFixed);
-  g.fill(27, mid - 1.6, 39, mid + 1.9, kWhiteFixed);
-  g.fill(23, mid + 3.8, 30, mid + 7.3, kWhiteFixed);
-  g.text(st->fWord, kInk, "OLAAF", 56, mid - 16, 140, mid + 16, DT_LEFT);
+  // the OLAAF mark and name: "OLAAF" from the top of the mark, the version on its bottom line
+  // (IBM Plex: capitals are 0.698 of the type size)
   double wordR = 56 + std::max(60.0, std::min(90.0, g.width(st->fWord, "OLAAF")));
-  addHit(st, 16, mid - 15, wordR, mid + 15, H_NONE, 0, "OLAAF \xe2\x80\x93 AAF import for REAPER. V 0.6 beta, developed with AI assistance. dmajorsound.com");
+  if (st->themeMenu) g.rbox(10, mid - 21, wordR + 6, mid + 21, 8, kBlue, kBlueSoft); // the menu is open
+  g.rfill(16, mid - 15, 46, mid + 15, 8, kBlue);
+  { // the mark: three events of an edit, with their fades (drawn on a 120 grid, 30 units here)
+    auto clip = [&](double x, double y, double w, double h, double fi, double fo) {
+      const double k = 0.25, ox0 = 16, oy0 = mid - 15;
+      g.polyAA({{ox0 + x * k, oy0 + (y + h) * k}, {ox0 + (x + fi) * k, oy0 + y * k}, {ox0 + (x + w - fo) * k, oy0 + y * k},
+                {ox0 + (x + w) * k, oy0 + (y + h) * k}},
+               kWhiteFixed);
+    };
+    clip(22, 30, 52, 16, 10, 0);
+    clip(46, 52, 52, 16, 12, 12);
+    clip(22, 74, 40, 16, 0, 10);
+  }
+  g.textBase(st->fWord, kInk, "OLAAF", 56, mid - 15 + 20 * 0.698);
+  g.textBase(st->fTiny, kMute, "V " OLAAF_VERSION_STRING " beta", 57, mid + 15);
+  addHit(st, 10, mid - 21, wordR + 6, mid + 21, H_THEME, 0,
+         "OLAAF " OLAAF_VERSION_STRING " beta, developed with AI assistance. dmajorsound.com");
   g.fill(wordR + 14, mid - 16, wordR + 15, mid + 16, kLine);
 
   // right side, right to left: Import, Cancel, Options, | Edit cursor, where it lands
@@ -743,62 +842,102 @@ void paintTopBar(State *st, const Gfx &g) {
   addHit(st, r - tw, mid - 22, r, mid + 21, H_TC_VALUE, 0, tcTip.c_str());
   double infoR = r - tw - 16;
 
-  // left: the AAF and what it is
-  double x = wordR + 30;
+  // left: the AAF and what it is - it always fits (smaller type, fewer details); all of it is in the footer on hover
+  double x0 = wordR + 30, avail = infoR - x0;
   std::string name = baseName(s.aafPath);
-  double nmW = std::min(infoR - x, g.width(st->fHead, name) + 4);
-  g.text(st->fHead, kInk, name, x, mid - 20, x + nmW, mid + 1, DT_LEFT);
-  if (!st->updTag.empty()) { // a newer OLAAF is out
-    std::string u = "Update " + st->updTag;
-    double uw = g.width(st->fSmall, u) + 20, ux = x + nmW + 10;
-    if (ux + uw < infoR) {
-      g.rfill(ux, mid - 19, ux + uw, mid - 1, 9, kBlue);
-      g.text(st->fSmall, kWhite, u, ux, mid - 19, ux + uw, mid - 1, DT_CENTER);
-      static std::string uTip;
-      uTip = "OLAAF " + st->updTag + " is out. Click to open the download page.";
-      addHit(st, ux, mid - 20, ux + uw, mid, H_UPDATE, 0, uTip.c_str());
-    }
-  }
-  double proj = 0;
-  bool fpsBad = fpsMismatch(st, &proj);
-  std::string a = s.product.empty() ? std::string() : s.product + " \xc2\xb7 ";
-  std::string f = fpsText(s);
-  double projSr = 0;
-  bool srBad = srMismatch(st, &projSr);
-  std::string srT = strprintf("%g kHz", s.sampleRate / 1000.0);
-  std::string b = strprintf(" / %d bit \xc2\xb7 ", s.bits);
-  double y0 = mid + 2, y1 = mid + 19;
-  auto seg = [&](const std::string &t, COLORREF c) {
-    double w = g.width(st->fSmall, t);
-    if (x < infoR) g.text(st->fSmall, c, t, x, y0, infoR, y1, DT_LEFT);
-    double x0 = x;
-    x += w;
-    return x0;
-  };
-  seg(a, kMute);
-  double fx = seg(f, fpsBad ? kWarn : kMute);
-  if (fpsBad) {
-    static std::string fTip;
-    fTip = strprintf("The REAPER project runs at %s fps, the AAF at %s.", fpsShort(proj).c_str(), fpsText(s).c_str());
-    addHit(st, fx, y0, x, y1, H_FPS_SHOW, 0, fTip.c_str());
-  }
-  seg(" \xc2\xb7 ", kMute);
-  double sx = seg(srT, srBad ? kWarn : kMute);
-  if (srBad) {
-    static std::string sTip;
-    sTip = strprintf("The REAPER project runs at %g kHz, the AAF at %g kHz.", projSr / 1000.0, s.sampleRate / 1000.0);
-    addHit(st, sx, y0, x, y1, H_FPS_SHOW, 0, sTip.c_str());
-  }
-  seg(b, kMute);
+  double projFps = 0, projSr = 0;
+  bool fpsBad = fpsMismatch(st, &projFps), srBad = srMismatch(st, &projSr);
   int ok = 0, total = 0;
   mediaCount(st, &ok, &total);
-  if (ok == total) {
-    double mx = seg(strprintf("%d / %d media found", ok, total), theme().green);
-    addHit(st, mx, y0, x, y1, H_NONE, 0, "Every audio file the AAF needs is there (embedded audio counts).");
-  } else {
-    double mx = seg(strprintf("%d of %d media missing \xe2\x80\x93 Locate\xe2\x80\xa6", total - ok, total), kRed);
-    addHit(st, mx, y0, x, y1, H_LOCATE, 0,
-           "Choose the folder that holds the media. All its subfolders are searched, and OLAAF remembers it for the next import.");
+  std::string media = ok == total ? strprintf("%d / %d media found", ok, total)
+                                  : strprintf("%d of %d media missing \xe2\x80\x93 Locate\xe2\x80\xa6", total - ok, total);
+  st->headTip = name + "  \xc2\xb7  " + (s.product.empty() ? std::string() : s.company + " " + s.product + " " + s.version + "  \xc2\xb7  ") +
+                fpsText(s) + "  \xc2\xb7  " + strprintf("%g kHz / %d bit", s.sampleRate / 1000.0, s.bits) + "  \xc2\xb7  AAF starts " +
+                formatTC(s.firstClip(), s.fps) + "  \xc2\xb7  " + media + "  \xc2\xb7  " + s.aafPath;
+  // the update button takes room first
+  double updW = 0;
+  std::string u = st->updTag.empty() ? std::string() : "Update " + st->updTag;
+  if (!u.empty()) updW = g.width(st->fSmall, u) + 30;
+  // name: the largest type that fits, else shortened
+  HFONT nf = st->fHead;
+  for (HFONT f : {st->fHead, st->fBold, st->fName, st->fTiny, st->fMicro}) {
+    nf = f;
+    if (g.width(f, name) <= avail - updW) break;
+  }
+  bool cut = false;
+  std::vector<std::string> nl = fitLines(g, nf, name, avail - updW, 1, &cut);
+  std::string shown = nl.empty() ? name : nl[0];
+  double nmW = g.width(nf, shown) + 4;
+  g.text(nf, kInk, shown, x0, mid - 20, x0 + nmW, mid + 1, DT_LEFT);
+  addHit(st, x0, mid - 20, x0 + nmW, mid, H_NONE, 0, st->headTip.c_str());
+  if (!u.empty()) { // a newer OLAAF is out
+    double ux = x0 + nmW + 10, uw = updW - 10;
+    g.rfill(ux, mid - 19, ux + uw, mid - 1, 9, kBlue);
+    g.text(st->fSmall, kWhite, u, ux, mid - 19, ux + uw, mid - 1, DT_CENTER);
+    static std::string uTip;
+    uTip = "OLAAF " + st->updTag + " is out. Click to open the download page.";
+    addHit(st, ux, mid - 20, ux + uw, mid, H_UPDATE, 0, uTip.c_str());
+  }
+  // details: drop the least important ones, then use smaller type, until the line fits
+  struct Seg {
+    std::string t;
+    COLORREF c;
+    int hit;
+    const char *tip;
+    int prio; // dropped first: highest
+  };
+  static std::string fTip, sTip;
+  fTip = strprintf("The REAPER project runs at %s fps, the AAF at %s.", fpsShort(projFps).c_str(), fpsText(s).c_str());
+  sTip = strprintf("The REAPER project runs at %g kHz, the AAF at %g kHz.", projSr / 1000.0, s.sampleRate / 1000.0);
+  std::vector<Seg> segs = {
+      {s.product, kMute, H_NONE, nullptr, 3},
+      {fpsText(s), fpsBad ? kWarn : kMute, fpsBad ? H_FPS_SHOW : H_NONE, fpsBad ? fTip.c_str() : nullptr, 0},
+      {strprintf("%g kHz", s.sampleRate / 1000.0), srBad ? kWarn : kMute, srBad ? H_FPS_SHOW : H_NONE, srBad ? sTip.c_str() : nullptr, 0},
+      {strprintf("%d bit", s.bits), kMute, H_NONE, nullptr, 2},
+      {media, ok == total ? theme().green : kRed, ok == total ? H_NONE : H_MISS_OPEN,
+       ok == total ? "Every audio file the AAF needs is there (embedded audio counts)."
+                   : "Show the missing files and locate them, one by one or by folder.",
+       0}};
+  if (s.product.empty()) segs.erase(segs.begin());
+  const std::string dot = "  \xc2\xb7  ";
+  auto lineW = [&](HFONT f, int maxPrio) {
+    double w = 0;
+    bool first = true;
+    for (auto &sg : segs)
+      if (sg.prio <= maxPrio) {
+        w += g.width(f, sg.t) + (first ? 0 : g.width(f, dot));
+        first = false;
+      }
+    return w;
+  };
+  HFONT mf = st->fSmall;
+  int maxPrio = 3;
+  bool fits = false;
+  for (HFONT f : {st->fSmall, st->fTiny})
+    for (int p = 3; p >= 0 && !fits; p--)
+      if (lineW(f, p) <= avail) {
+        mf = f;
+        maxPrio = p;
+        fits = true;
+      }
+  if (!fits) {
+    mf = st->fTiny;
+    maxPrio = 0;
+  }
+  double y0 = mid + 2, y1 = mid + 19, x = x0;
+  bool first = true;
+  for (auto &sg : segs) {
+    if (sg.prio > maxPrio) continue;
+    if (!first) {
+      g.text(mf, kMute, dot, x, y0, infoR, y1, DT_LEFT);
+      x += g.width(mf, dot);
+    }
+    first = false;
+    double w = g.width(mf, sg.t);
+    g.text(mf, sg.c, sg.t, x, y0, infoR, y1, DT_LEFT);
+    addHit(st, x, y0, std::min(infoR, x + w), y1, sg.hit, 0, sg.tip ? sg.tip : st->headTip.c_str());
+    if (sg.hit == H_MISS_OPEN) st->missingX = x - 16;
+    x += w;
   }
 }
 
@@ -1108,8 +1247,22 @@ void paintArrange(State *st, const Gfx &g) {
   int real = 0;
   for (auto &t : s.tracks) real += !t.created;
   g.fill(kL + kHdr, ry, kL + kHdr + 1, kAB - 1, kLine);
-  g.text(st->fSmall, kMute, strprintf("%d of %d tracks", nsel, real), kL + 12, ry, kL + 120, ry + kRuler, DT_LEFT);
-  addHit(st, kL + 4, ry, kL + 110, ry + kRuler, H_NONE, 0, "Tracks that will be imported, of the tracks in the AAF.");
+  int mOk = 0, mTotal = 0;
+  mediaCount(st, &mOk, &mTotal);
+  if (mTotal > 0 && mOk == 0) { // no audio at all: a red flag in the corner
+    const char *fl = "No audio found";
+    double fw = g.width(st->fSmall, fl) + 34;
+    g.rfill(kL + 8, ry + 5, kL + 8 + fw, ry + kRuler - 5, 9, RGB(0xd2, 0x3c, 0x32));
+    double fx = kL + 17, fy = ry + kRuler / 2.0;
+    g.fill(fx, fy - 6, fx + 1.4, fy + 7, kWhiteFixed);                      // the pole
+    g.poly({{fx + 1.4, fy - 6}, {fx + 9, fy - 3.5}, {fx + 1.4, fy - 0.5}}, kWhiteFixed); // the flag
+    g.text(st->fSmall, kWhiteFixed, fl, kL + 30, ry + 5, kL + 8 + fw, ry + kRuler - 5, DT_LEFT);
+    addHit(st, kL + 8, ry + 5, kL + 8 + fw, ry + kRuler - 5, H_MISS_OPEN, 0,
+           "None of the audio files this AAF points to was found. Click to locate them (a file or a folder).");
+  } else {
+    g.text(st->fSmall, kMute, strprintf("%d of %d tracks", nsel, real), kL + 12, ry, kL + 120, ry + kRuler, DT_LEFT);
+    addHit(st, kL + 4, ry, kL + 110, ry + kRuler, H_NONE, 0, "Tracks that will be imported, of the tracks in the AAF.");
+  }
   {
     const char *fl = "+ Folder";
     double fw = g.width(st->fBody, fl);
@@ -1299,19 +1452,31 @@ void paintArrange(State *st, const Gfx &g) {
     COLORREF nameC = (on && !grabbed) ? kInk : kMute;
     if (st->editKind == 4 && st->editTrack == row.track) nameC = trSel ? kBlueSoft : kPanel; // the editor sits on top
     double nx = hx + 48;
-    if (!tr.target.empty()) {
-      g.text(st->fBody, nameC, tr.name, nx, y + 3, nameR, y + 20, DT_LEFT);
-      g.text(st->fClip, kBlue, "\xe2\x86\x92 " + tr.targetName + (opt.overwriteEnvelopes ? "  (envelopes overwritten)" : ""), nx,
-             y + 19, nameR, y + kRowH - 3, DT_LEFT);
-    } else if (!tr.mergedFrom.empty()) {
-      g.text(st->fBody, nameC, tr.name, nx, y + 3, nameR, y + 20, DT_LEFT);
-      g.text(st->fClip, kMute, tr.mergedFrom, nx, y + 19, nameR, y + kRowH - 3, DT_LEFT);
-    } else
-      g.text(st->fBody, nameC, tr.name, nx, y, nameR, y + kRowH, DT_LEFT);
-    if (!on) g.fill(nx, y + kRowH / 2, std::min(nameR, nx + g.width(st->fBody, tr.name)), y + kRowH / 2 + 1, kMute);
+    // the name: smaller regular type; a long name takes two lines, the full name shows in the footer
+    std::string sub = !tr.target.empty() ? "\xe2\x86\x92 " + tr.targetName + (opt.overwriteEnvelopes ? "  (envelopes overwritten)" : "")
+                                         : tr.mergedFrom;
+    bool cutName = false, cutSub = false;
+    std::vector<std::string> nl = fitLines(g, st->fName, tr.name, nameR - nx, sub.empty() ? 2 : 1, &cutName);
+    if (nl.empty()) nl.push_back(std::string());
+    if (sub.empty() && nl.size() == 1)
+      g.text(st->fName, nameC, nl[0], nx, y, nameR, y + kRowH, DT_LEFT);
+    else if (sub.empty()) {
+      g.text(st->fName, nameC, nl[0], nx, y + 3, nameR, y + 18, DT_LEFT);
+      g.text(st->fName, nameC, nl[1], nx, y + 17, nameR, y + kRowH - 2, DT_LEFT);
+    } else {
+      g.text(st->fName, nameC, nl[0], nx, y + 3, nameR, y + 19, DT_LEFT);
+      std::vector<std::string> sl = fitLines(g, st->fTiny, sub, nameR - nx, 1, &cutSub);
+      g.text(st->fTiny, !tr.target.empty() ? kBlue : kMute, sl.empty() ? "" : sl[0], nx, y + 19, nameR, y + kRowH - 3, DT_LEFT);
+    }
+    if (!on && nl.size() == 1 && sub.empty())
+      g.fill(nx, y + kRowH / 2, std::min(nameR, nx + g.width(st->fName, nl[0])), y + kRowH / 2 + 1, kMute);
+    if (st->nameTips.size() < s.tracks.size()) st->nameTips.resize(s.tracks.size());
+    std::string &nt = st->nameTips[(size_t)row.track];
+    nt = (cutName || cutSub) ? tr.name + (sub.empty() ? "" : "  \xc2\xb7  " + sub) + "   \xe2\x80\x94  " : std::string();
+    nt += "Click selects, Shift or Cmd / Ctrl-click adds, double-click renames. Drag over names to select several, drag selected "
+          "names to move them.";
     if (grabbed) g.fill(kL + kHdr - 3, y, kL + kHdr, y + kRowH - 1, kBlue); // picked up
-    addHit(st, hx + 44, y + 2, nameR, y + kRowH - 2, H_TRACK_NAME, row.track,
-           "Click selects, Shift or Cmd / Ctrl-click adds, double-click renames. Drag over names to select several, drag selected names to move them.");
+    addHit(st, hx + 44, y + 2, nameR, y + kRowH - 2, H_TRACK_NAME, row.track, nt.c_str());
     if (tr.created) { // a track added here can be deleted again; AAF tracks cannot
       button(st, g, kL + kHdr - 28, y + 8, kL + kHdr - 8, y + kRowH - 8, "\xc3\x97", H_TRACK_DELETE, row.track,
              "Delete this new track. Its events go back to the AAF tracks they came from.");
@@ -1566,9 +1731,24 @@ void paintEventBar(State *st, const Gfx &g) {
     }
     nm = strprintf("%zu events on %zu track%s", ids.size(), trs.size(), trs.size() == 1 ? "" : "s");
   }
-  double nw = std::min(220.0, g.width(st->fBold, nm) + 10);
-  g.text(st->fBold, kInk, nm, x, t, std::min(x + nw, right - 6), b, DT_LEFT);
-  g.text(st->fMonoSmall, kMute, det, x + nw + 4, t, right - 8, b, DT_LEFT);
+  // the file name in regular type over the whole room; a long one takes the second line too (the details
+  // then show in the footer on hover), otherwise the details sit on the second line
+  double room = right - 12 - x;
+  bool cutN = false;
+  std::vector<std::string> nl = fitLines(g, st->fName, nm, room, 2, &cutN);
+  if (nl.empty()) nl.push_back(nm);
+  if (nl.size() == 1) {
+    g.text(st->fName, kInk, nl[0], x, t + 3, x + room, mid + 1, DT_LEFT);
+    bool cutD = false;
+    std::vector<std::string> dl = fitLines(g, st->fMonoSmall, det, room, 1, &cutD);
+    g.text(st->fMonoSmall, kMute, dl.empty() ? det : dl[0], x, mid + 1, x + room, b - 3, DT_LEFT);
+  } else {
+    g.text(st->fName, kInk, nl[0], x, t + 3, x + room, mid + 1, DT_LEFT);
+    g.text(st->fName, kInk, nl[1], x, mid, x + room, b - 3, DT_LEFT);
+  }
+  static std::string evTip;
+  evTip = nm + "   " + det;
+  addHit(st, x, t, x + room, b, H_NONE, 0, evTip.c_str());
 }
 
 // ------------------------------------------------------------------ options
@@ -1695,6 +1875,67 @@ void paintOptions(State *st, const Gfx &g) {
   g.fill(px + 16, y, px + kOpW - 16, y + 1, kLine);
   g.text(st->fTag, kMute, "V 0.6 beta developed with AI assistance \xc2\xb7 dmajorsound.com", px + 16, y + 4, px + kOpW - 16,
          y + 24, DT_LEFT);
+}
+
+// ------------------------------------------------------------------ missing media
+
+// media the import needs that are not there (embedded audio is always there)
+std::vector<int> missingMedia(State *st) {
+  Session &s = st->imp->session();
+  std::set<int> used;
+  for (auto &tr : s.tracks)
+    if (tr.import)
+      for (auto &c : tr.clips)
+        if (!c.excluded)
+          for (auto &src : c.sources)
+            if (src.media >= 0) used.insert(src.media);
+  std::vector<int> out;
+  for (int mi : used) {
+    const Media &m = s.media[(size_t)mi];
+    if (m.kind != MediaKind::Embedded && !fileExists(m.foundPath)) out.push_back(mi);
+  }
+  return out;
+}
+
+void paintMissing(State *st, const Gfx &g) {
+  Session &s = st->imp->session();
+  std::vector<int> miss = missingMedia(st);
+  if (miss.empty()) {
+    st->missingOpen = false;
+    return;
+  }
+  const size_t shown = std::min<size_t>(miss.size(), 9);
+  double w = 560, rowH = 40, h = 64 + shown * rowH + (miss.size() > shown ? 22 : 0) + 52;
+  double l = st->missingX > 0 ? st->missingX : kL, t = kTopH - 6;
+  if (l + w > kR) l = kR - w;
+  g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 12, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
+  g.rbox(l, t, l + w, t + h, 12, kLine, kPop);
+  addHit(st, l, t, l + w, t + h, H_MISS_BG, 0, nullptr);
+  g.text(st->fBold, kInk, strprintf("%zu media file%s missing", miss.size(), miss.size() == 1 ? "" : "s"), l + 16, t + 12,
+         l + w - 16, t + 32, DT_LEFT);
+  g.text(st->fSmall, kMute, "Locate one file and OLAAF also looks for the others in its folder.", l + 16, t + 32, l + w - 16,
+         t + 50, DT_LEFT);
+  double y = t + 58;
+  for (size_t i = 0; i < shown; i++) {
+    const Media &m = s.media[(size_t)miss[i]];
+    std::string where = m.originalUri;
+    if (where.rfind("file://", 0) == 0) where = where.substr(7);
+    g.text(st->fBody, kInk, m.name.empty() ? baseName(where) : m.name, l + 16, y + 2, l + w - 110, y + 20, DT_LEFT);
+    g.text(st->fSmall, kMute, shortPath(where, 70), l + 16, y + 20, l + w - 110, y + 36, DT_LEFT);
+    button(st, g, l + w - 100, y + 6, l + w - 16, y + 32, "Locate\xe2\x80\xa6", H_MISS_PICK, miss[i],
+           "Choose this file. Its folder is searched for the other missing files too.");
+    y += rowH;
+    if (i + 1 < shown) g.fill(l + 16, y - 1, l + w - 16, y, mixColor(kPop, kInk, 0.08));
+  }
+  if (miss.size() > shown) {
+    g.text(st->fSmall, kMute, strprintf("\xe2\x80\xa6 and %zu more", miss.size() - shown), l + 16, y, l + w - 16, y + 20,
+           DT_LEFT);
+    y += 22;
+  }
+  g.fill(l + 16, y + 6, l + w - 16, y + 7, kLine);
+  button(st, g, l + 16, y + 16, l + 196, y + 42, "Search a folder\xe2\x80\xa6", H_LOCATE, 0,
+         "Choose a folder that holds media. All its subfolders are searched, and OLAAF remembers it for the next import.");
+  g.text(st->fSmall, kMute, "Missing files come in as offline items.", l + 210, y + 16, l + w - 16, y + 42, DT_LEFT);
 }
 
 // ------------------------------------------------------------------ help and shortcuts
@@ -2032,9 +2273,28 @@ void paint(State *st, HDC dc) {
   if (st->destTrack >= 0) paintDestPopover(st, g);
   if (st->palTrack >= 0 || !st->palFolder.empty()) paintPalette(st, g);
   if (st->optsOpen) paintOptions(st, g);
-  paintGonio(st, g);
+  if (st->missingOpen) paintMissing(st, g);
   if (st->helpOpen) paintHelp(st, g);
   paintFooter(st, g);
+  if (st->themeMenu) { // System / Dark / Light, under the OLAAF logo
+    static const char *names[3] = {"System", "Dark", "Light"};
+    static const char *tips[3] = {"Follows the colors of your REAPER theme.", "OLAAF's own dark look.", "A white interface."};
+    double w = 190, rh = 30, h = 3 * rh + 40;
+    double l = 10, r = l + w, t = kTopH - 8, b = t + h;
+    g.rfill(l - 1, t + 2, r + 3, b + 5, 10, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
+    g.rbox(l, t, r, b, 10, kLine, kPop);
+    addHit(st, l, t, r, b, H_THEME_BG, 0, nullptr);
+    g.text(st->fSmall, kMute, "Interface", l + 14, t + 8, r - 10, t + 30, DT_LEFT);
+    for (int i = 0; i < 3; i++) {
+      double y = t + 32 + i * rh;
+      bool cur = olaaf::themeMode() == i;
+      if (cur) g.rfill(l + 6, y, r - 6, y + rh, 6, kBlueSoft);
+      if (cur) g.check(l + 12, y + 7, kBlue);
+      g.text(st->fBody, kInk, names[i], l + 36, y, r - 10, y + rh, DT_LEFT);
+      addHit(st, l + 6, y, r - 6, y + rh, H_THEME_PICK, i, tips[i]);
+    }
+  }
+  paintGonio(st, g);
 }
 
 // ------------------------------------------------------------------ input
@@ -2305,6 +2565,16 @@ void click(State *st, int x, int y, bool shift) {
     InvalidateRect(st->hwnd, NULL, FALSE);
     return;
   }
+  if (st->themeMenu && id != H_THEME && id != H_THEME_BG && id != H_THEME_PICK) {
+    st->themeMenu = false;
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    if (id == H_LANES || id == H_NONE) return;
+  }
+  if (st->missingOpen && id != H_MISS_BG && id != H_MISS_PICK && id != H_MISS_OPEN && id != H_LOCATE) {
+    st->missingOpen = false;
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    if (id == H_LANES || id == H_NONE) return;
+  }
   if (st->optsOpen && !inOpts && id != H_OPTS) {
     st->optsOpen = false;
     InvalidateRect(st->hwnd, NULL, FALSE);
@@ -2539,6 +2809,31 @@ void click(State *st, int x, int y, bool shift) {
   case H_SHOW_AUTO: opt.showAutomation = !opt.showAutomation; break;
   case H_OPTS: st->optsOpen = !st->optsOpen; st->folderTrack = st->destTrack = st->palTrack = -1; st->palFolder.clear(); break;
   case H_OPTS_BG: return;
+  case H_THEME: st->themeMenu = !st->themeMenu; break;
+  case H_THEME_BG: return;
+  case H_THEME_PICK: {
+    int m = h ? h->idx : 0;
+    olaaf::setThemeMode(m);
+    static const char *keys[3] = {"system", "dark", "light"};
+    if (st->host && st->host->setSetting) st->host->setSetting("theme", keys[m < 0 || m > 2 ? 0 : m]);
+    st->themeMenu = false;
+    break;
+  }
+  case H_MISS_BG: return;
+  case H_MISS_OPEN: st->missingOpen = !st->missingOpen; st->optsOpen = false; break;
+  case H_MISS_PICK: {
+    int mi = h ? h->idx : -1;
+    if (mi < 0 || mi >= (int)s.media.size() || !st->host || !st->host->pickFile) break;
+    std::string p;
+    std::string title = "OLAAF: locate " + s.media[(size_t)mi].name;
+    if (!st->host->pickFile(title.c_str(), &p) || p.empty()) break;
+    opt.searchFolders.insert(opt.searchFolders.begin(), dirName(p)); // the others may be next to it
+    st->imp->locateMedia(opt);
+    s.media[(size_t)mi].foundPath = p; // the file chosen by hand wins
+    st->peaks.start(s);
+    SetTimer(st->hwnd, kPeakTimer, 150, NULL);
+    break;
+  }
   case H_HELP: st->helpOpen = !st->helpOpen; st->optsOpen = false; break;
   case H_HELP_BG: return;
   case H_GONIO_BG: return;
@@ -2917,9 +3212,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     st->hwnd = hwnd;
     g_open = st;
 #ifdef _WIN32
-    HDC dc = GetDC(hwnd);
-    st->base = st->scale = GetDeviceCaps(dc, LOGPIXELSX) / 96.0;
-    ReleaseDC(hwnd, dc);
+    st->base = st->scale = windowDpi(hwnd) / 96.0; // the monitor the window is on (sharp on every screen)
     RECT want = {0, 0, (LONG)std::lround(W * st->base), (LONG)std::lround(H * st->base)};
     AdjustWindowRectEx(&want, (DWORD)GetWindowLongPtr(hwnd, GWL_STYLE), FALSE, (DWORD)GetWindowLongPtr(hwnd, GWL_EXSTYLE));
     int w = want.right - want.left, h = want.bottom - want.top;
@@ -2994,6 +3287,17 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     return 0;
   case WM_ERASEBKGND: return 1;
+#ifdef _WIN32
+  case 0x02E0: // WM_DPICHANGED: moved to a screen with another scaling - take the size Windows suggests, redraw sharp
+    if (st) {
+      st->base = HIWORD(wp) / 96.0;
+      const RECT *r = (const RECT *)lp;
+      SetWindowPos(hwnd, NULL, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
+      relayout(st);
+      InvalidateRect(hwnd, NULL, FALSE);
+    }
+    return 0;
+#endif
   case WM_SIZE:
     if (st) {
       if (st->editKind) endEdit(st, true);
@@ -3403,6 +3707,12 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   if (getenv("OLAAF_SHOWAUTO")) opt.showAutomation = true;
   if (getenv("OLAAF_OPTS")) st.optsOpen = true;
   if (getenv("OLAAF_HELP")) st.helpOpen = true;
+  if (getenv("OLAAF_MISSING")) st.missingOpen = true;
+  if (getenv("OLAAF_THEMEMENU")) st.themeMenu = true;
+  if (getenv("OLAAF_LONGNAME") && imp.session().tracks.size() > 1) {
+    imp.session().tracks[0].name = "Dialog_Boom_Szene_12_Take_3_Close_Mic_Rechts";
+    imp.session().tracks[1].name = "Lavalier_Anna_Szene_12_alle_Takes_mit_Wind";
+  }
   if (getenv("OLAAF_SOLO"))
     for (auto &tr : imp.session().tracks)
       if (tr.name == getenv("OLAAF_SOLO")) st.solo.insert(tr.uid);
@@ -3485,8 +3795,8 @@ int dialogTranslateKey(MSG *msg) {
     return -1;
   }
   if (msg->message == WM_KEYDOWN && msg->wParam == VK_ESCAPE) {
-    if (st->helpOpen || st->optsOpen || st->folderTrack >= 0 || st->destTrack >= 0 || st->palTrack >= 0 || !st->palFolder.empty()) {
-      st->optsOpen = st->helpOpen = false; // Esc closes an open panel first
+    if (st->helpOpen || st->optsOpen || st->missingOpen || st->themeMenu || st->folderTrack >= 0 || st->destTrack >= 0 || st->palTrack >= 0 || !st->palFolder.empty()) {
+      st->optsOpen = st->helpOpen = st->missingOpen = st->themeMenu = false; // Esc closes an open panel first
       st->folderTrack = st->destTrack = st->palTrack = -1;
       st->palFolder.clear();
       InvalidateRect(st->hwnd, NULL, FALSE);

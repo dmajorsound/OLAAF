@@ -4,6 +4,7 @@
 #include <cstring>
 #include "logo.h"
 #include "theme.h"
+#include "round.h"
 #undef min
 #undef max
 
@@ -16,23 +17,17 @@ const float kMarkW = 1.4812f;
 } // namespace
 
 int drawDmajorLogo(HDC dc, int right, int midY, int markH, COLORREF markColor, COLORREF textColor, HFONT font) {
-  // the mark at the right edge
+  // the mark at the right edge, drawn smooth (anti-aliased, sub-pixel) so it stays clean when small
   const int np = (int)(sizeof(kMark) / sizeof(kMark[0]));
-  POINT pts[sizeof(kMark) / sizeof(kMark[0])];
-  int markW = (int)std::lround(markH * kMarkW);
-  int left = right - markW, top = midY - markH / 2;
+  double xy[2 * sizeof(kMark) / sizeof(kMark[0])];
+  double markW = markH * kMarkW;
+  double leftD = right - markW, topD = midY - markH / 2.0;
   for (int i = 0; i < np; i++) {
-    pts[i].x = left + (int)std::lround(kMark[i].x * markH);
-    pts[i].y = top + (int)std::lround(kMark[i].y * markH);
+    xy[2 * i] = leftD + kMark[i].x * markH;
+    xy[2 * i + 1] = topD + kMark[i].y * markH;
   }
-  HBRUSH br = CreateSolidBrush(markColor);
-  HPEN pen = CreatePen(PS_SOLID, 1, markColor);
-  HGDIOBJ oldB = SelectObject(dc, br), oldP = SelectObject(dc, pen);
-  Polygon(dc, pts, np);
-  SelectObject(dc, oldB);
-  SelectObject(dc, oldP);
-  DeleteObject(br);
-  DeleteObject(pen);
+  olPolyFill(dc, xy, np, markColor);
+  int left = (int)std::lround(leftD);
 
   // "dmajorsound.com" in small type, left of the mark
   const char *url = "dmajorsound.com";

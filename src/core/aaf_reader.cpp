@@ -164,7 +164,12 @@ bool AafFile::load(const std::string &path, const ReadOptions &opt, Session *s, 
   aafiAudioTrack *tr = nullptr;
   AAFI_foreachAudioTrack(a, tr) {
     Track t;
-    t.name = tr->name ? tr->name : ("Audio " + std::to_string(tr->number));
+    t.name = tr->name ? tr->name : "";
+    while (!t.name.empty() && (t.name.back() == ' ' || t.name.back() == '\t')) t.name.pop_back();
+    if (t.name.empty()) { // unnamed (Media Composer often leaves the slot name empty): A1, A2 ... as in the editor
+      bool avid = s->product.find("Media Composer") != std::string::npos || s->company.find("Avid") != std::string::npos;
+      t.name = (avid ? "A" : "Audio ") + std::to_string(tr->number);
+    }
     t.channels = (tr->format >= 1 && tr->format <= 8) ? tr->format : 0;
     if (tr->gain && (tr->gain->flags & AAFI_AUDIO_GAIN_CONSTANT) && tr->gain->value)
       t.volume = rat(&tr->gain->value[0]);

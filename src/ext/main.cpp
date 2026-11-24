@@ -7,7 +7,9 @@
 
 // C++ headers first: SWELL (mac/linux) and windows.h define min/max macros
 #include <algorithm>
+#include "../core/audiofile.h"
 #include "../core/importer.h"
+#include "../core/report.h"
 #include "../core/util.h"
 #include "progress.h"
 #include "dialog.h"
@@ -37,6 +39,7 @@
 #define REAPERAPI_WANT_GetTrack
 #define REAPERAPI_WANT_GetUserFileNameForRead
 #define REAPERAPI_WANT_GetThemeColor
+#define REAPERAPI_WANT_EnumProjects
 #define REAPERAPI_WANT_GetSetProjectInfo
 #define REAPERAPI_WANT_GetAudioDeviceInfo
 #define REAPERAPI_WANT_PCM_Source_CreateFromFileEx
@@ -103,7 +106,7 @@ static std::string summary(const Importer &imp, const MediaReport &rep, int merg
     for (size_t i = 0; i < rep.missingNames.size() && i < 8; i++) m += "  " + rep.missingNames[i] + "\n";
     if (rep.missingNames.size() > 8) m += strprintf("  ... and %d more\n", (int)rep.missingNames.size() - 8);
   }
-  if (!rep.logPath.empty()) m += "\nDetails: " + rep.logPath + "\n";
+  if (!rep.logPath.empty()) m += "\nImport report: " + rep.logPath + "\n";
   int shown = 0;
   for (auto &w : s.warnings) {
     if (w.rfind("AAF: ", 0) == 0) continue; // parser noise
@@ -381,6 +384,24 @@ static bool playTimeline(const std::vector<MixEvent> &events, double start, doub
 }
 } // namespace preview
 
+// the sample rate the REAPER project runs at: its own, or the audio device's
+static double projectSampleRate() {
+  if (GetSetProjectInfo(nullptr, "PROJECT_SRATE_USE", 0, false) >= 0.5) return GetSetProjectInfo(nullptr, "PROJECT_SRATE", 0, false);
+  char buf[64] = "";
+  if (GetAudioDeviceInfo("SRATE", buf, sizeof(buf))) return atof(buf);
+  return 0.0;
+}
+
+// A readable report of the import, next to the REAPER project (or in the audio folder while the
+// project is not saved yet). Returns its path.
+static std::string writeReport(Importer &imp, const ImportOptions &opt, const MediaReport &rep, int merged) {
+  char rpp[4096] = "";
+  EnumProjects(-1, rpp, sizeof(rpp));
+  bool drop = false;
+  double pf = TimeMap_curFrameRate(nullptr, &drop);
+  return writeImportReport(imp.session(), opt, rep, merged, pf, projectSampleRate(), rpp, OLAAF_VERSION_STRING);
+}
+
 static DialogHost makeHost() {
   DialogHost h;
   h.askText = [](const char *title, const char *caption, std::string *value) {
@@ -407,12 +428,7 @@ static DialogHost makeHost() {
   };
   h.editCursor = []() { return GetCursorPosition(); };
   h.projectFps = [](bool *drop) { return TimeMap_curFrameRate(nullptr, drop); };
-  h.projectSrate = []() {
-    if (GetSetProjectInfo(nullptr, "PROJECT_SRATE_USE", 0, false) >= 0.5) return GetSetProjectInfo(nullptr, "PROJECT_SRATE", 0, false);
-    char buf[64] = "";
-    if (GetAudioDeviceInfo("SRATE", buf, sizeof(buf))) return atof(buf); // the project follows the audio device
-    return 0.0;
-  };
+  h.projectSrate = []() { return projectSampleRate(); };
   h.playPreview = [](const std::vector<PreviewPart> &p) { return preview::play(p); };
   h.stopPreview = []() { preview::stop(); };
   h.previewPos = []() { return preview::pos(); };
@@ -445,6 +461,10 @@ static bool loadForImport(const std::string &aaf, ImportOptions &opt, Importer &
                           std::string &defaultDest) {
   updateCheckStart(); // is there a newer OLAAF? (once per session, in the background)
   // OLAAF wears the REAPER theme that is loaded right now
+  { // the look chosen in the footer: system (REAPER's colors), dark or light
+    const char *v = GetExtState("olAAF", "theme");
+    setThemeMode(v && !strcmp(v, "light") ? 2 : v && !strcmp(v, "dark") ? 1 : 0);
+  }
   setThemeFromReaper([](const char *key) { return GetThemeColor(key, 0); });
   bool cancelled = false;
   {
@@ -591,7 +611,10 @@ static void insertTracks(Importer &imp, ImportOptions &opt, const MediaReport &r
   UpdateArrange();
   Undo_EndBlock2(nullptr, "OLAAF: Import AAF", -1);
 
-  ShowMessageBox(summary(imp, rep, merged).c_str(), "OLAAF", 0);
+  MediaReport r2 = rep;
+  std::string report = writeReport(imp, opt, rep, merged);
+  if (!report.empty()) r2.logPath = report; // the summary points to the report
+  ShowMessageBox(summary(imp, r2, merged).c_str(), "OLAAF", 0);
 }
 
 // the import into the open project: the window does not block REAPER (the edit cursor can be moved,

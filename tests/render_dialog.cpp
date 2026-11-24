@@ -1,3 +1,4 @@
+#include <cmath>
 // Renders the olAAF import dialog to SVG without REAPER (layout check).
 #include <cstdio>
 #include <cstdlib>
@@ -35,8 +36,21 @@ static void mMove(HDC, int x, int y, POINT *) { mx = x; my = y; }
 static void mLine(HDC, int x, int y) { char t[256]; snprintf(t, 256, "<line x1='%d' y1='%d' x2='%d' y2='%d' stroke='%s' stroke-width='%d' stroke-linecap='square'/>\n", mx, my, x, y, hex(curPen).c_str(), curPenW); svg += t; mx = x; my = y; }
 static void mTextColor(HDC, int c) { curText = c; }
 static void mBk(HDC, int) {}
+// IBM Plex Sans advance widths (1/1000 em) for ASCII, so the mock measures like the real fonts
+static const short kPlexR[95] = {236,284,419,713,598,927,694,242,335,335,450,600,272,399,272,383,600,600,600,600,600,600,600,600,600,600,292,292,600,600,600,477,891,641,653,621,671,583,559,695,707,400,510,634,501,812,707,708,606,708,640,581,572,678,609,891,613,593,580,317,383,317,600,565,600,534,580,503,580,549,324,528,568,250,250,527,272,873,568,560,580,580,367,487,351,568,492,768,507,499,464,343,314,343,600};
+static const short kPlexB[95] = {236,320,493,632,601,974,721,268,338,338,601,600,310,403,310,460,600,600,600,600,600,600,600,600,600,600,330,330,600,600,600,500,903,685,667,651,697,607,585,719,724,432,559,696,530,819,724,714,656,714,674,624,584,694,650,973,673,649,607,334,460,334,600,556,600,569,608,517,608,562,361,552,596,286,286,577,303,894,596,564,608,608,404,504,383,596,538,841,560,534,518,372,402,372,600};
+static int textWidth(const char *buf) {
+  double w = 0;
+  for (const unsigned char *p = (const unsigned char *)buf; *p; p++) {
+    if ((*p & 0xC0) == 0x80) continue; // UTF-8 continuation
+    int c = *p;
+    double a = curFont.mono ? 600 : (c >= 32 && c < 127 ? (curFont.bold ? kPlexB : kPlexR)[c - 32] : 600);
+    w += a * curFont.h / 1000.0;
+  }
+  return (int)std::ceil(w);
+}
 static int mDraw(HDC, const char *buf, int, RECT *r, int align) {
-  if (align & DT_CALCRECT) { r->right = r->left + (int)(strlen(buf) * curFont.h * 0.53); r->bottom = r->top + curFont.h; return curFont.h; }
+  if (align & DT_CALCRECT) { r->right = r->left + textWidth(buf); r->bottom = r->top + curFont.h; return curFont.h; }
   char t[1024]; const char *anchor = (align & DT_CENTER) ? "middle" : (align & DT_RIGHT) ? "end" : "start";
   int x = (align & DT_CENTER) ? (r->left + r->right) / 2 : (align & DT_RIGHT) ? r->right : r->left;
   clipN++;
@@ -65,7 +79,7 @@ int main(int argc, char **argv) {
   if (imp.session().tracks.size() > 4) imp.session().tracks[4].import = false;
   int pal = argc > 3 ? atoi(argv[3]) : -1;
   svg = "<svg xmlns='http://www.w3.org/2000/svg' width='" + std::to_string(1180 * zoomK()) + "' height='" + std::to_string(742 * zoomK()) + "'>\n";
-  olaaf::setDarkTheme(argc > 4); // dark = REAPER 7 default theme
+  if (argc > 4) olaaf::setDarkTheme(true); else olaaf::setThemeMode(2); // dark = REAPER 7 default theme
   dialogPaintTest(imp, opt, (HDC)1, pal, nullptr);
   svg += "</svg>\n";
   FILE *f = fopen(argv[2], "wb"); fwrite(svg.data(), 1, svg.size(), f); fclose(f);
