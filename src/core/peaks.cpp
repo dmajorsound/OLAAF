@@ -67,6 +67,10 @@ void PeakCache::stop() {
 
 void PeakCache::run(std::vector<Job> jobs) {
   busy_ = true;
+  int n = 0;
+  for (auto &j : jobs) n += !j.path.empty();
+  total_ = n;
+  done_ = 0;
   // the same file can feed several media entries: read it once
   for (size_t i = 0; i < jobs.size() && !stop_; i++) {
     if (jobs[i].path.empty()) continue;
@@ -78,6 +82,7 @@ void PeakCache::run(std::vector<Job> jobs) {
         break;
       }
     if (!p) p = scan(jobs[i], stop_);
+    done_++;
     if (!p) continue;
     {
       std::lock_guard<std::mutex> l(mu_);

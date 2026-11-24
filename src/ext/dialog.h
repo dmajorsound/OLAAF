@@ -69,6 +69,9 @@ struct DialogHost {
   std::function<bool(int i, Importer **imp, ImportOptions **opt)> reelAt;
   std::function<int(HWND parent, std::string *message)> addReels; // asks for AAFs; returns how many were added
   std::function<void(int i)> removeReel;                          // i >= 1
+  // right-click on an event: its file in the Finder / Explorer, its path on the clipboard
+  std::function<void(const std::string &path)> revealFile;
+  std::function<void(HWND hwnd, const std::string &text)> copyText;
 };
 
 // Shows the dialog. Returns true when the user pressed Import; `opt` and the session's

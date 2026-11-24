@@ -140,7 +140,7 @@ enum HitId {
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
   H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE,
-  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE
+  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE
 };
 
 struct Hit {
@@ -235,6 +235,7 @@ struct State {
   std::set<int> mqBase;                  // the selection before (Shift adds)
   bool showSamples = false;              // positions also in samples
   bool missingOpen = false;              // the list of missing media
+  int missScroll = 0;                    // ... scrolled by this many files
   bool rulesOpen = false;                // the folder sorting rules and the track template
   bool choicesBack = false;              // the last import's choices for this AAF were put back
   struct Fresh { std::vector<Track> tracks; std::vector<Folder> folders; std::vector<VideoClip> video; ImportOptions opt; };
@@ -1666,9 +1667,19 @@ void paintArrange(State *st, const Gfx &g) {
           paintFade(g, cx1 - fo, cx1, y0, y1, c.fadeOut.shape, false, true, sh, kFadeLine);
         }
       }
+      // a file not found: a red corner (no waveform can come from it)
+      bool missingFile = false;
+      for (auto &src : c.sources)
+        if (src.media >= 0 && src.media < (int)s.media.size() && s.media[(size_t)src.media].foundPath.empty() &&
+            s.media[(size_t)src.media].kind != MediaKind::Embedded)
+          missingFile = true;
+      if (missingFile && !c.excluded) {
+        double k = std::min(12.0, std::max(6.0, x1 - x0 - 2));
+        g.polyAA({{x1 - k, y0}, {x1, y0}, {x1, y0 + k}}, kRed);
+      }
       if (x1 - x0 > 30 && !c.name.empty())
         g.text(st->fClip, (c.excluded || c.mute || !on) ? kMute : kInk, c.mute ? "M  " + c.name : c.name, x0 + 4, y0,
-               x1 - 3, y0 + 12, DT_LEFT);
+               x1 - (missingFile ? 13 : 3), y0 + 12, DT_LEFT);
       ClipHit h;
       h.r = devRect(st, x0, y0, x1, y1);
       h.id = c.id;
@@ -2146,6 +2157,8 @@ std::vector<int> missingMedia(State *st) {
   return out;
 }
 
+const size_t kMissRows = 9; // missing files shown at once; the wheel or the bar scrolls the rest
+
 void paintMissing(State *st, const Gfx &g) {
   Session &s = st->imp->session();
   std::vector<int> miss = missingMedia(st);
@@ -2153,8 +2166,11 @@ void paintMissing(State *st, const Gfx &g) {
     st->missingOpen = false;
     return;
   }
-  const size_t shown = std::min<size_t>(miss.size(), 9);
-  double w = 560, rowH = 40, h = 64 + shown * rowH + (miss.size() > shown ? 22 : 0) + 52;
+  const size_t shown = std::min<size_t>(miss.size(), kMissRows);
+  const bool scrolls = miss.size() > shown;
+  int maxScroll = (int)(miss.size() - shown);
+  st->missScroll = std::max(0, std::min(st->missScroll, maxScroll));
+  double w = 560, rowH = 40, h = 64 + shown * rowH + (scrolls ? 22 : 0) + 52;
   double l = st->missingX > 0 ? st->missingX : kL, t = kTopH - 6;
   if (l + w > kR) l = kR - w;
   g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 12, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
@@ -2162,23 +2178,35 @@ void paintMissing(State *st, const Gfx &g) {
   addHit(st, l, t, l + w, t + h, H_MISS_BG, 0, nullptr);
   g.text(st->fBold, kInk, strprintf("%zu media file%s missing", miss.size(), miss.size() == 1 ? "" : "s"), l + 16, t + 12,
          l + w - 16, t + 32, DT_LEFT);
-  g.text(st->fSmall, kMute, "Locate one file and OLAAF also looks for the others in its folder.", l + 16, t + 32, l + w - 16,
+  g.text(st->fSmall, kMute, "Locate one file and OLAAF also looks for the others in its folder.", l + 16, t + 32, l + w - 60,
          t + 50, DT_LEFT);
-  double y = t + 58;
-  for (size_t i = 0; i < shown; i++) {
+  button(st, g, l + w - 44, t + 12, l + w - 16, t + 40, "\xc3\x97", H_MISS_CLOSE, 0, "Close (Esc).");
+  double y = t + 58, listTop = y;
+  const double rowR = l + w - (scrolls ? 30 : 16); // room for the scroll bar
+  for (size_t k = 0; k < shown; k++) {
+    size_t i = (size_t)st->missScroll + k;
     const Media &m = s.media[(size_t)miss[i]];
-    std::string where = m.originalUri;
-    if (where.rfind("file://", 0) == 0) where = where.substr(7);
-    g.text(st->fBody, kInk, m.name.empty() ? baseName(where) : m.name, l + 16, y + 2, l + w - 110, y + 20, DT_LEFT);
-    g.text(st->fSmall, kMute, shortPath(where, 70), l + 16, y + 20, l + w - 110, y + 36, DT_LEFT);
-    button(st, g, l + w - 100, y + 6, l + w - 16, y + 32, "Locate\xe2\x80\xa6", H_MISS_PICK, miss[i],
+    std::string where = uriToPath(m.originalUri); // "Avid%20MediaFiles" -> "Avid MediaFiles"
+    g.text(st->fBody, kInk, m.name.empty() ? baseName(where) : m.name, l + 16, y + 2, rowR - 94, y + 20, DT_LEFT);
+    g.text(st->fSmall, kMute, shortPath(where, 68), l + 16, y + 20, rowR - 94, y + 36, DT_LEFT);
+    button(st, g, rowR - 84, y + 6, rowR, y + 32, "Locate\xe2\x80\xa6", H_MISS_PICK, miss[i],
            "Choose this file. Its folder is searched for the other missing files too.");
     y += rowH;
-    if (i + 1 < shown) g.fill(l + 16, y - 1, l + w - 16, y, mixColor(kPop, kInk, 0.08));
+    if (k + 1 < shown) g.fill(l + 16, y - 1, rowR, y, mixColor(kPop, kInk, 0.08));
   }
-  if (miss.size() > shown) {
-    g.text(st->fSmall, kMute, strprintf("\xe2\x80\xa6 and %zu more", miss.size() - shown), l + 16, y, l + w - 16, y + 20,
-           DT_LEFT);
+  if (scrolls) {
+    // the bar: click above or below the thumb to page, the wheel scrolls
+    double bx0 = l + w - 20, bx1 = l + w - 12, by0 = listTop + 4, by1 = y - 4;
+    g.rfill(bx0, by0, bx1, by1, 4, mixColor(kPop, kInk, 0.08));
+    double th = std::max(24.0, (by1 - by0) * shown / miss.size());
+    double ty = by0 + (by1 - by0 - th) * st->missScroll / std::max(1, maxScroll);
+    g.rfill(bx0, ty, bx1, ty + th, 4, theme().thumb);
+    addHit(st, bx0 - 4, by0, bx1 + 4, ty, H_MISS_PAGE, -1, "Scroll up (or use the mouse wheel).");
+    addHit(st, bx0 - 4, ty + th, bx1 + 4, by1, H_MISS_PAGE, 1, "Scroll down (or use the mouse wheel).");
+    g.text(st->fSmall, kMute,
+           strprintf("%d\xe2\x80\x93%d of %zu \xc2\xb7 scroll for the others", st->missScroll + 1,
+                     st->missScroll + (int)shown, miss.size()),
+           l + 16, y, l + w - 16, y + 20, DT_LEFT);
     y += 22;
   }
   g.fill(l + 16, y + 6, l + w - 16, y + 7, kLine);
@@ -2292,6 +2320,16 @@ void paintFooter(State *st, const Gfx &g) {
     if (!st->tip) hint = "Your choices from the last import of this AAF are back: names, folders, colors, removed and moved events.";
   }
   bool taken = st->tip && strstr(st->tip, " is taken by ");
+  if (st->peaks.busy() && st->peaks.total() > 0) { // the waveforms are still being read
+    int dn = std::min(st->peaks.done(), st->peaks.total()), tot = st->peaks.total();
+    std::string pl = strprintf("Creating waveforms\xe2\x80\xa6 %d of %d", dn, tot);
+    double pw = g.width(st->fSmall, pl), barW = 90, pr = hr;
+    double bx = pr - barW, cy = (t + b) / 2;
+    g.rfill(bx, cy - 3, pr, cy + 3, 3, mixColor(kPanel, kInk, 0.12));
+    g.rfill(bx, cy - 3, bx + std::max(6.0, barW * dn / tot), cy + 3, 3, kBlue);
+    g.text(st->fSmall, kInk, pl, bx - 10 - pw, t + 1, bx - 8, b, DT_RIGHT);
+    hr = bx - 24 - pw;
+  }
   g.text(st->fSmall, taken ? kRed : (st->tip ? kInk : kMute), hint, kL, t + 1, hr, b, DT_LEFT);
 }
 
@@ -2638,6 +2676,96 @@ void toggleExcluded(State *st) {
     if (Clip *k = st->imp->findClip(id)) anyIn = anyIn || !k->excluded;
   st->imp->setExcluded(selection(st), anyIn);
   if (!st->sel.empty()) st->edited = true;
+}
+
+// "Locate…" for one missing file: its folder is searched for the others too
+void locateOne(State *st, int mi) {
+  Session &s = st->imp->session();
+  ImportOptions &opt = *st->opt;
+  if (mi < 0 || mi >= (int)s.media.size() || !st->host || !st->host->pickFile) return;
+  std::string p;
+  std::string title = "OLAAF: locate " + s.media[(size_t)mi].name;
+  if (!st->host->pickFile(title.c_str(), &p) || p.empty()) return;
+  opt.searchFolders.insert(opt.searchFolders.begin(), dirName(p)); // the others may be next to it
+  st->imp->locateMedia(opt);
+  s.media[(size_t)mi].foundPath = p; // the file chosen by hand wins
+  st->peaks.start(s);
+  SetTimer(st->hwnd, kPeakTimer, 150, NULL);
+}
+
+void menuAdd(HMENU m, int id, const std::string &text, bool enabled) {
+  int pos = GetMenuItemCount(m);
+#ifdef _WIN32
+  int n = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, NULL, 0);
+  std::vector<wchar_t> w((size_t)std::max(1, n));
+  MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, w.data(), n);
+  InsertMenuW(m, (UINT)pos, MF_BYPOSITION | MF_STRING | (enabled ? 0 : MF_GRAYED), (UINT_PTR)id, w.data());
+#else
+  InsertMenu(m, pos, MF_BYPOSITION | MF_STRING | (enabled ? 0 : MF_GRAYED), (UINT_PTR)id, text.c_str());
+  if (!enabled) EnableMenuItem(m, id, MF_BYCOMMAND | MF_GRAYED);
+#endif
+}
+
+void menuSep(HMENU m) { InsertMenu(m, GetMenuItemCount(m), MF_BYPOSITION | MF_SEPARATOR, 0, NULL); }
+
+// Right-click on an event: where its file is, show it in the Finder / Explorer, copy the path
+void clipMenu(State *st, POINT screen, int clipId) {
+  Session &s = st->imp->session();
+  Clip *c = st->imp->findClip(clipId);
+  if (!c || !st->host) return;
+#ifdef _WIN32
+  const char *showIn = "Show in Explorer";
+#elif defined(__APPLE__)
+  const char *showIn = "Show in Finder";
+#else
+  const char *showIn = "Show in the file manager";
+#endif
+  std::vector<int> media; // each file once (a stereo pair: two)
+  for (auto &src : c->sources)
+    if (src.media >= 0 && src.media < (int)s.media.size() &&
+        std::find(media.begin(), media.end(), src.media) == media.end())
+      media.push_back(src.media);
+  if (media.empty()) return;
+  HMENU m = CreatePopupMenu();
+  int idDis = 1; // grayed lines: information only
+  for (size_t k = 0; k < media.size(); k++) {
+    const Media &md = s.media[(size_t)media[k]];
+    if (k) menuSep(m);
+    std::string side = media.size() == 2 ? (k == 0 ? "  (left)" : "  (right)") : "";
+    std::string name = md.name.empty() ? baseName(uriToPath(md.originalUri)) : md.name;
+    menuAdd(m, idDis++, name + side, false);
+    if (md.kind == MediaKind::Embedded) {
+      menuAdd(m, idDis++, "Inside the AAF (written out as a file on import)", false);
+      menuAdd(m, 100 + (int)k, std::string(showIn).replace(0, 4, "Show the AAF"), true);
+    } else if (!md.foundPath.empty()) {
+      menuAdd(m, idDis++, shortPath(md.foundPath, 90), false);
+      menuAdd(m, 100 + (int)k, showIn, true);
+      menuAdd(m, 200 + (int)k, "Copy the file path", true);
+    } else {
+      menuAdd(m, idDis++, "Missing: " + shortPath(uriToPath(md.originalUri), 80), false);
+      menuAdd(m, 300 + (int)k, "Locate\xe2\x80\xa6", true);
+      menuAdd(m, 200 + (int)k, "Copy the path from the AAF", true);
+    }
+  }
+  int cmd = TrackPopupMenu(m, TPM_NONOTIFY | TPM_RETURNCMD, screen.x, screen.y, 0, st->hwnd, NULL);
+  DestroyMenu(m);
+  static std::string tipBuf;
+  if (cmd >= 100 && cmd < 400) {
+    size_t k = (size_t)(cmd % 100);
+    if (k >= media.size()) return;
+    const Media &md = s.media[(size_t)media[k]];
+    std::string path = md.kind == MediaKind::Embedded ? s.aafPath : md.foundPath;
+    if (cmd < 200) {
+      if (st->host->revealFile) st->host->revealFile(path);
+    } else if (cmd < 300) {
+      if (path.empty()) path = uriToPath(md.originalUri);
+      if (st->host->copyText) st->host->copyText(st->hwnd, path);
+      tipBuf = "Copied: " + path;
+      st->tip = tipBuf.c_str();
+    } else
+      locateOne(st, media[k]);
+  }
+  InvalidateRect(st->hwnd, NULL, FALSE);
 }
 
 // Would moving the selection by `delta` tracks put an event on top of one already there?
@@ -2993,7 +3121,7 @@ void click(State *st, int x, int y, bool shift) {
     InvalidateRect(st->hwnd, NULL, FALSE);
     if (id == H_LANES || id == H_NONE) return;
   }
-  if (st->missingOpen && id != H_MISS_BG && id != H_MISS_PICK && id != H_MISS_OPEN && id != H_LOCATE) {
+  if (st->missingOpen && id != H_MISS_BG && id != H_MISS_PICK && id != H_MISS_OPEN && id != H_LOCATE && id != H_MISS_PAGE && id != H_MISS_CLOSE) {
     st->missingOpen = false;
     InvalidateRect(st->hwnd, NULL, FALSE);
     if (id == H_LANES || id == H_NONE) return;
@@ -3243,6 +3371,8 @@ void click(State *st, int x, int y, bool shift) {
     break;
   }
   case H_MISS_BG: return;
+  case H_MISS_CLOSE: st->missingOpen = false; break;
+  case H_MISS_PAGE: st->missScroll += (h ? h->idx : 1) * ((int)kMissRows - 1); break;
   case H_REEL: switchReel(st, h ? h->idx : 0); break;
   case H_REEL_ADD: {
     if (!st->host || !st->host->addReels) break;
@@ -3357,19 +3487,7 @@ void click(State *st, int x, int y, bool shift) {
     if (st->host && st->host->setSetting) st->host->setSetting("template", "");
     break;
   case H_MISS_OPEN: st->missingOpen = !st->missingOpen; st->optsOpen = false; break;
-  case H_MISS_PICK: {
-    int mi = h ? h->idx : -1;
-    if (mi < 0 || mi >= (int)s.media.size() || !st->host || !st->host->pickFile) break;
-    std::string p;
-    std::string title = "OLAAF: locate " + s.media[(size_t)mi].name;
-    if (!st->host->pickFile(title.c_str(), &p) || p.empty()) break;
-    opt.searchFolders.insert(opt.searchFolders.begin(), dirName(p)); // the others may be next to it
-    st->imp->locateMedia(opt);
-    s.media[(size_t)mi].foundPath = p; // the file chosen by hand wins
-    st->peaks.start(s);
-    SetTimer(st->hwnd, kPeakTimer, 150, NULL);
-    break;
-  }
+  case H_MISS_PICK: locateOne(st, h ? h->idx : -1); break;
   case H_HELP: st->helpOpen = !st->helpOpen; st->optsOpen = false; break;
   case H_HELP_BG: return;
   case H_GONIO_BG: return;
@@ -3646,6 +3764,12 @@ void togglePlay(State *st) {
 
 bool handleKey(State *st, int vk) {
   if (!st || st->editKind) return false;
+  if (st->missingOpen && (vk == VK_UP || vk == VK_DOWN || vk == VK_PRIOR || vk == VK_NEXT)) { // the missing files list
+    int step = (vk == VK_PRIOR || vk == VK_NEXT) ? (int)kMissRows - 1 : 1;
+    st->missScroll = std::max(0, st->missScroll + ((vk == VK_UP || vk == VK_PRIOR) ? -step : step));
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    return true;
+  }
   bool in = vk == VK_ADD || vk == 0xBB /* VK_OEM_PLUS */;
   bool out = vk == VK_SUBTRACT || vk == 0xBD /* VK_OEM_MINUS */;
 #ifndef _WIN32
@@ -4151,8 +4275,30 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     InvalidateRect(hwnd, NULL, FALSE);
     return 0;
   }
+  case WM_RBUTTONUP: { // the event's file: where it is, show it, copy its path
+    POINT p = {(short)LOWORD(lp), (short)HIWORD(lp)};
+    if (st->drag) return 0;
+    const ClipHit *c = clipAt(st, p.x, p.y);
+    if (!c) return 0;
+    int id = c->id;
+    if (!st->sel.count(id)) { // right-click selects it, like in REAPER
+      st->sel.clear();
+      st->sel.insert(id);
+      InvalidateRect(hwnd, NULL, FALSE);
+      UpdateWindow(hwnd);
+    }
+    ClientToScreen(hwnd, &p);
+    clipMenu(st, p, id);
+    return 0;
+  }
   case WM_MOUSEWHEEL: {
     int delta = (short)HIWORD(wp);
+    if (st->missingOpen) { // scrolls the list of missing files
+      st->missScroll += delta > 0 ? -3 : 3;
+      if (st->missScroll < 0) st->missScroll = 0; // the top end is kept when painting
+      InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
+    }
     if (st->destTrack >= 0) { // scrolls the track list of the "put on" popover
       st->destScroll += delta > 0 ? -1 : 1;
       if (st->destScroll < 0) st->destScroll = 0;
@@ -4274,8 +4420,12 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   if (getenv("OLAAF_SHOWAUTO")) opt.showAutomation = true;
   if (getenv("OLAAF_OPTS")) st.optsOpen = true;
   if (getenv("OLAAF_HELP")) st.helpOpen = true;
-  if (getenv("OLAAF_MISSING")) st.missingOpen = true;
+  if (getenv("OLAAF_MISSING")) {
+    st.missingOpen = true;
+    st.missScroll = atoi(getenv("OLAAF_MISSING"));
+  }
   if (getenv("OLAAF_RULES")) st.rulesOpen = true;
+  if (getenv("OLAAF_PEAKBUSY")) st.peaks.fakeProgress(atoi(getenv("OLAAF_PEAKBUSY")), 76);
   if (getenv("OLAAF_CHOICES")) st.choicesBack = true;
   if (getenv("OLAAF_TPL")) st.opt->trackTemplate = getenv("OLAAF_TPL");
   if (getenv("OLAAF_THEMEMENU")) st.themeMenu = true;

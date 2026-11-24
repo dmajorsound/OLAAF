@@ -408,6 +408,28 @@ static std::string writeReport(Importer &imp, const ImportOptions &opt, const Me
   return writeImportReport(imp.session(), opt, rep, merged, pf, projectSampleRate(), rpp, OLAAF_VERSION_STRING);
 }
 
+static void copyTextToClipboard(HWND hwnd, const std::string &text) {
+  if (!OpenClipboard(hwnd)) return;
+  EmptyClipboard();
+#ifdef _WIN32
+  int n = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, NULL, 0);
+  HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)n * sizeof(wchar_t));
+  if (h) {
+    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, (wchar_t *)GlobalLock(h), n);
+    GlobalUnlock(h);
+    SetClipboardData(CF_UNICODETEXT, h);
+  }
+#else
+  HANDLE h = GlobalAlloc(GMEM_MOVEABLE, (int)text.size() + 1);
+  if (h) {
+    memcpy(GlobalLock(h), text.c_str(), text.size() + 1);
+    GlobalUnlock(h);
+    SetClipboardData(CF_TEXT, h);
+  }
+#endif
+  CloseClipboard();
+}
+
 static DialogHost makeHost() {
   DialogHost h;
   h.askText = [](const char *title, const char *caption, std::string *value) {
@@ -441,6 +463,8 @@ static DialogHost makeHost() {
   h.playTimeline = [](const std::vector<MixEvent> &e, double a, double b) { return preview::playTimeline(e, a, b); };
   h.updateState = [](std::string *tag, std::string *url) { return updateCheckState(tag, url); };
   h.openUrl = [](const std::string &url) { openWebPage(url); };
+  h.revealFile = [](const std::string &path) { revealInFileBrowser(path); };
+  h.copyText = [](HWND hwnd, const std::string &text) { copyTextToClipboard(hwnd, text); };
   // the choices per AAF: <REAPER resource folder>/OLAAF/choices/<name>
   h.loadChoices = [](const std::string &name) {
     std::string text;

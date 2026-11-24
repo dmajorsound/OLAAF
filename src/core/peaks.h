@@ -54,6 +54,10 @@ public:
   // Bumps every time another file is ready: repaint when it changes.
   int version() const { return version_.load(); }
   bool busy() const { return busy_.load(); }
+  // files read so far / files to read (for "Creating waveforms")
+  int done() const { return done_.load(); }
+  int total() const { return total_.load(); }
+  void fakeProgress(int done, int total) { busy_ = true; done_ = done; total_ = total; } // for the layout tests
   // Highest absolute level (0..1) of one channel (0-based) of a media file between two
   // source times in seconds; -1 if this file has no overview (yet).
   float peak(int media, int channel, double t0, double t1) const;
@@ -77,7 +81,7 @@ private:
   std::vector<std::shared_ptr<Peaks>> peaks_;
   std::thread th_;
   std::atomic<bool> stop_{false}, busy_{false};
-  std::atomic<int> version_{0};
+  std::atomic<int> version_{0}, done_{0}, total_{0};
 };
 
 } // namespace olaaf

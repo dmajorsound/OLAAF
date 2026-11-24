@@ -15,4 +15,6 @@ void updateCheckStart();
 int updateCheckState(std::string *tag, std::string *url);
 // opens a GitHub page in the browser (only github.com addresses)
 void openWebPage(const std::string &url);
+// shows the file in the Finder (macOS) / Explorer (Windows) / the file manager (Linux), selected
+void revealInFileBrowser(const std::string &path);
 } // namespace olaaf

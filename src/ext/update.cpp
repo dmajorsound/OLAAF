@@ -190,4 +190,33 @@ void openWebPage(const std::string &url) {
 #endif
 }
 
+void revealInFileBrowser(const std::string &path) {
+  if (path.empty()) return;
+#ifdef _WIN32
+  std::string q = "/select,\"";
+  for (char c : path) q += c == '/' ? '\\' : c;
+  q += "\"";
+  int n = MultiByteToWideChar(CP_UTF8, 0, q.c_str(), -1, NULL, 0);
+  std::vector<wchar_t> w((size_t)n);
+  MultiByteToWideChar(CP_UTF8, 0, q.c_str(), -1, w.data(), n);
+  ShellExecuteW(NULL, L"open", L"explorer.exe", w.data(), NULL, SW_SHOWNORMAL);
+#else
+#ifdef __APPLE__
+  const char *tool = "/usr/bin/open";
+  char *argv[] = {(char *)tool, (char *)"-R", (char *)path.c_str(), NULL};
+#else
+  const char *tool = "xdg-open";
+  std::string dir = path.substr(0, path.find_last_of('/') == std::string::npos ? 0 : path.find_last_of('/'));
+  char *argv[] = {(char *)tool, (char *)dir.c_str(), NULL};
+#endif
+  pid_t pid; // no shell: the path is one argument, whatever it holds
+  if (posix_spawnp(&pid, tool, NULL, NULL, argv, environ) == 0) {
+    std::thread([pid]() {
+      int st;
+      waitpid(pid, &st, 0);
+    }).detach();
+  }
+#endif
+}
+
 } // namespace olaaf
