@@ -14,6 +14,7 @@
 #include <thread>
 
 #include "progress.h"
+#include "update.h"
 #include "theme.h"
 #include "logo.h"
 #include "fonts.h"
@@ -208,7 +209,7 @@ void paint(HWND hwnd, HDC dc, Ui *ui) {
 
   // footer
   fill(dc, pl, S(302), pr, S(303), kLine);
-  text(dc, ui->fTag, kMute, "V 0.6 beta developed with AI assistance", pl, S(306), pr, S(324), DT_LEFT);
+  text(dc, ui->fTag, kMute, "V " OLAAF_VERSION_STRING " beta developed with AI assistance", pl, S(306), pr, S(324), DT_LEFT);
 
 }
 

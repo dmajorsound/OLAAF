@@ -140,7 +140,7 @@ enum HitId {
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
   H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE,
-  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE
+  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE, H_TC_RESET
 };
 
 struct Hit {
@@ -898,6 +898,13 @@ void paintTopBar(State *st, const Gfx &g) {
           ". Click and type HH:MM:SS:FF or just the digits; Return applies, Esc cancels.";
   addHit(st, r - tw, mid - 22, r, mid + 21, H_TC_VALUE, 0, tcTip.c_str());
   double infoR = r - tw - 16;
+  if (std::fabs(tcOffset(st)) > 1e-9) { // moved (typed or edit cursor): one click back to the AAF's own timecode
+    static std::string rTip;
+    rTip = "Back to the AAF's own timecode: it starts at " + formatTC(s.firstClip(), s.fps) + ".";
+    double rw = g.width(st->fBody, "Reset") + 24;
+    button(st, g, r - tw - 8 - rw, mid - 13, r - tw - 8, mid + 13, "Reset", H_TC_RESET, 0, rTip.c_str());
+    infoR -= rw + 8;
+  }
 
   // left: the AAF and what it is - it always fits (smaller type, fewer details); all of it is in the footer on hover
   double x0 = wordR + 30, avail = infoR - x0;
@@ -2225,8 +2232,9 @@ void keyCap(State *st, const Gfx &g, double &x, double y, const std::string &k) 
 }
 
 void paintHelp(State *st, const Gfx &g) {
-  double w = 860, h = 650;
-  double l = (W - w) / 2, t = kTopH + 6;
+  // three blocks left, one right; drawn over everything (footer too), always inside the window
+  const double rowH = 28, w = 860, h = 74 + (24 + 3 * rowH + 10) + (24 + 5 * rowH + 10) + (24 + 6 * rowH + 10) + 52;
+  double l = (W - w) / 2, t = std::max(8.0, std::min(kTopH + 6, H - h - 8));
   g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 16, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
   g.rbox(l, t, l + w, t + h, 16, kLine, kPop);
   addHit(st, l, t, l + w, t + h, H_HELP_BG, 0, nullptr);
@@ -2246,7 +2254,7 @@ void paintHelp(State *st, const Gfx &g) {
                       {"F", "Show the whole AAF"},
                       {"A", "Show automation in the lanes"}};
   const Row ev[] = {{"Click", "Select an event (Shift-click: more)"},
-                    {"Drag", "Select events in a frame (from empty lane)"},
+                    {"Drag", "Select in a frame (start on an empty lane)"},
                     {"Cmd/Ctrl|A", "Select all events"},
                     {"\xe2\x86\x91/\xe2\x86\x93", "Move the selection one track up / down"},
                     {"M", "Mute / unmute"},
@@ -2280,16 +2288,16 @@ void paintHelp(State *st, const Gfx &g) {
           kx += 2;
         a = b + 1;
       }
-      g.text(st->fBody, kInk, rows[i].what, x + 150, y, x + 380, y + 26, DT_LEFT);
-      y += 30;
+      g.text(st->fBody, kInk, rows[i].what, x + 150, y, x + 412, y + 26, DT_LEFT);
+      y += rowH;
     }
     y += 10;
   };
   double y1 = t + 74, y2 = t + 74;
   block(l + 24, y1, "Listening", play, 3);
   block(l + 24, y1, "View", view, 5);
+  block(l + 24, y1, "Window", win, 6);
   block(l + 424, y2, "Events and tracks", ev, 10);
-  block(l + 424, y2, "Window", win, 5);
   double y = std::max(y1, y2) + 2;
   g.fill(l + 24, y, l + w - 24, y + 1, kLine);
   g.text(st->fSmall, kMute,
@@ -2575,8 +2583,8 @@ void paint(State *st, HDC dc) {
   if (st->optsOpen) paintOptions(st, g);
   if (st->missingOpen) paintMissing(st, g);
   if (st->rulesOpen) paintRules(st, g);
-  if (st->helpOpen) paintHelp(st, g);
   paintFooter(st, g);
+  if (st->helpOpen) paintHelp(st, g); // over the footer too
   if (st->themeMenu) { // System / Dark / Light, under the OLAAF logo
     static const char *names[3] = {"System", "Dark", "Light"};
     static const char *tips[3] = {"Follows the colors of your REAPER theme.", "OLAAF's own dark look.", "A white interface."};
@@ -3599,6 +3607,7 @@ void click(State *st, int x, int y, bool shift) {
     }
     break;
   }
+  case H_TC_RESET: st->tcAbs = 0; st->tcMinus = false; st->tip = "Back at the AAF's own timecode."; break;
   case H_TC_PLUS: st->tcMinus = false; break;
   case H_TC_MINUS: st->tcMinus = true; break;
   case H_TC_VALUE: startEdit(st, 1, st->tcRc, formatTC(s.firstClip() + tcOffset(st), s.fps)); return;
@@ -4425,6 +4434,7 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
     st.missScroll = atoi(getenv("OLAAF_MISSING"));
   }
   if (getenv("OLAAF_RULES")) st.rulesOpen = true;
+  if (getenv("OLAAF_TCOFF")) st.tcAbs = atof(getenv("OLAAF_TCOFF"));
   if (getenv("OLAAF_PEAKBUSY")) st.peaks.fakeProgress(atoi(getenv("OLAAF_PEAKBUSY")), 76);
   if (getenv("OLAAF_CHOICES")) st.choicesBack = true;
   if (getenv("OLAAF_TPL")) st.opt->trackTemplate = getenv("OLAAF_TPL");
