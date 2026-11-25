@@ -1004,7 +1004,8 @@ void paintTopBar(State *st, const Gfx &g) {
     HFONT tf = st->fBold;
     std::vector<std::string> numbered = reelNumberLabels(labels); // "Reel 1", "Reel 2": only if the names say so
     std::vector<std::string> use = numbered.empty() ? labels : numbered;
-    double room = avail - updW - 90; // room for "n tracks in all"
+    // room for "n tracks in all" and the same / own tracks switch, as wide as they are drawn
+    double room = avail - updW - (g.width(st->fSmall, "888 tracks in all") + 8) - (g.width(st->fSmall, "same tracks") + 16 + 8) - 12;
     bool fit = false;
     std::vector<std::string> shortL = reelShortLabels(labels);
     for (int pass = 0; pass < 2 && !fit; pass++) {
@@ -1016,14 +1017,21 @@ void paintTopBar(State *st, const Gfx &g) {
           break;
         }
     }
-    if (!fit) { // many AAFs: equal tabs, names shortened
+    if (!fit) { // many AAFs: equal tabs, names shortened (narrower until they fit), at last numbers
       tf = st->fTiny;
-      double each = std::max(30.0, (room - plusW - xW) / nReels - gap - 20); // the shown tab also has its x
-      for (int k = 0; k < nReels; k++) {
-        bool c2 = false;
-        std::vector<std::string> fl = fitLines(g, tf, use[(size_t)k], each, 1, &c2);
-        if (!fl.empty()) use[(size_t)k] = fl[0];
+      std::vector<std::string> base = use;
+      double each = std::max(24.0, (room - plusW - xW) / nReels - gap - 20); // the shown tab also has its x
+      bool ok = false;
+      for (; each >= 24 && !ok; each -= 4) {
+        for (int k = 0; k < nReels; k++) {
+          bool c2 = false;
+          std::vector<std::string> fl = fitLines(g, tf, base[(size_t)k], each, 1, &c2);
+          use[(size_t)k] = fl.empty() ? base[(size_t)k] : fl[0];
+        }
+        ok = tabsW(tf, use) <= room;
       }
+      if (!ok) // the full names are in each tab's hint
+        for (int k = 0; k < nReels; k++) use[(size_t)k] = std::to_string(k + 1);
     }
     static std::vector<std::string> tabTips;
     tabTips.resize((size_t)nReels);
@@ -2203,7 +2211,7 @@ void paintOptions(State *st, const Gfx &g) {
          px + 16, y, px + 220, y + 24, DT_LEFT);
   const char *ll = "Search another folder\xe2\x80\xa6";
   double lw = g.width(st->fSmall, ll);
-  g.text(st->fSmall, kBlue, ll, px + kOpW - 16 - lw, y, px + kOpW - 16, y + 24, DT_RIGHT);
+  g.text(st->fSmall, kBlue, ll, px + kOpW - 22 - lw, y, px + kOpW - 16, y + 24, DT_RIGHT);
   addHit(st, px + kOpW - 20 - lw, y, px + kOpW - 12, y + 24, H_LOCATE, 0,
          "Choose a folder that holds media. All its subfolders are searched, and OLAAF remembers it for the next import.");
   y += 28;
@@ -2527,33 +2535,42 @@ void paintFooter(State *st, const Gfx &g) {
 // after adding AAFs: do they go onto the same tracks, or their own?
 void paintReelAsk(State *st, const Gfx &g) {
   if (!st->reelAsk) return;
-  double w = 520, h = 172;
+  // measured layout: title, the finding, two notes, then the buttons on their own row (right-aligned)
+  const double w = 540, pad = 24, tw = w - 2 * pad, btnW = 150, btnH = 32, btnGap = 10;
+  std::string finding = st->reelAskRelated ? st->reelAskNames + " look like parts of one film: " + st->reelAskWhy + "."
+                                           : st->reelAskNames + " have different track layouts.";
+  bool cut = false;
+  std::vector<std::string> body = fitLines(g, st->fBody, finding, tw, 3, &cut);
+  std::vector<std::string> notes;
+  for (const char *n : {"Same tracks: tracks with the same name share one REAPER track.",
+                        "Own tracks: every AAF keeps its own tracks. Automation never mixes either way.",
+                        "You can change it any time next to the tabs."})
+    for (auto &ln : fitLines(g, st->fSmall, n, tw, 2, &cut)) notes.push_back(ln);
+  const double titleH = 26, bodyLH = 21, noteLH = 18;
+  double h = pad + titleH + 10 + body.size() * bodyLH + 10 + notes.size() * noteLH + 20 + btnH + pad;
   double cx = (kTlx + kTlr) / 2 - 40, cy = (kLT + kLB) / 2;
   double l = cx - w / 2, t = cy - h / 2;
   g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 14, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
   g.rbox(l, t, l + w, t + h, 14, kLine, kPop);
   addHit(st, l, t, l + w, t + h, H_REEL_ASK_BG, 0, nullptr);
-  g.text(st->fHead, kInk, st->reelAskRelated ? "Same film?" : "A different film?", l + 24, t + 18, l + w - 16, t + 42, DT_LEFT);
-  double y = t + 50;
-  std::string line1 = st->reelAskRelated ? st->reelAskNames + " look like parts of one film: " + st->reelAskWhy + "."
-                                         : st->reelAskNames + " have different track layouts.";
-  bool cut = false;
-  for (auto &ln : fitLines(g, st->fBody, line1, w - 48, 2, &cut)) {
-    g.text(st->fBody, kInk, ln, l + 24, y, l + w - 24, y + 20, DT_LEFT);
-    y += 20;
+  double y = t + pad;
+  g.text(st->fHead, kInk, st->reelAskRelated ? "Same film?" : "A different film?", l + pad, y, l + w - pad, y + titleH, DT_LEFT);
+  y += titleH + 10;
+  for (auto &ln : body) {
+    g.text(st->fBody, kInk, ln, l + pad, y, l + w - pad, y + bodyLH, DT_LEFT);
+    y += bodyLH;
   }
-  y += 4;
-  g.text(st->fSmall, kMute, "Same tracks: tracks with the same name share one REAPER track.", l + 24, y, l + w - 24, y + 18, DT_LEFT);
-  y += 17;
-  g.text(st->fSmall, kMute, "Own tracks: every AAF keeps its own tracks. Automation never mixes either way.", l + 24, y,
-         l + w - 24, y + 18, DT_LEFT);
-  bool rec = st->reelAskRelated; // the recommended one is blue
-  double bt = t + h - 46, bb = t + h - 16;
-  button(st, g, l + w - 296, bt, l + w - 160, bb, "Same tracks", H_REEL_SHARE, 0,
-         "Tracks with the same name share one REAPER track; each AAF's automation stays in its own time.", rec);
-  button(st, g, l + w - 152, bt, l + w - 16, bb, "Own tracks", H_REEL_OWN, 0,
+  y += 10;
+  for (auto &ln : notes) {
+    g.text(st->fSmall, kMute, ln, l + pad, y, l + w - pad, y + noteLH, DT_LEFT);
+    y += noteLH;
+  }
+  bool rec = st->reelAskRelated; // the suggested answer is blue
+  double bb = t + h - pad, bt = bb - btnH, br = l + w - pad;
+  button(st, g, br - btnW, bt, br, bb, "Own tracks", H_REEL_OWN, 0,
          "Every AAF gets its own REAPER tracks, with the reel in the name.", !rec);
-  g.text(st->fSmall, kMute, "Change it any time next to the tabs.", l + 24, bt, l + w - 300, bb, DT_LEFT);
+  button(st, g, br - 2 * btnW - btnGap, bt, br - btnW - btnGap, bb, "Same tracks", H_REEL_SHARE, 0,
+         "Tracks with the same name share one REAPER track; each AAF's automation stays in its own time.", rec);
 }
 
 void paintFpsWarning(State *st, const Gfx &g) {
@@ -2561,7 +2578,9 @@ void paintFpsWarning(State *st, const Gfx &g) {
   bool fps = fpsMismatch(st, &proj), sr = srMismatch(st, &projSr);
   if (st->fpsDismissed || (!fps && !sr)) return;
   Session &s = st->imp->session();
-  double w = 500, h = fps && sr ? 182 : 150;
+  // height from the content: title, the mismatch lines, the notes, then the button on its own row
+  int bodyN = (fps ? 1 : 0) + (sr ? 1 : 0), noteN = (fps ? 1 : 0) + (sr ? 1 : 0) + 1;
+  double w = 520, h = 18 + 26 + bodyN * 22 + 6 + noteN * 17 + 20 + 32 + 20;
   double cx = (kTlx + kTlr) / 2 - 40, cy = (kLT + kLB) / 2;
   double l = cx - w / 2, t = cy - h / 2;
   g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 14, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
@@ -2572,8 +2591,8 @@ void paintFpsWarning(State *st, const Gfx &g) {
   g.fill(tx - 1.6, ty - 8, tx + 1.6, ty + 6, kPop);
   g.fill(tx - 1.6, ty + 9, tx + 1.6, ty + 12.5, kPop);
   const char *title = fps && sr ? "Frame rate and sample rate don't match" : fps ? "Frame rate mismatch" : "Sample rate mismatch";
-  g.text(st->fHead, kInk, title, l + 84, t + 18, l + w - 16, t + 40, DT_LEFT);
-  double y = t + 44;
+  g.text(st->fHead, kInk, title, l + 84, t + 18, l + w - 16, t + 44, DT_LEFT);
+  double y = t + 48;
   if (fps) {
     g.text(st->fBody, kInk,
            strprintf("The AAF runs at %s, this REAPER project at %s fps.", fpsText(s).c_str(), fpsShort(proj).c_str()), l + 84,
@@ -2586,18 +2605,19 @@ void paintFpsWarning(State *st, const Gfx &g) {
            l + w - 16, y + 20, DT_LEFT);
     y += 22;
   }
+  y += 6;
   if (fps) {
     g.text(st->fSmall, kMute, "Frame rate: timecode and frame edges won't line up.", l + 84, y, l + w - 16, y + 18, DT_LEFT);
-    y += 16;
+    y += 17;
   }
   if (sr) {
     g.text(st->fSmall, kMute, "Sample rate: REAPER resamples on playback, which can cost quality.", l + 84,
            y, l + w - 16, y + 18, DT_LEFT);
-    y += 16;
+    y += 17;
   }
   g.text(st->fSmall, kMute, "Set both in File \xe2\x80\xba Project settings, or export the AAF again.", l + 84, y, l + w - 16,
          y + 18, DT_LEFT);
-  button(st, g, l + w - 116, t + h - 44, l + w - 16, t + h - 14, "Got it", H_FPS_OK, 0, "Hide this warning.", true);
+  button(st, g, l + w - 144, t + h - 52, l + w - 24, t + h - 20, "Got it", H_FPS_OK, 0, "Hide this warning.", true);
 }
 
 // ------------------------------------------------------------------ popovers
