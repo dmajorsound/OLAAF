@@ -165,8 +165,10 @@ bool Importer::load(const std::string &aafPath, const ImportOptions &opt, std::s
   aaf_.reset(new AafFile());
   if (!aaf_->load(aafPath, opt.read, &s_, error)) return false;
   int id = 1;
-  for (auto &t : s_.tracks)
+  for (auto &t : s_.tracks) {
+    t.aafName = t.name;
     for (auto &c : t.clips) c.id = id++;
+  }
   assignDefaultFolders();
   assignUids();
   return true;
@@ -438,6 +440,7 @@ int Importer::combineStereo(int track, std::string *why) {
   L.pan = 0.0;
   L.panEnv.clear();
   L.name = base;
+  L.aafName = base;
   L.channels = 2;
   for (size_t c = 0; c < L.clips.size(); c++) {
     L.clips[c].sources.push_back(R.clips[c].sources[0]);
@@ -462,12 +465,14 @@ int Importer::splitStereo(int track, std::string *why) {
   }
   Track R = M;
   R.name = M.mergedFrom.substr(plus + 3);
+  R.aafName = R.name;
   R.uid = maxUid + 1;
   R.channels = 1;
   R.pan = M.panR;
   R.mergedFrom.clear();
   R.clips.clear();
   M.name = M.mergedFrom.substr(0, plus);
+  M.aafName = M.name;
   M.channels = 1;
   M.pan = M.panL;
   M.mergedFrom.clear();
@@ -649,6 +654,7 @@ int Importer::mergeStereoTracks() {
         s_.warnings.push_back("\"" + bl + "\": pan automation of the L/R tracks is not carried over to the stereo track.");
       L.panEnv.clear();
       L.name = bl;
+      L.aafName = bl;
       L.channels = 2;
       for (size_t c = 0; c < L.clips.size(); c++) {
         L.clips[c].sources.push_back(R.clips[c].sources[0]);

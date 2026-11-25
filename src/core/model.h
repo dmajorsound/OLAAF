@@ -94,6 +94,7 @@ struct Track {
   std::vector<GainPoint> volEnv; // track volume automation (absolute time, linear gain)
   std::vector<GainPoint> panEnv; // track pan automation (absolute time, -1..+1)
   std::string mergedFrom; // "SFX 1.L + SFX 1.R" when merged
+  std::string aafName;    // the name in the AAF (shown under a renamed track); "" for tracks added here
   double panL = -1.0, panR = 1.0; // the pans the halves had (to split the track again)
   std::string group;      // key of the folder it goes into (Session::folders), "" = no folder
 };

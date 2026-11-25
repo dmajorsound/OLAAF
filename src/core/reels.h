@@ -15,6 +15,9 @@ namespace olaaf {
 // short names for the reel tabs: the AAF names, or "Reel 1", "Reel 2" when they don't fit
 std::string reelLabel(const Session &s, int index);
 
+// "Reel 1", "Reel 2" when every name numbers its reel ("Film_Reel1_v3", "Rolle 02"), else empty
+std::vector<std::string> reelNumberLabels(const std::vector<std::string> &names);
+
 // the part that tells the reels apart: "Film_Rolle_1_Mix_v12", "Film_Rolle_2_Mix_v12" -> "Rolle_1", "Rolle_2"
 std::vector<std::string> reelShortLabels(const std::vector<std::string> &names);
 

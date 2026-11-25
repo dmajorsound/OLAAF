@@ -7,6 +7,9 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <cctype>
+#include <cstring>
+#include <set>
 
 namespace olaaf {
 
@@ -17,8 +20,43 @@ std::string reelLabel(const Session &s, int index) {
 
 static bool isSep(char c) { return c == '_' || c == ' ' || c == '-' || c == '.'; }
 
+// "Film_Reel1_v3" -> "Reel 1", "Rolle_02" -> "Rolle 2" ("" when the name has no reel number)
+static std::string reelWord(const std::string &name) {
+  static const char *words[] = {"reel", "rolle", "akt", "act", "part", "teil"};
+  std::string l = lower(name);
+  for (const char *w : words) {
+    size_t n = strlen(w);
+    for (size_t at = l.find(w); at != std::string::npos; at = l.find(w, at + 1)) {
+      if (at > 0 && isalpha((unsigned char)l[at - 1])) continue; // inside another word
+      size_t p = at + n;
+      while (p < l.size() && (l[p] == ' ' || l[p] == '_' || l[p] == '-' || l[p] == '.')) p++;
+      size_t d = p;
+      while (d < l.size() && isdigit((unsigned char)l[d])) d++;
+      if (d == p || (d < l.size() && isalpha((unsigned char)l[d]))) continue;
+      std::string word = name.substr(at, n);
+      word[0] = (char)toupper((unsigned char)word[0]);
+      return word + " " + std::to_string(atoi(l.substr(p, d - p).c_str()));
+    }
+  }
+  return "";
+}
+
+std::vector<std::string> reelNumberLabels(const std::vector<std::string> &names) {
+  std::vector<std::string> r;
+  std::set<std::string> seen;
+  for (auto &n : names) r.push_back(reelWord(n));
+  for (auto &x : r)
+    if (x.empty() || !seen.insert(x).second) return {};
+  return r;
+}
+
 std::vector<std::string> reelShortLabels(const std::vector<std::string> &names) {
   if (names.size() < 2) return names;
+  // the names number their reels ("..._Reel1_...", "Rolle 2"): "Reel 1", "Rolle 2", if that tells them apart
+  std::vector<std::string> r = reelNumberLabels(names);
+  if (!r.empty()) return r;
+  // otherwise the part that differs ("ri8_ftr1_finalblock", "ri8_ftr2_finalblock" -> "ftr1", "ftr2");
+  // names from different projects have nothing in common and stay whole
   size_t pre = names[0].size(), suf = names[0].size();
   for (auto &n : names) {
     size_t k = 0;
@@ -28,22 +66,29 @@ std::vector<std::string> reelShortLabels(const std::vector<std::string> &names) 
     while (k < suf && k < n.size() && n[n.size() - 1 - k] == names[0][names[0].size() - 1 - k]) k++;
     suf = k;
   }
-  // cut at word boundaries; the word just before the difference stays ("Rolle_1", not "1")
   size_t cut = 0, prev = 0;
   for (size_t i = 0; i < pre; i++)
     if (isSep(names[0][i])) {
       prev = cut;
       cut = i + 1;
     }
-  cut = prev;
   size_t sufCut = 0;
   for (size_t i = 0; i < suf; i++)
     if (isSep(names[0][names[0].size() - 1 - i])) sufCut = i + 1;
   std::vector<std::string> out;
+  bool tooShort = false;
   for (auto &n : names) {
     size_t b = std::min(cut, n.size()), e = n.size() >= sufCut ? n.size() - sufCut : n.size();
     std::string v = e > b ? n.substr(b, e - b) : n;
+    tooShort = tooShort || v.size() <= 2;
     out.push_back(v.empty() ? n : v);
+  }
+  if (tooShort) { // "1", "2": the word before it stays ("Take_1")
+    out.clear();
+    for (auto &n : names) {
+      size_t b = std::min(prev, n.size()), e = n.size() >= sufCut ? n.size() - sufCut : n.size();
+      out.push_back(e > b ? n.substr(b, e - b) : n);
+    }
   }
   return out;
 }

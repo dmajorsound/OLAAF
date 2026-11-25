@@ -221,6 +221,7 @@ struct State {
   std::string tipHold;                   // the hovered hint, copied (st->tip points here then)
   std::vector<std::string> stereoTips;   // the L+R button's hint per track
   bool showVol = true, showPan = true;   // which automation shows when it is on (V, P)
+  unsigned menuTick = 0;                 // when a right-click menu last opened
   double mouseLX = -1, mouseLY = -1;     // mouse, in layout units
   std::string updTag, updUrl;            // a newer OLAAF on GitHub
   int updPolls = 0;
@@ -558,6 +559,16 @@ double tcOffset(const State *st) { return st->tcMinus ? -st->tcAbs : st->tcAbs; 
 
 int reelCount(const State *st) { return st->host && st->host->reelCount ? std::max(1, st->host->reelCount()) : 1; }
 
+bool reelHidden(const State *st, int i) { return st->host && st->host->reelHidden && st->host->reelHidden(i); }
+
+// the AAFs with a tab (a closed first tab stays loaded but is not shown or imported)
+std::vector<int> shownReels(const State *st) {
+  std::vector<int> v;
+  for (int i = 0; i < reelCount(st); i++)
+    if (!reelHidden(st, i)) v.push_back(i);
+  return v;
+}
+
 bool reelAt(const State *st, int i, Importer **imp, ImportOptions **opt) {
   if (i == st->reel) {
     *imp = st->imp;
@@ -583,7 +594,7 @@ int reelOverlaps(const State *st, int i) { // the first reel it lands on top of,
   double a0, a1, b0, b1;
   if (!reelSpan(st, i, &a0, &a1)) return -1;
   for (int k = 0; k < reelCount(st); k++)
-    if (k != i && reelSpan(st, k, &b0, &b1) && reelsOverlap(a0, a1, b0, b1)) return k;
+    if (k != i && !reelHidden(st, k) && reelSpan(st, k, &b0, &b1) && reelsOverlap(a0, a1, b0, b1)) return k;
   return -1;
 }
 
@@ -827,6 +838,34 @@ int tracksToImport(State *st) {
   return ntr;
 }
 
+// All open AAFs together: tracks with the same name (and the same "put on" target) share one REAPER
+// track, so they count once. `tip` lists the AAFs.
+int totalTracks(State *st, std::string *tip) {
+  std::set<std::string> keys;
+  std::string list;
+  for (int i : shownReels(st)) {
+    Importer *ri;
+    ImportOptions *ro;
+    if (!reelAt(st, i, &ri, &ro)) continue;
+    int own = 0;
+    for (auto &tr : ri->session().tracks) {
+      if (!tr.import) continue;
+      bool any = !tr.created;
+      for (auto &c : tr.clips) any = any || !c.excluded;
+      if (!any) continue;
+      own++;
+      std::string k = lower(tr.name);
+      while (!k.empty() && k.back() == ' ') k.pop_back();
+      keys.insert(k + "|" + tr.target);
+    }
+    list += (list.empty() ? "" : ", ") + reelLabel(ri->session(), i) + strprintf(": %d", own);
+  }
+  if (tip)
+    *tip = strprintf("%d tracks in REAPER from all AAFs (%s). Tracks with the same name share one track.",
+                     (int)keys.size(), list.c_str());
+  return (int)keys.size();
+}
+
 // One bar on top: the AAF, where it lands in REAPER, options, import.
 void paintTopBar(State *st, const Gfx &g) {
   Session &s = st->imp->session();
@@ -857,7 +896,7 @@ void paintTopBar(State *st, const Gfx &g) {
 
   // right side, right to left: Import, Cancel, Options, | Edit cursor, where it lands
   double r = kR;
-  int ntr = tracksToImport(st);
+  int ntr = shownReels(st).size() > 1 ? totalTracks(st, nullptr) : tracksToImport(st);
   std::string imp = strprintf("Import %d track%s", ntr, ntr == 1 ? "" : "s");
   double iw = std::max(120.0, g.width(st->fBold, imp) + 36);
   button(st, g, r - iw, mid - 16, r, mid + 16, imp, H_IMPORT, 0, "Build the session in REAPER (Return).", true, ntr > 0);
@@ -919,34 +958,36 @@ void paintTopBar(State *st, const Gfx &g) {
   double updW = 0;
   std::string u = st->updTag.empty() ? std::string() : "Update " + st->updTag;
   if (!u.empty()) updW = g.width(st->fSmall, u) + 30;
-  const int nReels = reelCount(st);
-  const char *plusTip = "Add reels: more AAFs in this import, each at its own timecode. Tracks with the same name share one "
+  const std::vector<int> shown = shownReels(st);
+  const int nReels = (int)shown.size();
+  const char *plusTip = "Add AAFs (reels) to this import, each at its own timecode. Tracks with the same name share one "
                         "REAPER track. 1, 2, 3\xe2\x80\xa6 or Shift + \xe2\x86\x90 / \xe2\x86\x92 switch between them.";
   double nmW = 0;
-  if (nReels > 1) { // one tab per AAF (reel); the details below are the shown one's
-    std::vector<std::string> labels;
+  if (nReels > 1) { // one tab per AAF; the details below are the shown one's
+    std::vector<std::string> labels; // the AAF names (as they are: different projects stay apart)
     std::vector<bool> over;
-    for (int i = 0; i < nReels; i++) {
+    for (int k = 0; k < nReels; k++) {
       Importer *ri;
       ImportOptions *ro;
-      labels.push_back(reelAt(st, i, &ri, &ro) ? reelLabel(ri->session(), i) : strprintf("Reel %d", i + 1));
-      over.push_back(reelOverlaps(st, i) >= 0);
+      labels.push_back(reelAt(st, shown[(size_t)k], &ri, &ro) ? reelLabel(ri->session(), k) : strprintf("AAF %d", k + 1));
+      over.push_back(reelOverlaps(st, shown[(size_t)k]) >= 0);
     }
     const double plusW = 26, gap = 4, xW = 16;
     auto tabsW = [&](HFONT f, const std::vector<std::string> &l) {
       double w = plusW;
-      for (int i = 0; i < nReels; i++) w += g.width(f, l[(size_t)i]) + 20 + (i == st->reel && i > 0 ? xW : 0) + gap;
+      for (int k = 0; k < nReels; k++) w += g.width(f, l[(size_t)k]) + 20 + (shown[(size_t)k] == st->reel ? xW : 0) + gap;
       return w;
     };
+    // the whole names; if they don't fit, the part that tells them apart ("Film_Reel1_v3" -> "Reel1");
+    // still too long: each name shortened
     HFONT tf = st->fBold;
-    std::vector<std::string> use = labels;
-    double room = avail - updW;
+    std::vector<std::string> numbered = reelNumberLabels(labels); // "Reel 1", "Reel 2": only if the names say so
+    std::vector<std::string> use = numbered.empty() ? labels : numbered;
+    double room = avail - updW - 90; // room for "n tracks in all"
     bool fit = false;
     std::vector<std::string> shortL = reelShortLabels(labels);
-    for (int pass = 0; pass < 3 && !fit; pass++) {
+    for (int pass = 0; pass < 2 && !fit; pass++) {
       if (pass == 1) use = shortL;
-      if (pass == 2)
-        for (int i = 0; i < nReels; i++) use[(size_t)i] = strprintf("Reel %d", i + 1);
       for (HFONT f : {st->fBold, st->fName, st->fTiny})
         if (tabsW(f, use) <= room) {
           tf = f;
@@ -954,41 +995,55 @@ void paintTopBar(State *st, const Gfx &g) {
           break;
         }
     }
-    if (!fit) { // many reels: equal tabs with shortened names
+    if (!fit) { // many AAFs: equal tabs, names shortened
       tf = st->fTiny;
-      double each = std::max(30.0, (room - plusW) / nReels - gap - 20);
-      for (int i = 0; i < nReels; i++) {
+      double each = std::max(30.0, (room - plusW - xW) / nReels - gap - 20); // the shown tab also has its x
+      for (int k = 0; k < nReels; k++) {
         bool c2 = false;
-        std::vector<std::string> fl = fitLines(g, tf, use[(size_t)i], each - (i == st->reel && i > 0 ? xW : 0), 1, &c2);
-        if (!fl.empty()) use[(size_t)i] = fl[0];
+        std::vector<std::string> fl = fitLines(g, tf, use[(size_t)k], each, 1, &c2);
+        if (!fl.empty()) use[(size_t)k] = fl[0];
       }
     }
     static std::vector<std::string> tabTips;
     tabTips.resize((size_t)nReels);
     double x = x0;
-    for (int i = 0; i < nReels; i++) {
+    for (int k = 0; k < nReels; k++) {
+      int i = shown[(size_t)k];
       bool on = i == st->reel;
-      double w = g.width(tf, use[(size_t)i]) + 20 + (on && i > 0 ? xW : 0);
-      COLORREF ink = over[(size_t)i] ? kWarn : (on ? kInk : kMute);
-      if (on) g.rbox(x, mid - 22, x + w, mid, 8, over[(size_t)i] ? kWarn : kBlue, kBlueSoft);
+      double w = g.width(tf, use[(size_t)k]) + 20 + (on ? xW : 0);
+      COLORREF ink = over[(size_t)k] ? kWarn : (on ? kInk : kMute);
+      if (on) g.rbox(x, mid - 22, x + w, mid, 8, over[(size_t)k] ? kWarn : kBlue, kBlueSoft);
       else g.rbox(x, mid - 22, x + w, mid, 8, kLine, kFace);
-      g.text(tf, ink, use[(size_t)i], x + 10, mid - 22, x + w - (on && i > 0 ? xW : 0) - 6, mid, DT_LEFT);
+      g.text(tf, ink, use[(size_t)k], x + 10, mid - 22, x + w - (on ? xW : 0) - 6, mid, DT_LEFT);
       int ov = reelOverlaps(st, i);
-      tabTips[(size_t)i] = labels[(size_t)i] + (on ? "" : strprintf(": click to show it (key %d).", i + 1)) +
-                           (ov >= 0 ? " It lands on top of " + labels[(size_t)ov] +
-                                          " in REAPER: change where it starts (top right)."
+      std::string ovName;
+      for (int q = 0; q < nReels; q++)
+        if (shown[(size_t)q] == ov) ovName = labels[(size_t)q];
+      tabTips[(size_t)k] = labels[(size_t)k] + (on ? "" : strprintf(": click to show it (key %d).", k + 1)) +
+                           (ov >= 0 ? " It lands on top of " + ovName + " in REAPER: change where it starts (top right)."
                                     : "");
-      addHit(st, x, mid - 22, x + w - (on && i > 0 ? xW : 0), mid, H_REEL, i, tabTips[(size_t)i].c_str());
-      if (on && i > 0) {
+      addHit(st, x, mid - 22, x + w - (on ? xW : 0), mid, H_REEL, i, tabTips[(size_t)k].c_str());
+      if (on) { // close the tab: this AAF is not imported
         g.text(st->fBody, kMute, "\xc3\x97", x + w - xW - 6, mid - 22, x + w - 4, mid, DT_CENTER);
-        addHit(st, x + w - xW - 6, mid - 22, x + w, mid, H_REEL_REMOVE, i, "Take this reel out of the import.");
+        addHit(st, x + w - xW - 6, mid - 22, x + w, mid, H_REEL_REMOVE, i,
+               "Close this tab: this AAF is not imported (the others are).");
       }
       x += w + gap;
     }
     g.rbox(x, mid - 21, x + plusW - 4, mid - 1, 10, kLine, kFace);
     g.text(st->fBody, kInk, "+", x, mid - 22, x + plusW - 4, mid - 1, DT_CENTER);
     addHit(st, x, mid - 22, x + plusW - 4, mid, H_REEL_ADD, 0, plusTip);
-    nmW = x + plusW - x0;
+    x += plusW + 4;
+    { // all AAFs together: how many REAPER tracks the import makes
+      static std::string allTip;
+      int all = totalTracks(st, &allTip);
+      std::string al = strprintf("%d tracks in all", all);
+      double aw = g.width(st->fSmall, al);
+      g.text(st->fSmall, kMute, al, x, mid - 22, x + aw + 2, mid, DT_LEFT);
+      addHit(st, x, mid - 22, x + aw + 2, mid, H_NONE, 0, allTip.c_str());
+      x += aw + 4;
+    }
+    nmW = x - x0;
   } else {
     // name: the largest type that fits, else shortened (room for the + of the reels)
     const double plusW = 26;
@@ -1630,6 +1685,9 @@ void paintArrange(State *st, const Gfx &g) {
     // the name: smaller regular type; a long name takes two lines, the full name shows in the footer
     std::string sub = !tr.target.empty() ? "\xe2\x86\x92 " + tr.targetName + (opt.overwriteEnvelopes ? "  (envelopes overwritten)" : "")
                                          : tr.mergedFrom;
+    // renamed: the AAF's name stays readable underneath, in gray
+    if (!tr.aafName.empty() && tr.name != tr.aafName && tr.target.empty())
+      sub = tr.aafName + (tr.mergedFrom.empty() ? std::string() : "  (" + tr.mergedFrom + ")");
     if (sub.empty() && st->imp->trackIsEmpty(row.track)) sub = "empty";
     bool cutName = false, cutSub = false;
     std::vector<std::string> nl = fitLines(g, st->fName, tr.name, nameR - nx, sub.empty() ? 2 : 1, &cutName);
@@ -3199,7 +3257,7 @@ void initReelView(State *st) {
 
 void switchReel(State *st, int to) {
   int n = reelCount(st);
-  if (to < 0 || to >= n || to == st->reel) return;
+  if (to < 0 || to >= n || to == st->reel || reelHidden(st, to)) return;
   Importer *imp;
   ImportOptions *opt;
   if (!st->host || !st->host->reelAt || !st->host->reelAt(to, &imp, &opt)) return;
@@ -3276,7 +3334,7 @@ void closeDialog(State *st, bool accepted) {
   for (int i = 0; i < reelCount(st); i++) { // every reel: the shared options, and its choices kept for next time
     Importer *imp;
     ImportOptions *opt;
-    if (!reelAt(st, i, &imp, &opt)) continue;
+    if (!reelAt(st, i, &imp, &opt) || reelHidden(st, i)) continue;
     if (i != st->reel) copyShared(*st->opt, *opt);
     if (accepted && st->host && st->host->saveChoices)
       st->host->saveChoices(choicesFileName(imp->session().aafPath), choicesToText(imp->session(), *opt));
@@ -3612,16 +3670,29 @@ void click(State *st, int x, int y, bool shift) {
     st->tip = st->reelMsg.empty() ? nullptr : st->reelMsg.c_str();
     break;
   }
-  case H_REEL_REMOVE: {
+  case H_REEL_REMOVE: { // close a tab: that AAF is not imported
     int i = h ? h->idx : 0;
-    if (i < 1 || i >= reelCount(st) || !st->host->removeReel) break;
-    if (st->reel == i) switchReel(st, i - 1);
-    int shown = st->reel;
-    if (shown > i) shown--;
+    std::vector<int> sh = shownReels(st);
+    if (i < 0 || i >= reelCount(st) || sh.size() < 2 || !st->host || !st->host->removeReel) break;
+    static std::string gone;
+    {
+      Importer *ri;
+      ImportOptions *ro;
+      gone = reelAt(st, i, &ri, &ro) ? baseName(ri->session().aafPath) : std::string("The AAF");
+    }
+    if (st->reel == i) { // show a neighbour first
+      size_t k = std::find(sh.begin(), sh.end(), i) - sh.begin();
+      switchReel(st, k + 1 < sh.size() ? sh[k + 1] : sh[k - 1]);
+    }
+    int shownNow = st->reel;
     st->host->removeReel(i);
-    if (i < (int)st->reelViews.size()) st->reelViews.erase(st->reelViews.begin() + i);
-    st->reel = shown;
-    st->tip = "Reel removed from this import.";
+    if (i >= 1) { // gone from the list: the ones after it move up
+      if (i < (int)st->reelViews.size()) st->reelViews.erase(st->reelViews.begin() + i);
+      if (shownNow > i) shownNow--;
+    }
+    st->reel = shownNow;
+    gone += " is closed and won't be imported.";
+    st->tip = gone.c_str();
     break;
   }
   case H_FRESH: { // back to the AAF as it is (undoable, unless the .L / .R setting changes with it)
@@ -4095,18 +4166,22 @@ bool handleKey(State *st, int vk) {
   }
   // 1-9 on the number row (not the number pad): show that reel
   if (vk >= '1' && vk <= '9' && !(GetAsyncKeyState(VK_CONTROL) & 0x8000) && !(GetAsyncKeyState(VK_MENU) & 0x8000) &&
-      !(GetAsyncKeyState(VK_SHIFT) & 0x8000) && reelCount(st) > 1) {
-    int r = vk - '1';
-    if (r < reelCount(st)) switchReel(st, r);
-    else st->tip = "There's no reel with that number.";
+      !(GetAsyncKeyState(VK_SHIFT) & 0x8000) && shownReels(st).size() > 1) {
+    std::vector<int> sh = shownReels(st);
+    size_t r = (size_t)(vk - '1');
+    if (r < sh.size()) switchReel(st, sh[r]);
+    else st->tip = "There's no tab with that number.";
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
   }
   // Shift + left / right: previous / next reel (the same on every keyboard layout)
   const bool shiftKey = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
   const bool prevReel = shiftKey && vk == VK_LEFT, nextReel = shiftKey && vk == VK_RIGHT;
-  if ((prevReel || nextReel) && reelCount(st) > 1) {
-    switchReel(st, (st->reel + (nextReel ? 1 : reelCount(st) - 1)) % reelCount(st));
+  if ((prevReel || nextReel) && shownReels(st).size() > 1) {
+    std::vector<int> sh = shownReels(st);
+    size_t k = std::find(sh.begin(), sh.end(), st->reel) - sh.begin();
+    if (k >= sh.size()) k = 0;
+    switchReel(st, sh[(k + (nextReel ? 1 : sh.size() - 1)) % sh.size()]);
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
   }
@@ -4152,6 +4227,34 @@ bool handleKey(State *st, int vk) {
 }
 
 State *g_open = nullptr; // the dialog that is open (for REAPER's keyboard hook)
+
+// Right-click at a point of the window (client coordinates): the track menu on a track name,
+// the file menu on an event
+void rightClick(State *st, POINT p) {
+  if (st->drag) return;
+  st->menuTick = GetTickCount();
+  HWND hwnd = st->hwnd;
+  if (const Hit *hn = hitAt(st, p.x, p.y))
+    if (hn->id == H_TRACK_NAME || hn->id == H_TRACK_STEREO) {
+      int ti = hn->idx;
+      ClientToScreen(hwnd, &p);
+      trackMenu(st, p, ti);
+      st->menuTick = GetTickCount();
+      return;
+    }
+  const ClipHit *c = clipAt(st, p.x, p.y);
+  if (!c) return;
+  int id = c->id;
+  if (!st->sel.count(id)) { // right-click selects it, like in REAPER
+    st->sel.clear();
+    st->sel.insert(id);
+    InvalidateRect(hwnd, NULL, FALSE);
+    UpdateWindow(hwnd);
+  }
+  ClientToScreen(hwnd, &p);
+  clipMenu(st, p, id);
+  st->menuTick = GetTickCount();
+}
 
 INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   State *st = (State *)OL_GETUSER(hwnd);
@@ -4557,27 +4660,17 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     InvalidateRect(hwnd, NULL, FALSE);
     return 0;
   }
-  case WM_RBUTTONUP: { // the event's file: where it is, show it, copy its path
+  case WM_RBUTTONUP: { // the event's file / the track: their menus
     POINT p = {(short)LOWORD(lp), (short)HIWORD(lp)};
-    if (st->drag) return 0;
-    if (const Hit *hn = hitAt(st, p.x, p.y))
-      if (hn->id == H_TRACK_NAME || hn->id == H_TRACK_STEREO) {
-        int ti = hn->idx;
-        ClientToScreen(hwnd, &p);
-        trackMenu(st, p, ti);
-        return 0;
-      }
-    const ClipHit *c = clipAt(st, p.x, p.y);
-    if (!c) return 0;
-    int id = c->id;
-    if (!st->sel.count(id)) { // right-click selects it, like in REAPER
-      st->sel.clear();
-      st->sel.insert(id);
-      InvalidateRect(hwnd, NULL, FALSE);
-      UpdateWindow(hwnd);
-    }
-    ClientToScreen(hwnd, &p);
-    clipMenu(st, p, id);
+    rightClick(st, p);
+    return 0;
+  }
+  case WM_CONTEXTMENU: { // some systems send this instead (or as well): the same menus, once
+    if (GetTickCount() - st->menuTick < 600) return 0;
+    POINT p = {(short)LOWORD(lp), (short)HIWORD(lp)};
+    if (p.x == -1 && p.y == -1) return 0; // from the keyboard: no place to point at
+    ScreenToClient(hwnd, &p);
+    rightClick(st, p);
     return 0;
   }
   case WM_MOUSEWHEEL: {
@@ -4724,6 +4817,10 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
     buildRows(&st);
   }
   if (getenv("OLAAF_VOLONLY")) st.showPan = false;
+  if (getenv("OLAAF_RENAME")) { // the first two tracks renamed
+    imp.session().tracks[0].name = "Dialog";
+    if (imp.session().tracks.size() > 2) imp.session().tracks[2].name = "Atmo Wind";
+  }
   if (getenv("OLAAF_RMEMPTY")) {
     static std::string done;
     std::vector<std::string> names;
@@ -4765,6 +4862,9 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
       moreOpt.push_back(std::move(ro));
     }
     host.reelCount = []() { return 1 + (int)moreImp.size(); };
+    static bool hide0 = getenv("OLAAF_HIDE0") != nullptr;
+    host.reelHidden = [](int i) { return i == 0 && hide0; };
+    if (hide0) st.reel = 0;
     host.reelAt = [](int i, Importer **ri, ImportOptions **ro) {
       if (i == 0) {
         *ri = firstImp;

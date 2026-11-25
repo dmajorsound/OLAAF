@@ -68,7 +68,8 @@ struct DialogHost {
   std::function<int()> reelCount;
   std::function<bool(int i, Importer **imp, ImportOptions **opt)> reelAt;
   std::function<int(HWND parent, std::string *message)> addReels; // asks for AAFs; returns how many were added
-  std::function<void(int i)> removeReel;                          // i >= 1
+  std::function<void(int i)> removeReel;                          // the first one is only left out
+  std::function<bool(int i)> reelHidden;                          // a closed tab that stays loaded
   // right-click on an event: its file in the Finder / Explorer, its path on the clipboard
   std::function<void(const std::string &path)> revealFile;
   std::function<void(HWND hwnd, const std::string &text)> copyText;

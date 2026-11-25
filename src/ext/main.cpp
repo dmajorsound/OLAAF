@@ -570,6 +570,7 @@ struct ReelSet {
   ImportOptions *firstOpt = nullptr;
   std::vector<std::unique_ptr<Importer>> imps;
   std::vector<std::unique_ptr<ImportOptions>> opts;
+  bool firstOff = false; // the first AAF's tab was closed: it is not imported (it stays loaded underneath)
   int count() const { return 1 + (int)imps.size(); }
   Importer &imp(int i) { return i == 0 ? *first : *imps[(size_t)i - 1]; }
   ImportOptions &opt(int i) { return i == 0 ? *firstOpt : *opts[(size_t)i - 1]; }
@@ -620,7 +621,12 @@ static void attachReels(DialogHost &h, ReelSet *rs) {
     *opt = &rs->opt(i);
     return true;
   };
+  h.reelHidden = [rs](int i) { return i == 0 && rs->firstOff; };
   h.removeReel = [rs](int i) {
+    if (i == 0) { // the first AAF holds the window's own data: it is only left out
+      rs->firstOff = true;
+      return;
+    }
     if (i < 1 || i >= rs->count()) return;
     rs->imps.erase(rs->imps.begin() + (i - 1));
     rs->opts.erase(rs->opts.begin() + (i - 1));
@@ -670,7 +676,9 @@ static bool finishReels(ReelSet &rs, MediaReport &rep, int &merged, std::string 
   merged = 0;
   std::vector<Session> sessions;
   std::vector<double> shift;
+  bool combine = rs.count() > 1 || rs.firstOff;
   for (int i = 0; i < rs.count(); i++) {
+    if (i == 0 && rs.firstOff) continue; // its tab was closed
     MediaReport r;
     int m = 0;
     if (!finishImport(rs.imp(i), rs.opt(i), r, m, err)) return false;
@@ -683,12 +691,16 @@ static bool finishReels(ReelSet &rs, MediaReport &rep, int &merged, std::string 
     rep.missingNames.insert(rep.missingNames.end(), r.missingNames.begin(), r.missingNames.end());
     if (rep.logPath.empty()) rep.logPath = r.logPath;
     merged += m;
-    if (rs.count() > 1) {
+    if (combine) {
       sessions.push_back(rs.imp(i).session());
+      // relative to the first AAF's start: the project is built with its offset
       shift.push_back(rs.opt(i).tcOffset - rs.opt(0).tcOffset);
     }
   }
-  if (rs.count() > 1) rs.first->adoptSession(combineReels(sessions, shift));
+  if (combine && !sessions.empty()) {
+    // combineReels shifts its first reel too, so the offsets stay right without the first AAF
+    rs.first->adoptSession(combineReels(sessions, shift));
+  }
   return true;
 }
 
