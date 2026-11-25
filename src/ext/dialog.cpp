@@ -220,7 +220,7 @@ struct State {
   bool tipVisible = false;               // the tooltip shows after a short hover
   std::string tipHold;                   // the hovered hint, copied (st->tip points here then)
   std::vector<std::string> stereoTips;   // the L+R button's hint per track
-  bool showVol = true, showPan = true;   // which automation shows when it is on (V, P)
+  std::map<int, int> laneShow;           // track uid -> automation shown on that track: 1 volume (V), 2 pan (P)
   unsigned menuTick = 0;                 // when a right-click menu last opened
   double mouseLX = -1, mouseLY = -1;     // mouse, in layout units
   std::string updTag, updUrl;            // a newer OLAAF on GitHub
@@ -1163,7 +1163,8 @@ double lerpEnv(const std::vector<GainPoint> &env, double t, double def) {
   return def;
 }
 
-void paintAutomation(State *st, const Gfx &g, const Track &tr, double y, double spp) {
+// mask: 1 volume, 2 pan; `always` draws the pan line even when the track sits in the center (P on that track)
+void paintAutomation(State *st, const Gfx &g, const Track &tr, double y, double spp, int mask, bool always) {
   const ImportOptions &opt = *st->opt;
   double top = y + 4, bot = y + kRowH - 5;
   auto volY = [&](double gain) {
@@ -1171,15 +1172,15 @@ void paintAutomation(State *st, const Gfx &g, const Track &tr, double y, double 
     double n = std::max(0.0, std::min(1.0, (db + 60.0) / 72.0));
     return bot - n * (bot - top);
   };
-  const COLORREF panC = RGB(0xD9, 0x82, 0x2B);
-  bool hasPan = st->showPan && (!tr.panEnv.empty() || std::fabs(tr.pan) > 1e-4);
+  const COLORREF panC = RGB(0x8E, 0x44, 0xAD); // purple: orange is the DX folder color
+  bool hasPan = (mask & 2) && (always || !tr.panEnv.empty() || std::fabs(tr.pan) > 1e-4);
   double px = -1, pv = 0, pp = 0;
   for (double x = kTlx + 1; x <= kTlr - 1; x += 2) {
     double t = st->viewStart + (x - kTlx) * spp;
     double v = volY(st->imp->trackVolumeAt(tr, t, opt));
     double pn = (top + bot) / 2 - lerpEnv(tr.panEnv, t, tr.pan) * (bot - top) / 2;
     if (px >= 0) {
-      if (st->showVol) g.line(px, pv, x, v, kBlue);
+      if (mask & 1) g.line(px, pv, x, v, kBlue);
       if (hasPan) g.line(px, pp, x, pn, panC);
     }
     px = x;
@@ -1187,7 +1188,7 @@ void paintAutomation(State *st, const Gfx &g, const Track &tr, double y, double 
     pp = pn;
   }
   // clip automation that stays on the items: a thin line inside each clip
-  if (opt.clipGain && !opt.clipGainToTrack)
+  if ((mask & 1) && opt.clipGain && !opt.clipGainToTrack)
     for (auto &c : tr.clips) {
       if (c.excluded || c.gainEnv.empty()) continue;
       double x0 = kTlx + (c.pos - st->viewStart) / spp, x1 = kTlx + (c.pos + c.len - st->viewStart) / spp;
@@ -1574,7 +1575,7 @@ void paintArrange(State *st, const Gfx &g) {
       g.rbox(ax, cy - 7, ax + 14, cy + 7, 4, theme().empty, kPanel);
     g.text(st->fSmall, kInk, lab, ax + 20, ry, ax + 24 + cw, ry + kRuler, DT_LEFT);
     addHit(st, ax - 4, by0, ax + 24 + cw, by1, H_SHOW_AUTO, 0,
-           "Show the volume (blue) and pan (orange) automation in the lanes (A; V volume only, P pan only). A view only, it "
+           "Show the volume (blue) and pan (purple) automation of every track (A). V / P: volume / pan of the selected track or the one under the mouse; Alt / Option + V / P: of every track. A view only, it "
            "changes nothing in the import.");
   }
 
@@ -1629,6 +1630,8 @@ void paintArrange(State *st, const Gfx &g) {
       if (!renaming) g.text(st->fBold, kInk, f.name, kL + 28, y, kL + 28 + nw, y + kRowH, DT_LEFT);
       g.text(st->fSmall, kMute, strprintf("folder \xc2\xb7 %d track%s", n, n == 1 ? "" : "s"), kL + 34 + nw, y,
              kL + kHdr - 30, y + kRowH, DT_LEFT);
+      if (!renaming) // a click on the name renames the folder, like the pencil
+        addHit(st, kL + 28, y + 4, kL + kHdr - 30, y + kRowH - 4, H_FROW_RENAME, fi, "Click to rename this folder.");
       g.icon("\xe2\x9c\x8e", kL + kHdr - 17, y + kRowH / 2.0 - 1, kMute, kSoft);
       addHit(st, kL + kHdr - 28, y + 4, kL + kHdr - 4, y + kRowH - 4, H_FROW_RENAME, fi, "Rename this folder.");
       continue;
@@ -1851,7 +1854,11 @@ void paintArrange(State *st, const Gfx &g) {
           if (qe - qx > 30 && !q.name.empty()) g.text(st->fClip, kInk, q.name, qx + 4, y0, qe - 3, y0 + 12, DT_LEFT);
         }
       }
-    if (opt.showAutomation && on) paintAutomation(st, g, tr, y, spp);
+    if (on) { // A / the Automation box: every track; V / P: only the tracks they were pressed on
+      auto ls = st->laneShow.find(tr.uid);
+      int mine = ls == st->laneShow.end() ? 0 : ls->second;
+      if (opt.showAutomation || mine) paintAutomation(st, g, tr, y, spp, opt.showAutomation ? 3 | mine : mine, mine & 2);
+    }
   }
   for (auto &gh : ghosts) { // red: that spot is taken
     if (st->dragBlocked) { // a hole with a red frame and a cross: not here
@@ -2394,8 +2401,10 @@ void paintHelp(State *st, const Gfx &g) {
                       {"Shift|Wheel", "Move through time"},
                       {"F", "Show the whole AAF"},
                       {"Z", "Zoom to the selection, playhead to it"},
-                      {"A/V/P", "Automation: all / volume / pan"}};
-  const KeyRow ev[] = {{"Click", "Select an event (Shift-click: more)"},
+                      {"A", "All automation on / off"}};
+  const KeyRow ev[] = {{"V/P", "Volume / pan of a track (selected or pointed)"},
+                    {"Alt|V/P", "Volume / pan of every track"},
+                    {"Click", "Select an event (Shift-click: more)"},
                     {"Drag", "Select in a frame (start on an empty lane)"},
                     {"Cmd/Ctrl|A", "Select all events"},
                     {"\xe2\x86\x91/\xe2\x86\x93", "Move the selection one track up / down"},
@@ -2439,9 +2448,9 @@ void paintHelp(State *st, const Gfx &g) {
   };
   double y1 = t + 74, y2 = t + 74;
   block(l + 24, y1, "Listening", play, 3);
-  block(l + 24, y1, "View", view, 6);
+  block(l + 24, y1, "View", view, (int)(sizeof(view) / sizeof(view[0])));
   block(l + 24, y1, "Window", win, 8);
-  block(l + 424, y2, "Events and tracks", ev, 10);
+  block(l + 424, y2, "Events and tracks", ev, (int)(sizeof(ev) / sizeof(ev[0])));
   double y = std::max(y1, y2) + 2;
   g.fill(l + 24, y, l + w - 24, y + 1, kLine);
   g.text(st->fSmall, kMute,
@@ -3715,7 +3724,7 @@ void click(State *st, int x, int y, bool shift) {
     } else
       opt.clipGain = true;
     break;
-  case H_SHOW_AUTO: opt.showAutomation = !opt.showAutomation; st->showVol = st->showPan = true; break;
+  case H_SHOW_AUTO: opt.showAutomation = !opt.showAutomation; break;
   case H_OPTS: st->optsOpen = !st->optsOpen; st->folderTrack = st->destTrack = st->palTrack = -1; st->palFolder.clear(); break;
   case H_OPTS_BG: return;
   case H_THEME: st->themeMenu = !st->themeMenu; break;
@@ -4232,27 +4241,50 @@ bool handleKey(State *st, int vk) {
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
   }
-  if ((vk == 'A' || vk == 'V' || vk == 'P') && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) {
-    // A: volume and pan, V: volume only, P: pan only (again: hide it)
+  if (vk == 'A' && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) { // A: volume and pan on every track
     bool &on = st->opt->showAutomation;
-    if (vk == 'A') {
-      on = !on;
-      st->showVol = st->showPan = true;
-    } else {
-      bool &mine = vk == 'V' ? st->showVol : st->showPan;
-      if (!on) { // only this one
-        on = true;
-        st->showVol = vk == 'V';
-        st->showPan = vk == 'P';
-      } else
-        mine = !mine;
-      if (!st->showVol && !st->showPan) {
-        on = false;
-        st->showVol = st->showPan = true;
+    on = !on;
+    st->tip = on ? "Volume (blue) and pan (purple) automation on every track." : "Automation hidden.";
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    return true;
+  }
+  if ((vk == 'V' || vk == 'P') && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) {
+    // V: volume, P: pan of the selected tracks (by name or by a selected event), else of the track under the mouse.
+    // Alt / Option + V or P: of every track. Pressed again: hidden again.
+    Session &s = st->imp->session();
+    bool all = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+    std::set<int> idx;
+    if (all)
+      for (size_t t = 0; t < s.tracks.size(); t++) idx.insert((int)t);
+    else {
+      idx = st->selTracks;
+      for (size_t t = 0; t < s.tracks.size(); t++)
+        for (auto &c : s.tracks[t].clips)
+          if (st->sel.count(c.id)) idx.insert((int)t);
+      if (idx.empty() && st->mouseLX >= kL && st->mouseLX < kTlr && st->mouseLY >= kLT && st->mouseLY < kLB) {
+        int ri = st->scrollRow + (int)std::floor((st->mouseLY - kLT) / kRowH);
+        if (ri >= 0 && ri < (int)st->rows.size() && st->rows[(size_t)ri].kind == 0) idx.insert(st->rows[(size_t)ri].track);
       }
     }
-    st->tip = !on ? "Automation hidden." : st->showVol && st->showPan ? "Volume (blue) and pan (orange) automation shown."
-              : st->showVol ? "Volume automation shown (P adds pan)." : "Pan automation shown (V adds volume).";
+    int bit = vk == 'V' ? 1 : 2;
+    if (idx.empty()) {
+      st->tip = vk == 'V' ? "Select a track or point at it, then V shows its volume (Alt / Option + V: every track)."
+                          : "Select a track or point at it, then P shows its pan (Alt / Option + P: every track).";
+    } else {
+      bool allOn = true;
+      for (int t : idx)
+        if (t >= 0 && t < (int)s.tracks.size() && !(st->laneShow[s.tracks[(size_t)t].uid] & bit)) allOn = false;
+      for (int t : idx)
+        if (t >= 0 && t < (int)s.tracks.size()) {
+          int &m = st->laneShow[s.tracks[(size_t)t].uid];
+          m = allOn ? (m & ~bit) : (m | bit);
+        }
+      const char *what = vk == 'V' ? "Volume (blue)" : "Pan (purple)";
+      static std::string laneTip;
+      laneTip = strprintf("%s %s on %s.", what, allOn ? "hidden" : "shown",
+                          all ? "every track" : idx.size() == 1 ? "this track" : "the selected tracks");
+      st->tip = laneTip.c_str();
+    }
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
   }
@@ -4465,6 +4497,9 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     SetWindowLongPtr(hwnd, DWLP_MSGRESULT, DLGC_WANTARROWS | DLGC_WANTCHARS | DLGC_WANTTAB);
     return TRUE;
 #endif
+  case WM_SYSKEYDOWN: // Alt / Option + V or P
+    if (st && (wp == 'V' || wp == 'P') && handleKey(st, (int)wp)) return 1;
+    break;
   case WM_KEYDOWN:
     if (st && handleKey(st, (int)wp)) return 1;
     return 0;
@@ -4913,7 +4948,8 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
       }
     buildRows(&st);
   }
-  if (getenv("OLAAF_VOLONLY")) st.showPan = false;
+  if (getenv("OLAAF_VOLONLY")) st.laneShow[st.imp->session().tracks[0].uid] = 1;
+  if (getenv("OLAAF_PANSEL")) { st.laneShow[st.imp->session().tracks[0].uid] = 2; st.selTracks = {0}; }
   if (getenv("OLAAF_RENAME")) { // the first two tracks renamed
     imp.session().tracks[0].name = "Dialog";
     if (imp.session().tracks.size() > 2) imp.session().tracks[2].name = "Atmo Wind";
@@ -5062,6 +5098,12 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
     st.fpY0 = 210;
   }
   paint(&st, dc);
+  if (const char *hp = getenv("OLAAF_HITAT")) { // which hit answers a click at x,y (logical px)
+    int x = 0, y = 0;
+    sscanf(hp, "%d,%d", &x, &y);
+    const Hit *h = hitAt(&st, (int)(st.ox + x * st.scale), (int)(st.oy + y * st.scale));
+    fprintf(stderr, "hit at %d,%d: id %d idx %d\n", x, y, h ? (int)h->id : -1, h ? h->idx : -1);
+  }
 }
 #endif
 
@@ -5107,7 +5149,9 @@ int dialogTranslateKey(MSG *msg) {
     SendMessage(st->hwnd, WM_COMMAND, IDCANCEL, 0);
     return 1;
   }
-  if (msg->message == WM_KEYDOWN && handleKey(st, (int)msg->wParam)) return 1;
+  // Alt / Option + V or P arrive as system keys on Windows
+  bool altVP = msg->message == WM_SYSKEYDOWN && (msg->wParam == 'V' || msg->wParam == 'P');
+  if ((msg->message == WM_KEYDOWN || altVP) && handleKey(st, (int)msg->wParam)) return 1;
   if (msg->message == WM_KEYDOWN || msg->message == WM_CHAR || msg->message == WM_KEYUP) return -1;
   return 0;
 }
