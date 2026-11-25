@@ -32,12 +32,12 @@ static std::vector<SortRule> g_rules = defaultSortRules();
 
 std::vector<SortRule> defaultSortRules() {
   return {
-      {"DIA", 0x5580d4, {"dia", "dx", "dlg", "dial", "dialog", "dialogue", "boom", "lav", "anstecker", "fr", "vo", "adr", "voice",
+      {"DIA", 0xE8923A, {"dia", "dx", "dlg", "dial", "dialog", "dialogue", "boom", "lav", "anstecker", "fr", "vo", "adr", "voice",
                          "ot", "o-ton", "oton", "guide", "sprache", "mic"}},
-      {"FX", 0xD9822B, {"sfx", "fx", "effect", "effects", "hardfx", "design", "sd", "foley", "fol", "ger\xc3\xa4usche",
-                        "ger\xc3\xa4usch", "gerausche", "steps", "fs"}},
-      {"MUS", 0xC8423B, {"mus", "music", "musik", "mx", "score", "song"}},
-      {"ATMO", 0x1F9A8A, {"atmo", "atmos", "amb", "ambi", "ambience", "bg", "bgs", "roomtone", "rt"}},
+      {"FX", 0xF2A6C8, {"sfx", "fx", "effect", "effects", "hardfx", "design", "sd", "foley", "fol", "ger\xc3\xa4usche",
+                        "ger\xc3\xa4usch", "gerausche", "steps", "fs", "spot", "moves", "zs", "prop"}},
+      {"MUS", 0x4A86E8, {"mus", "music", "musik", "mx", "score", "song"}},
+      {"BG", 0x8FD48A, {"atmo", "atmos", "amb", "ambi", "ambience", "bg", "bgs", "roomtone", "rt", "nt", "at", "raum"}},
   };
 }
 void setSortRules(const std::vector<SortRule> &rules) { g_rules = rules.empty() ? defaultSortRules() : rules; }

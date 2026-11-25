@@ -140,7 +140,7 @@ enum HitId {
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
   H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE,
-  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE, H_TC_RESET, H_REMOVE_EMPTY, H_TRACK_STEREO
+  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE, H_TC_RESET, H_REMOVE_EMPTY, H_TRACK_STEREO, H_RULE_SWATCH, H_FOLD_TOGGLE, H_SORT_NOW
 };
 
 struct Hit {
@@ -242,6 +242,8 @@ struct State {
   bool missingOpen = false;              // the list of missing media
   int missScroll = 0;                    // ... scrolled by this many files
   bool rulesOpen = false;                // the folder sorting rules and the track template
+  int ruleColor = -1;                    // ... the rule whose colors show in place of its words
+  std::set<std::string> closedFolders;   // folders shown closed in the track list (their tracks still import)
   bool choicesBack = false;              // the last import's choices for this AAF were put back
   struct Fresh { std::vector<Track> tracks; std::vector<Folder> folders; std::vector<VideoClip> video; ImportOptions opt; };
   Fresh fresh;                           // how it was before, for "Start fresh"
@@ -657,9 +659,10 @@ void buildRows(State *st) {
       fr.kind = 1;
       fr.folder = f.key;
       st->rows.push_back(fr);
+      bool closed = st->closedFolders.count(f.key) > 0; // closed: its tracks keep their place, without a row
       for (size_t i = 0; i < s.tracks.size(); i++)
         if (s.tracks[i].group == f.key) {
-          st->rows.push_back({0, (int)i, std::string()});
+          if (!closed) st->rows.push_back({0, (int)i, std::string()});
           st->order.push_back((int)i);
           placed[i] = true;
         }
@@ -679,24 +682,34 @@ int posOfTrack(const State *st, int track) {
   return -1;
 }
 
-// shown track position at row index ri (a folder row counts as the track below it; past the end = new tracks)
+// shown track position at row index ri (a folder row counts as the track below it; past the end = new tracks).
+// Tracks in a closed folder keep their positions but have no row.
 int posAtRow(const State *st, int ri) {
-  int pos = 0;
-  for (int i = 0; i < (int)st->rows.size() && i < ri; i++)
-    if (st->rows[(size_t)i].kind == 0) pos++;
-  if (ri >= (int)st->rows.size()) pos += ri - (int)st->rows.size() + 1;
-  return pos;
+  if (ri < 0) ri = 0;
+  for (int i = ri; i < (int)st->rows.size(); i++)
+    if (st->rows[(size_t)i].kind == 0) return posOfTrack(st, st->rows[(size_t)i].track);
+  int n = (int)st->order.size();
+  return ri >= (int)st->rows.size() ? n + ri - (int)st->rows.size() + 1 : n;
 }
 
-// row index that shows shown track position pos (new tracks go on and below the drop line)
+// row index that shows shown track position pos (new tracks go on and below the drop line); a track in a
+// closed folder: the folder's row
 int rowOfPos(const State *st, int pos) {
-  int p = 0;
-  for (size_t i = 0; i < st->rows.size(); i++)
-    if (st->rows[i].kind == 0) {
-      if (p == pos) return (int)i;
-      p++;
-    }
+  if (pos >= 0 && pos < (int)st->order.size()) {
+    int t = st->order[(size_t)pos];
+    for (size_t i = 0; i < st->rows.size(); i++)
+      if (st->rows[i].kind == 0 && st->rows[i].track == t) return (int)i;
+    const std::string &grp = st->imp->session().tracks[(size_t)t].group;
+    for (size_t i = 0; i < st->rows.size(); i++)
+      if (st->rows[i].kind == 1 && st->rows[i].folder == grp) return (int)i;
+  }
   return (int)st->rows.size() - 1 + (pos - (int)st->order.size());
+}
+
+// a closed folder opens when one of its tracks is needed (events moved there, Tab)
+void openFolderOf(State *st, int track) {
+  Session &s = st->imp->session();
+  if (track >= 0 && track < (int)s.tracks.size() && st->closedFolders.erase(s.tracks[(size_t)track].group)) buildRows(st);
 }
 
 int folderIndex(const Session &s, const std::string &key) {
@@ -1445,41 +1458,58 @@ void paintArrange(State *st, const Gfx &g) {
   g.fill(kL + kHdr, ry, kL + kHdr + 1, kAB - 1, kLine);
   int mOk = 0, mTotal = 0;
   mediaCount(st, &mOk, &mTotal);
-  double leftEnd = kL + 12; // where the "· n empty" link goes
-  if (mTotal > 0 && mOk == 0) { // no audio at all: a red flag in the corner (shorter when "· n empty" needs room)
-    const char *fl = st->imp->emptyTracks().empty() ? "No audio found" : "No audio";
+  // right: Sort and + Folder; left: the count (or the red flag) and "· n empty"; each gets shorter if needed
+  const char *fol = "+ Folder";
+  double folW = g.width(st->fBody, fol);
+  g.text(st->fBody, kBlue, fol, kL + kHdr - 12 - folW, ry, kL + kHdr - 10, ry + kRuler, DT_RIGHT);
+  addHit(st, kL + kHdr - 18 - folW, ry + 4, kL + kHdr - 6, ry + kRuler - 4, H_NEW_FOLDER, 0,
+         "Add a folder (with the selected tracks in it). Drag track names onto a folder to put them in.");
+  const char *sortL = "Sort";
+  double sortW = g.width(st->fBody, sortL), sortR = kL + kHdr - 24 - folW;
+  g.text(st->fBody, kBlue, sortL, sortR - sortW, ry, sortR, ry + kRuler, DT_RIGHT);
+  addHit(st, sortR - sortW - 4, ry + 4, sortR + 4, ry + kRuler - 4, H_SORT_NOW, 0,
+         "Sort the tracks into DIA, FX, MUS and BG by their names (Cmd/Ctrl+Z undoes it). The words: Options \xe2\x80\xba Sorting.");
+  const double rightEdge = sortR - sortW - 10;
+  size_t ne = st->imp->emptyTracks().size();
+  std::string el = ne ? strprintf("\xc2\xb7 %zu empty \xc3\x97", ne) : std::string();
+  double ew = ne ? g.width(st->fSmall, el) + 6 : 0;
+  double leftEnd = kL + 12; // where "· n empty" goes
+  if (mTotal > 0 && mOk == 0) { // no audio at all: a red flag in the corner (only the flag when space is short)
+    const char *fl = "No audio found";
     double fw = g.width(st->fSmall, fl) + 34;
+    if (kL + 16 + fw + ew > rightEdge) {
+      fl = "No audio";
+      fw = g.width(st->fSmall, fl) + 34;
+    }
+    if (kL + 16 + fw + ew > rightEdge) {
+      fl = "";
+      fw = 26;
+    }
     leftEnd = kL + 16 + fw;
     g.rfill(kL + 8, ry + 5, kL + 8 + fw, ry + kRuler - 5, 9, RGB(0xd2, 0x3c, 0x32));
     double fx = kL + 17, fy = ry + kRuler / 2.0;
     g.fill(fx, fy - 6, fx + 1.4, fy + 7, kWhiteFixed);                      // the pole
     g.poly({{fx + 1.4, fy - 6}, {fx + 9, fy - 3.5}, {fx + 1.4, fy - 0.5}}, kWhiteFixed); // the flag
-    g.text(st->fSmall, kWhiteFixed, fl, kL + 30, ry + 5, kL + 8 + fw, ry + kRuler - 5, DT_LEFT);
+    if (*fl) g.text(st->fSmall, kWhiteFixed, fl, kL + 30, ry + 5, kL + 8 + fw, ry + kRuler - 5, DT_LEFT);
     addHit(st, kL + 8, ry + 5, kL + 8 + fw, ry + kRuler - 5, H_MISS_OPEN, 0,
-           "None of the audio files this AAF points to was found. Click to locate them (a file or a folder).");
+           "No audio found: none of the audio files this AAF points to was found. Click to locate them (a file or a folder).");
   } else {
     std::string cnt = strprintf("%d of %d tracks", nsel, real);
-    g.text(st->fSmall, kMute, cnt, kL + 12, ry, kL + 120, ry + kRuler, DT_LEFT);
+    if (kL + 18 + g.width(st->fSmall, cnt) + ew > rightEdge) cnt = strprintf("%d / %d", nsel, real);
     double cw = g.width(st->fSmall, cnt);
+    g.text(st->fSmall, kMute, cnt, kL + 12, ry, kL + 14 + cw, ry + kRuler, DT_LEFT);
     addHit(st, kL + 4, ry, kL + 14 + cw, ry + kRuler, H_NONE, 0, "Tracks that will be imported, of the tracks in the AAF.");
     leftEnd = kL + 18 + cw;
   }
-  if (size_t ne = st->imp->emptyTracks().size()) { // tracks with nothing at all on them: one click deletes them (undoable)
+  if (ne) { // tracks with nothing at all on them: one click deletes them (undoable)
     static std::string eTip;
-    std::string el = strprintf("\xc2\xb7 %zu empty \xc3\x97", ne);
-    double ex = leftEnd, ew = g.width(st->fSmall, el);
-    g.text(st->fSmall, kBlue, el, ex, ry, ex + ew + 2, ry + kRuler, DT_LEFT);
+    if (leftEnd + ew > rightEdge) el = strprintf("%zu empty \xc3\x97", ne);
+    double ex = leftEnd, ewd = g.width(st->fSmall, el);
+    g.text(st->fSmall, kBlue, el, ex, ry, ex + ewd + 2, ry + kRuler, DT_LEFT);
     eTip = strprintf("%zu track%s with nothing on %s: no events (not even removed ones), no automation. Click to delete "
                      "%s before the import (Cmd/Ctrl+Z brings %s back).",
                      ne, ne == 1 ? "" : "s", ne == 1 ? "it" : "them", ne == 1 ? "it" : "them", ne == 1 ? "it" : "them");
-    addHit(st, ex - 2, ry + 4, ex + ew + 4, ry + kRuler - 4, H_REMOVE_EMPTY, 0, eTip.c_str());
-  }
-  {
-    const char *fl = "+ Folder";
-    double fw = g.width(st->fBody, fl);
-    g.text(st->fBody, kBlue, fl, kL + kHdr - 12 - fw, ry, kL + kHdr - 10, ry + kRuler, DT_RIGHT);
-    addHit(st, kL + kHdr - 18 - fw, ry + 4, kL + kHdr - 6, ry + kRuler - 4, H_NEW_FOLDER, 0,
-           "Add a folder (with the selected tracks in it). Drag track names onto a folder to put them in.");
+    addHit(st, ex - 2, ry + 4, ex + ewd + 4, ry + kRuler - 4, H_REMOVE_EMPTY, 0, eTip.c_str());
   }
 
   // ruler
@@ -1575,7 +1605,26 @@ void paintArrange(State *st, const Gfx &g) {
         g.fill(kL + 1, y, kL + kHdr, y + kRowH - 1, kBlueSoft); // the folder they go into
       g.fill(kL + 1, y, kL + 7, y + kRowH - 1, f.color ? rgbToRef(f.color) : kMute);
       addHit(st, kL + 1, y, kL + 14, y + kRowH, H_FROW_COLOR, fi, "Set the folder color.");
-      g.icon("\xe2\x96\xbe", kL + 19, y + kRowH / 2.0, kMute, kSoft);
+      bool closed = st->closedFolders.count(f.key) > 0;
+      { // the arrow: pointing right when closed, down when open
+        double ax = kL + 19, ay = y + kRowH / 2.0;
+        if (closed) g.polyAA({{ax - 2.5, ay - 4.5}, {ax + 3.5, ay}, {ax - 2.5, ay + 4.5}}, kInk);
+        else g.polyAA({{ax - 4.5, ay - 2.5}, {ax + 4.5, ay - 2.5}, {ax, ay + 3.5}}, kMute);
+      }
+      addHit(st, kL + 10, y + 4, kL + 28, y + kRowH - 4, H_FOLD_TOGGLE, fi,
+             closed ? "Open the folder (Alt / Option-click: all folders)." : "Close the folder (Alt / Option-click: all folders). Its tracks still import.");
+      if (closed) { // its events, small, so the folder's content stays readable
+        COLORREF fc = f.color ? rgbToRef(f.color) : kMute;
+        double spp2 = st->viewLen / (kTlr - kTlx);
+        for (auto &t : s.tracks)
+          if (t.group == f.key && t.import)
+            for (auto &c : t.clips) {
+              if (c.excluded) continue;
+              double x0 = std::max((double)kTlx, kTlx + (c.pos - st->viewStart) / spp2);
+              double x1 = std::min((double)kTlr, kTlx + (c.pos + c.len - st->viewStart) / spp2);
+              if (x1 > x0) g.fill(x0, y + kRowH / 2.0 - 4, std::max(x0 + 1, x1), y + kRowH / 2.0 + 4, mixColor(fc, kPanel, 0.35));
+            }
+      }
       bool renaming = st->editKind == 2 && st->editKey == f.key;
       double nw = std::min(120.0, g.width(st->fBold, f.name) + 12);
       if (!renaming) g.text(st->fBold, kInk, f.name, kL + 28, y, kL + 28 + nw, y + kRowH, DT_LEFT);
@@ -2052,7 +2101,7 @@ void paintOptions(State *st, const Gfx &g) {
     std::string rl = opt.trackTemplate.empty() ? "Sorting\xe2\x80\xa6" : "Sorting + template\xe2\x80\xa6";
     double bw = g.width(st->fBody, rl) + 24;
     button(st, g, px + kOpW - 16 - bw, save + 1, px + kOpW - 16, save + 27, rl, H_RULES, 0,
-           "Which words send a track to DIA, FX, MUS or ATMO, and a REAPER track template with your stems and routing.");
+           "Which words send a track to DIA, FX, MUS or BG, and a REAPER track template with your stems and routing.");
   }
   optRow(st, g, px, y, "Show positions in samples too", st->showSamples, true, H_SAMPLES,
          "The selected event's position and length also in samples (at the AAF's sample rate), for checking sync.");
@@ -2148,6 +2197,10 @@ void loadTemplateList(State *st) {
   if (!p.empty()) olaaf::readTrackTemplate(p, &st->tplTracks, nullptr);
 }
 
+// the colors offered in the sorting panel (0xRRGGBB); "More…" opens the system's color picker
+const std::vector<uint32_t> kRuleColors = {0xE8923A, 0xF2A6C8, 0x4A86E8, 0x8FD48A, 0xE0C341, 0xD0574F,
+                                           0x9B7FE0, 0x3FB8C4, 0xB08A5B, 0x9AA0A6};
+
 void saveRules(State *st, const std::vector<SortRule> &rules) {
   setSortRules(rules);
   bool isDefault = sortRulesToText(rules) == sortRulesToText(defaultSortRules());
@@ -2176,21 +2229,41 @@ void paintRules(State *st, const Gfx &g) {
     const SortRule &r = rules[i];
     double cy = y + rowH / 2 - 4;
     g.rfill(l + 16, cy - 8, l + 32, cy + 8, 8, rgbToRef(r.color));
-    addHit(st, l + 12, cy - 12, l + 36, cy + 12, H_RULE_COLOR, (int)i, "The folder's color. Click to change it.");
-    g.text(st->fBold, kInk, r.name, l + 42, y, nameR, y + rowH - 8, DT_LEFT);
-    addHit(st, l + 40, y + 4, nameR, y + rowH - 12, H_RULE_NAME, (int)i, "The folder's name. Click to rename it.");
+    addHit(st, l + 12, cy - 12, l + 36, cy + 12, H_RULE_COLOR, (int)i, "The folder's color. Click: the colors show in this row.");
+    if (!(st->editKind == 6 && st->editKey == std::to_string(i)))
+      g.text(st->fBold, kInk, r.name, l + 42, y, nameR, y + rowH - 8, DT_LEFT);
+    addHit(st, l + 40, y + 4, nameR, y + rowH - 12, H_RULE_NAME, (int)i, "The folder's name. Click and type to rename it.");
     std::string words;
     for (size_t k = 0; k < r.words.size(); k++) words += (k ? ", " : "") + r.words[k];
     if (words.empty()) words = "(no words: nothing goes here by itself)";
-    g.rbox(wordsL, y + 2, wordsR, y + rowH - 10, 8, kLine, kPanel);
     bool cut = false;
-    std::vector<std::string> wl = fitLines(g, st->fSmall, words, wordsR - wordsL - 16, 2, &cut);
-    for (size_t k = 0; k < wl.size(); k++)
-      g.text(st->fSmall, r.words.empty() ? kMute : kInk, wl[k], wordsL + 8, y + 5 + k * 16, wordsR - 8, y + 21 + k * 16,
-             DT_LEFT);
-    static std::string wTip[16];
-    if (i < 16) wTip[i] = "Click to edit the words for " + r.name + ": " + words;
-    addHit(st, wordsL, y + 2, wordsR, y + rowH - 10, H_RULE_WORDS, (int)i, i < 16 ? wTip[i].c_str() : nullptr);
+    if (st->ruleColor == (int)i) { // the colors, right here
+      double sx = wordsL + 2, sy = y + rowH / 2 - 4;
+      for (size_t k = 0; k <= kRuleColors.size(); k++) {
+        bool more = k == kRuleColors.size();
+        if (more) {
+          g.text(st->fSmall, kBlue, "More\xe2\x80\xa6", sx, sy - 10, sx + 50, sy + 10, DT_LEFT);
+          addHit(st, sx - 2, sy - 12, sx + 46, sy + 12, H_RULE_SWATCH, (int)(i * 32 + k), "Any color (the system's color picker).");
+        } else {
+          uint32_t c = kRuleColors[k];
+          if (c == r.color) g.rfill(sx - 3, sy - 11, sx + 19, sy + 11, 11, kInk);
+          g.rfill(sx, sy - 8, sx + 16, sy + 8, 8, rgbToRef(c));
+          addHit(st, sx - 2, sy - 10, sx + 18, sy + 10, H_RULE_SWATCH, (int)(i * 32 + k), "Use this color.");
+        }
+        sx += 24;
+      }
+    } else {
+      bool typing = (st->editKind == 5) && st->editKey == std::to_string(i);
+      g.rbox(wordsL, y + 2, wordsR, y + rowH - 10, 8, typing ? kBlue : kLine, kPanel);
+      std::vector<std::string> wl = fitLines(g, st->fSmall, words, wordsR - wordsL - 16, 2, &cut);
+      if (!typing)
+        for (size_t k = 0; k < wl.size(); k++)
+          g.text(st->fSmall, r.words.empty() ? kMute : kInk, wl[k], wordsL + 8, y + 5 + k * 16, wordsR - 8,
+                 y + 21 + k * 16, DT_LEFT);
+      static std::string wTip[16];
+      if (i < 16) wTip[i] = "Click and type the words for " + r.name + ", separated by commas (Return keeps them, Tab: the next folder): " + words;
+      addHit(st, wordsL, y + 2, wordsR, y + rowH - 10, H_RULE_WORDS, (int)i, i < 16 ? wTip[i].c_str() : nullptr);
+    }
     if (!st->tplTracks.empty()) {
       auto m = match.find(r.name);
       std::string to = m == match.end() ? "own folder" : "\xe2\x86\x92 " + st->tplTracks[(size_t)m->second].name;
@@ -2205,7 +2278,7 @@ void paintRules(State *st, const Gfx &g) {
   button(st, g, l + 16, y, l + 186, y + 28, "Sort the tracks now", H_RULES_SORT, 0,
          "Puts this AAF's tracks into the folders by these words again (Cmd/Ctrl+Z undoes it).");
   button(st, g, l + 196, y, l + 336, y + 28, "Reset the words", H_RULES_RESET, 0,
-         "Back to OLAAF's own folders and words (DIA, FX, MUS, ATMO).");
+         "Back to OLAAF's own folders, colors and words (DIA, FX, MUS, BG).");
   y += 42;
   g.fill(l + 16, y, l + w - 16, y + 1, kLine);
   y += 10;
@@ -2729,7 +2802,7 @@ bool isEditHit(int id) {
   case H_TRACK_CHECK: case H_PAL: case H_PAL_CUSTOM: case H_PAL_NONE: case H_FOLD_ASSIGN: case H_FOLD_NONE:
   case H_FOLD_DELETE: case H_FOLD_NEW: case H_EV_REMOVE: case H_EV_RESTORE: case H_EV_UP: case H_EV_DOWN:
   case H_EV_RESET: case H_EV_MUTE: case H_NEW_FOLDER: case H_TRACK_DELETE: case H_DEST_NEW: case H_DEST_MATCHALL:
-  case H_DEST_PICK: case H_EV_SWAP: case H_TRACK_SWAP: case H_RULES_SORT: case H_REMOVE_EMPTY: case H_TRACK_STEREO:
+  case H_DEST_PICK: case H_EV_SWAP: case H_TRACK_SWAP: case H_RULES_SORT: case H_REMOVE_EMPTY: case H_TRACK_STEREO: case H_SORT_NOW:
     return true;
   }
   return false;
@@ -2996,6 +3069,7 @@ void trackStep(State *st, int dir) {
     return;
   }
   int t = st->order[(size_t)pos];
+  openFolderOf(st, t);
   st->selTracks.clear();
   st->selTracks.insert(t);
   int r = rowOfPos(st, pos); // into view
@@ -3118,7 +3192,11 @@ void moveSelectionBy(State *st, int delta) {
     s.tracks[(size_t)nt].group.clear();
   }
   buildRows(st);
-  for (auto &p : byPos) st->imp->moveClips({p.second}, st->order[(size_t)(p.first + delta)], st->moveAutomation);
+  for (auto &p : byPos) {
+    int to = st->order[(size_t)(p.first + delta)];
+    st->imp->moveClips({p.second}, to, st->moveAutomation);
+    openFolderOf(st, to); // moved into a closed folder: it opens, so they stay in sight
+  }
   st->edited = true;
   buildRows(st);
   // keep the moved events in view
@@ -3216,6 +3294,27 @@ void endEdit(State *st, bool apply) {
     if (Folder *f = st->imp->session().folder(st->editKey))
       if (!v.empty()) f->name = v;
   if (apply && kind == 3 && !v.empty()) st->opt->subdir = safeFileName(v);
+  if (apply && (kind == 5 || kind == 6)) { // a sorting rule's words / name, typed in the panel
+    std::vector<SortRule> rules = sortRules();
+    size_t i = (size_t)atoi(st->editKey.c_str());
+    if (i < rules.size()) {
+      if (kind == 5) {
+        for (auto &ch : v)
+          if (ch == '|') ch = ',';
+        rules[i].words = splitWords(v);
+        saveRules(st, rules);
+      } else if (!v.empty()) {
+        bool taken = v.find_first_of("|;") != std::string::npos;
+        for (size_t k = 0; k < rules.size(); k++)
+          if (k != i && lower(rules[k].name) == lower(v)) taken = true;
+        if (taken) st->tip = "That folder name is taken (or has | or ;).";
+        else {
+          rules[i].name = v;
+          saveRules(st, rules);
+        }
+      }
+    }
+  }
   if (apply && kind == 4 && !v.empty() && st->editTrack >= 0 && st->editTrack < (int)st->imp->session().tracks.size())
     st->imp->session().tracks[(size_t)st->editTrack].name = v;
   ShowWindow(st->tcEdit, SW_HIDE);
@@ -3397,7 +3496,7 @@ void click(State *st, int x, int y, bool shift) {
     InvalidateRect(st->hwnd, NULL, FALSE);
     if (id == H_LANES || id == H_NONE) return;
   }
-  if (st->rulesOpen && !(id >= H_RULES && id <= H_RULES_CLOSE)) {
+  if (st->rulesOpen && !(id >= H_RULES && id <= H_RULES_CLOSE) && id != H_RULE_SWATCH) {
     st->rulesOpen = false;
     InvalidateRect(st->hwnd, NULL, FALSE);
     if (id == H_LANES || id == H_NONE) return;
@@ -3716,39 +3815,37 @@ void click(State *st, int x, int y, bool shift) {
   case H_RULES: st->rulesOpen = true; st->optsOpen = false; break;
   case H_RULES_BG: return;
   case H_RULES_CLOSE: st->rulesOpen = false; break;
-  case H_RULE_COLOR: case H_RULE_NAME: case H_RULE_WORDS: {
+  case H_RULE_COLOR: { // the colors show in the row, in place of the words (click again: words)
+    int i = h ? h->idx : -1;
+    st->ruleColor = st->ruleColor == i ? -1 : i;
+    break;
+  }
+  case H_RULE_SWATCH: {
+    std::vector<SortRule> rules = sortRules();
+    int i = h ? h->idx / 32 : -1, k = h ? h->idx % 32 : -1;
+    if (i < 0 || i >= (int)rules.size()) break;
+    uint32_t c = rules[(size_t)i].color;
+    if (k < (int)kRuleColors.size()) c = kRuleColors[(size_t)k];
+    else if (!st->host || !st->host->pickColor || !st->host->pickColor(st->hwnd, &c)) break; // "More…"
+    rules[(size_t)i].color = c ? c : 1;
+    saveRules(st, rules);
+    for (auto &f : st->imp->session().folders) // the folder in this AAF takes the color right away
+      if (f.key == rules[(size_t)i].name) f.color = rules[(size_t)i].color;
+    st->ruleColor = -1;
+    break;
+  }
+  case H_RULE_NAME: case H_RULE_WORDS: { // typed right in the field
     std::vector<SortRule> rules = sortRules();
     int i = h ? h->idx : -1;
-    if (i < 0 || i >= (int)rules.size() || !st->host) break;
-    SortRule &r = rules[(size_t)i];
-    if (id == H_RULE_COLOR) {
-      uint32_t c = r.color;
-      if (!st->host->pickColor || !st->host->pickColor(st->hwnd, &c)) break;
-      r.color = c ? c : 1;
-    } else if (id == H_RULE_NAME) {
-      std::string v = r.name;
-      if (!st->host->askText || !st->host->askText("OLAAF: folder name", "Folder name", &v)) break;
-      size_t a = v.find_first_not_of(" \t"), b = v.find_last_not_of(" \t");
-      if (a == std::string::npos) break;
-      v = v.substr(a, b - a + 1);
-      for (auto &o : rules)
-        if (&o != &r && lower(o.name) == lower(v)) v.clear();
-      if (v.empty() || v.find_first_of("|;") != std::string::npos) {
-        st->tip = "That name is taken (or has | or ;).";
-        break;
-      }
-      r.name = v;
-    } else {
-      std::string v;
-      for (size_t k = 0; k < r.words.size(); k++) v += (k ? ", " : "") + r.words[k];
-      std::string title = "OLAAF: words for " + r.name;
-      if (!st->host->askText || !st->host->askText(title.c_str(), "Words (separated by commas)", &v)) break;
-      for (auto &ch : v)
-        if (ch == '|') ch = ',';
-      r.words = splitWords(v);
+    if (i < 0 || i >= (int)rules.size() || !h) break;
+    st->ruleColor = -1;
+    std::string v = rules[(size_t)i].name;
+    if (id == H_RULE_WORDS) {
+      v.clear();
+      for (size_t k = 0; k < rules[(size_t)i].words.size(); k++) v += (k ? ", " : "") + rules[(size_t)i].words[k];
     }
-    saveRules(st, rules);
-    break;
+    startEdit(st, id == H_RULE_WORDS ? 5 : 6, h->r, v, std::to_string(i));
+    return;
   }
   case H_RULES_RESET: saveRules(st, defaultSortRules()); st->tip = "OLAAF's own folders and words are back."; break;
   case H_RULES_SORT:
@@ -3902,6 +3999,31 @@ void click(State *st, int x, int y, bool shift) {
     buildRows(st);
     break;
   }
+  case H_FOLD_TOGGLE: { // Alt / Option-click: every folder the same way
+    int fi = h ? h->idx : -1;
+    if (fi < 0 || fi >= (int)s.folders.size()) break;
+    bool close = !st->closedFolders.count(s.folders[(size_t)fi].key);
+    if (GetAsyncKeyState(VK_MENU) & 0x8000) {
+      st->closedFolders.clear();
+      if (close)
+        for (auto &f : s.folders) st->closedFolders.insert(f.key);
+    } else if (close)
+      st->closedFolders.insert(s.folders[(size_t)fi].key);
+    else
+      st->closedFolders.erase(s.folders[(size_t)fi].key);
+    buildRows(st);
+    st->scrollRow = std::max(0, std::min(st->scrollRow, (int)st->rows.size() - kRows));
+    break;
+  }
+  case H_SORT_NOW: // the same as "Sort the tracks now" in the sorting panel
+    st->imp->assignDefaultFolders();
+    st->opt->folders = true;
+    st->closedFolders.clear();
+    st->edited = true;
+    buildRows(st);
+    st->tip = st->imp->session().folders.empty() ? "The names point to one folder only: the tracks stay as they are."
+                                                  : "The tracks are sorted into DIA, FX, MUS and BG by their names (Cmd/Ctrl+Z undoes it).";
+    break;
   case H_TC_RESET: st->tcAbs = 0; st->tcMinus = false; st->tip = "Back at the AAF's own timecode."; break;
   case H_TC_PLUS: st->tcMinus = false; break;
   case H_TC_MINUS: st->tcMinus = true; break;
@@ -4807,6 +4929,11 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
     st.missScroll = atoi(getenv("OLAAF_MISSING"));
   }
   if (getenv("OLAAF_RULES")) st.rulesOpen = true;
+  if (getenv("OLAAF_RULECOLOR")) st.ruleColor = atoi(getenv("OLAAF_RULECOLOR"));
+  if (getenv("OLAAF_CLOSEFX")) {
+    st.closedFolders.insert("FX");
+    buildRows(&st);
+  }
   if (getenv("OLAAF_TCOFF")) st.tcAbs = atof(getenv("OLAAF_TCOFF"));
   if (getenv("OLAAF_SPLIT")) { // the first combined track split again
     for (size_t i = 0; i < imp.session().tracks.size(); i++)
@@ -4977,6 +5104,20 @@ int dialogTranslateKey(MSG *msg) {
   if (st->editKind) { // typing in a field: Return applies, Esc cancels, Tab goes on to the next track name
     if (msg->message == WM_KEYDOWN && msg->wParam == VK_TAB && st->editKind == 4) {
       trackStep(st, (GetAsyncKeyState(VK_SHIFT) & 0x8000) ? -1 : 1);
+      return 1;
+    }
+    if (msg->message == WM_KEYDOWN && msg->wParam == VK_TAB && st->editKind == 5) { // the next folder's words
+      int i = atoi(st->editKey.c_str()) + ((GetAsyncKeyState(VK_SHIFT) & 0x8000) ? -1 : 1);
+      endEdit(st, true);
+      UpdateWindow(st->hwnd);
+      for (auto &hh : st->hits)
+        if (hh.id == H_RULE_WORDS && hh.idx == i) {
+          std::vector<SortRule> rules = sortRules();
+          std::string v;
+          for (size_t k = 0; k < rules[(size_t)i].words.size(); k++) v += (k ? ", " : "") + rules[(size_t)i].words[k];
+          startEdit(st, 5, hh.r, v, std::to_string(i));
+          break;
+        }
       return 1;
     }
     if (msg->message == WM_KEYDOWN && (msg->wParam == VK_RETURN || msg->wParam == VK_ESCAPE)) {
