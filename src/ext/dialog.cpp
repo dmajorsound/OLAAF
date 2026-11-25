@@ -1021,16 +1021,16 @@ void paintTopBar(State *st, const Gfx &g) {
       tf = st->fTiny;
       std::vector<std::string> base = use;
       double each = std::max(24.0, (room - plusW - xW) / nReels - gap - 20); // the shown tab also has its x
-      bool ok = false;
-      for (; each >= 24 && !ok; each -= 4) {
+      bool fits = false;
+      for (; each >= 24 && !fits; each -= 4) {
         for (int k = 0; k < nReels; k++) {
           bool c2 = false;
           std::vector<std::string> fl = fitLines(g, tf, base[(size_t)k], each, 1, &c2);
           use[(size_t)k] = fl.empty() ? base[(size_t)k] : fl[0];
         }
-        ok = tabsW(tf, use) <= room;
+        fits = tabsW(tf, use) <= room;
       }
-      if (!ok) // the full names are in each tab's hint
+      if (!fits) // the full names are in each tab's hint
         for (int k = 0; k < nReels; k++) use[(size_t)k] = std::to_string(k + 1);
     }
     static std::vector<std::string> tabTips;
