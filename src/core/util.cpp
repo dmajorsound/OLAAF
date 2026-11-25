@@ -118,6 +118,35 @@ void trimFolder(const std::string &dir, uint64_t maxBytes) {
   }
 }
 
+void trimSubfolders(const std::string &dir, uint64_t maxBytes) {
+  std::error_code ec;
+  std::vector<std::pair<fs::file_time_type, std::pair<fs::path, uint64_t>>> dirs;
+  uint64_t total = 0;
+  for (fs::directory_iterator it(P(dir), ec), end; !ec && it != end; it.increment(ec)) {
+    std::error_code e2;
+    if (!it->is_directory(e2)) continue;
+    uint64_t sz = 0;
+    fs::file_time_type newest = it->last_write_time(e2);
+    for (fs::recursive_directory_iterator f(it->path(), e2), fe; !e2 && f != fe; f.increment(e2)) {
+      std::error_code e3;
+      if (!f->is_regular_file(e3)) continue;
+      sz += (uint64_t)f->file_size(e3);
+      auto t = f->last_write_time(e3);
+      if (!e3 && t > newest) newest = t;
+    }
+    dirs.push_back({newest, {it->path(), sz}});
+    total += sz;
+  }
+  if (total <= maxBytes) return;
+  std::sort(dirs.begin(), dirs.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+  for (auto &d : dirs) {
+    if (total <= maxBytes) break;
+    std::error_code e4;
+    fs::remove_all(d.second.first, e4);
+    if (!e4) total -= d.second.second;
+  }
+}
+
 bool makeDirs(const std::string &path) {
   std::error_code ec;
   fs::create_directories(P(path), ec);

@@ -63,6 +63,8 @@ struct SortRule {
   uint32_t color;
   std::vector<std::string> words;
 };
+// folder name for an AAF's unpacked embedded audio (changes when the AAF file changes)
+std::string embeddedCacheName(const std::string &aafPath);
 std::vector<SortRule> defaultSortRules(); // DX, FX, MX, BG
 void setSortRules(const std::vector<SortRule> &rules);
 bool migrateFolder(std::string &name, uint32_t &color); // DIA/MUS/ATMO of older versions -> DX/MX/BG
@@ -80,6 +82,14 @@ class Importer {
 public:
   bool load(const std::string &aafPath, const ImportOptions &opt, std::string *error);
   Session &session() { return s_; }
+  // ---- audio inside the AAF (embedded), written out early for waveforms and listening in the dialog ----
+  int embeddedCount(uint64_t *bytes = nullptr) const; // files still inside the AAF (no preview file yet), their size
+  // Writes one embedded file into `dir` and returns its path ("" on failure). It does not touch the session:
+  // safe on a worker thread while the dialog is open (one call at a time per Importer).
+  std::string extractEmbeddedPreview(int media, const std::string &dir);
+  // The files of an earlier, complete unpacking in `dir`: sets foundPath of every embedded file. False if incomplete.
+  bool loadEmbeddedCache(const std::string &dir);
+  void saveEmbeddedCache(const std::string &dir) const;
   // reels: the combined session of all AAFs (after their media is ready) replaces this one
   void adoptSession(Session s) { s_ = std::move(s); haveUnmerged_ = false; }
 

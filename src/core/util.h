@@ -20,6 +20,8 @@ bool renamePath(const std::string &from, const std::string &to); // replaces `to
 void removePath(const std::string &path);
 // deletes the oldest files of a folder (not below it) until it holds at most maxBytes
 void trimFolder(const std::string &dir, uint64_t maxBytes);
+// the same for a folder of folders: whole subfolders go, the oldest first
+void trimSubfolders(const std::string &dir, uint64_t maxBytes);
 // size and last change of a file (for caches); false if it isn't there
 bool fileStamp(const std::string &path, uint64_t *size, int64_t *changed);
 bool copyFile(const std::string &from, const std::string &to);

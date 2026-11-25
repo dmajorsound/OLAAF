@@ -28,7 +28,9 @@ std::vector<PeakCache::Job> PeakCache::jobsFor(const Session &s) {
   std::vector<Job> jobs;
   for (auto &m : s.media) {
     Job j;
-    if (!m.foundPath.empty() && (m.kind == MediaKind::Wav || m.kind == MediaKind::Aiff || m.kind == MediaKind::Mxf)) {
+    // (embedded audio has a file once it was unpacked for the dialog)
+    if (!m.foundPath.empty() && (m.kind == MediaKind::Wav || m.kind == MediaKind::Aiff || m.kind == MediaKind::Mxf ||
+                                 m.kind == MediaKind::Embedded)) {
       j.path = m.foundPath;
       // the file found decides (a located file can differ from what the AAF named)
       std::string e = lower(fileExt(m.foundPath));

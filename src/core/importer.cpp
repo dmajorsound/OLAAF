@@ -194,6 +194,67 @@ void Importer::removeFolder(const std::string &key) {
     if (t.group == key) t.group.clear();
 }
 
+std::string embeddedCacheName(const std::string &aafPath) {
+  uint64_t size = 0, h = 1469598103934665603ull;
+  int64_t changed = 0;
+  fileStamp(aafPath, &size, &changed);
+  for (unsigned char c : lower(aafPath) + strprintf("|%llu|%lld", (unsigned long long)size, (long long)changed))
+    h = (h ^ c) * 1099511628211ull;
+  return strprintf("%016llx", (unsigned long long)h);
+}
+
+int Importer::embeddedCount(uint64_t *bytes) const {
+  int n = 0;
+  uint64_t b = 0;
+  for (auto &m : s_.media)
+    if (m.kind == MediaKind::Embedded && m.foundPath.empty()) {
+      n++;
+      b += (uint64_t)std::max<int64_t>(0, m.length) * (uint64_t)std::max(1, m.channels) * (uint64_t)(std::max(8, m.bits) / 8);
+    }
+  if (bytes) *bytes = b;
+  return n;
+}
+
+std::string Importer::extractEmbeddedPreview(int media, const std::string &dir) {
+  if (!aaf_ || media < 0 || media >= (int)s_.media.size() || !makeDirs(dir)) return "";
+  return aaf_->extractEmbedded(s_.media[(size_t)media], dir);
+}
+
+// index.txt: one line per embedded file, "media index <tab> file name"
+bool Importer::loadEmbeddedCache(const std::string &dir) {
+  FILE *f = openUtf8(joinPath(dir, "index.txt"), "rb");
+  if (!f) return false;
+  std::map<int, std::string> got;
+  char line[4096];
+  while (fgets(line, sizeof(line), f)) {
+    char *tab = strchr(line, '\t');
+    if (!tab) continue;
+    std::string name = tab + 1;
+    while (!name.empty() && (name.back() == '\n' || name.back() == '\r')) name.pop_back();
+    got[atoi(line)] = joinPath(dir, name);
+  }
+  fclose(f);
+  for (size_t i = 0; i < s_.media.size(); i++)
+    if (s_.media[i].kind == MediaKind::Embedded && (!got.count((int)i) || !fileExists(got[(int)i]))) return false;
+  for (size_t i = 0; i < s_.media.size(); i++)
+    if (s_.media[i].kind == MediaKind::Embedded) s_.media[i].foundPath = got[(int)i];
+  return true;
+}
+
+void Importer::saveEmbeddedCache(const std::string &dir) const {
+  std::string text;
+  for (size_t i = 0; i < s_.media.size(); i++) {
+    if (s_.media[i].kind != MediaKind::Embedded) continue;
+    if (s_.media[i].foundPath.empty()) return; // not complete: no index
+    text += strprintf("%d\t", (int)i) + baseName(s_.media[i].foundPath) + "\n";
+  }
+  if (text.empty()) return;
+  if (FILE *f = openUtf8(joinPath(dir, "index.txt"), "wb")) {
+    fwrite(text.data(), 1, text.size(), f);
+    fclose(f);
+  }
+}
+
 std::string defaultSubdir(const Session &s) {
   return safeFileName((s.name.empty() ? stemName(s.aafPath) : s.name) + "_Audio");
 }
@@ -751,6 +812,14 @@ bool Importer::prepareMedia(const ImportOptions &opt, MediaReport *rep, const Pr
 
     if (m.kind == MediaKind::Embedded) {
       if (!ensureDir()) { s_.warnings.push_back("Cannot create folder " + target); continue; }
+      if (fileExists(m.foundPath)) { // already unpacked for the dialog's waveforms: that file is copied
+        std::string out = joinPath(target, baseName(m.foundPath));
+        if (fileExists(out) || copyFile(m.foundPath, out)) {
+          m.outPath = out;
+          r.extracted++;
+          continue;
+        }
+      }
       m.outPath = aaf_->extractEmbedded(m, target);
       if (m.outPath.empty()) s_.warnings.push_back("Could not extract embedded audio \"" + m.name + "\".");
       else r.extracted++;

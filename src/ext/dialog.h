@@ -73,6 +73,8 @@ struct DialogHost {
   // right-click on an event: its file in the Finder / Explorer, its path on the clipboard
   std::function<void(const std::string &path)> revealFile;
   std::function<void(HWND hwnd, const std::string &text)> copyText;
+  // where an AAF's embedded audio is unpacked for waveforms and listening (a folder of its own per AAF)
+  std::function<std::string(const std::string &aafPath)> embeddedDir;
 };
 
 // Shows the dialog. Returns true when the user pressed Import; `opt` and the session's

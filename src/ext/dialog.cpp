@@ -14,7 +14,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <atomic>
 #include <functional>
+#include <memory>
+#include <mutex>
+#include <thread>
 #include <set>
 #include <string>
 #include <vector>
@@ -140,7 +144,7 @@ enum HitId {
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
   H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE,
-  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE, H_TC_RESET, H_REMOVE_EMPTY, H_TRACK_STEREO, H_FOLD_TOGGLE, H_SORT_NOW, H_REEL_SHARE, H_REEL_OWN, H_REEL_ASK_BG, H_REEL_MODE, H_SORT_RESET
+  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE, H_TC_RESET, H_REMOVE_EMPTY, H_TRACK_STEREO, H_FOLD_TOGGLE, H_SORT_NOW, H_REEL_SHARE, H_REEL_OWN, H_REEL_ASK_BG, H_REEL_MODE, H_SORT_RESET, H_EMBED_LOAD, H_EMBED_SKIP, H_EMBED_BG
 };
 
 struct Hit {
@@ -210,6 +214,21 @@ struct State {
   bool optsOpen = false;                 // the Options panel
   struct { double l, t, r, b; } optsBtn{0, 0, 0, 0};
   bool fpsDismissed = false;             // the frame rate warning was closed
+  // audio inside the AAF: asked once per AAF whether to unpack it now (waveforms, listening) or show the items only
+  bool embedAsk = false;
+  std::set<Importer *> embedAsked;
+  struct EmbedJob { // one AAF being unpacked on a worker thread
+    Importer *imp = nullptr;
+    std::string dir;
+    std::vector<int> media;
+    std::thread th;
+    std::mutex mu;
+    std::vector<std::pair<int, std::string>> ready; // unpacked, not yet put into the session (the window does that)
+    std::atomic<int> done{0};
+    std::atomic<bool> stop{false}, finished{false};
+  };
+  std::unique_ptr<EmbedJob> embedJob;
+  std::vector<std::pair<Importer *, std::string>> embedQueue; // AAFs waiting their turn
   bool reelAsk = false;                  // after adding AAFs: same tracks or their own tracks?
   bool reelAskRelated = false;           // ... they look like one film (numbered reels / same track layout)
   std::string reelAskWhy, reelAskNames;
@@ -2520,7 +2539,16 @@ void paintFooter(State *st, const Gfx &g) {
     g.text(st->fSmall, kWarn, pl, hr - pw, t + 1, hr, b, DT_RIGHT);
     hr -= pw + 20;
   }
-  if (st->peaks.busy() && st->peaks.total() > 0) { // the waveforms are still being read
+  if (st->embedJob && !st->embedJob->media.empty()) { // the AAF's own audio is being unpacked
+    int tot = (int)st->embedJob->media.size(), dn = std::min(st->embedJob->done.load(), tot);
+    std::string pl = strprintf("Unpacking embedded audio\xe2\x80\xa6 %d of %d", dn, tot);
+    double pw = g.width(st->fSmall, pl), barW = 90, pr = hr;
+    double bx = pr - barW, cy = (t + b) / 2;
+    g.rfill(bx, cy - 3, pr, cy + 3, 3, mixColor(kPanel, kInk, 0.12));
+    g.rfill(bx, cy - 3, bx + std::max(6.0, barW * dn / tot), cy + 3, 3, kBlue);
+    g.text(st->fSmall, kInk, pl, bx - 10 - pw, t + 1, bx - 8, b, DT_RIGHT);
+    hr = bx - 24 - pw;
+  } else if (st->peaks.busy() && st->peaks.total() > 0) { // the waveforms are still being read
     int dn = std::min(st->peaks.done(), st->peaks.total()), tot = st->peaks.total();
     std::string pl = strprintf("Creating waveforms\xe2\x80\xa6 %d of %d", dn, tot);
     double pw = g.width(st->fSmall, pl), barW = 90, pr = hr;
@@ -2534,6 +2562,142 @@ void paintFooter(State *st, const Gfx &g) {
 }
 
 // ------------------------------------------------------------------ frame rate warning
+
+// ------------------------------------------------------------------ embedded audio
+
+static void embedStartNext(State *st) {
+  if (st->embedJob || st->embedQueue.empty()) return;
+  auto next = st->embedQueue.front();
+  st->embedQueue.erase(st->embedQueue.begin());
+  std::unique_ptr<State::EmbedJob> j(new State::EmbedJob);
+  j->imp = next.first;
+  j->dir = next.second;
+  const Session &s = j->imp->session();
+  for (size_t i = 0; i < s.media.size(); i++)
+    if (s.media[i].kind == MediaKind::Embedded && s.media[i].foundPath.empty()) j->media.push_back((int)i);
+  State::EmbedJob *jp = j.get();
+  j->th = std::thread([jp]() {
+    for (int mi : jp->media) {
+      if (jp->stop) break;
+      std::string p = jp->imp->extractEmbeddedPreview(mi, jp->dir);
+      {
+        std::lock_guard<std::mutex> l(jp->mu);
+        jp->ready.push_back({mi, p});
+      }
+      jp->done++;
+    }
+    jp->finished = true;
+  });
+  st->embedJob = std::move(j);
+  if (st->hwnd) SetTimer(st->hwnd, kPeakTimer, 150, NULL);
+}
+
+// the window's side: unpacked files go into the session; a finished AAF gets its waveforms
+static void embedPoll(State *st) {
+  State::EmbedJob *j = st->embedJob.get();
+  if (!j) return;
+  std::vector<std::pair<int, std::string>> got;
+  {
+    std::lock_guard<std::mutex> l(j->mu);
+    got.swap(j->ready);
+  }
+  Session &s = j->imp->session();
+  for (auto &g : got)
+    if (!g.second.empty() && g.first >= 0 && g.first < (int)s.media.size()) s.media[(size_t)g.first].foundPath = g.second;
+  if (!j->finished) return;
+  { // (the thread may have added its last file after the swap above)
+    std::lock_guard<std::mutex> l(j->mu);
+    for (auto &g : j->ready)
+      if (!g.second.empty() && g.first >= 0 && g.first < (int)s.media.size()) s.media[(size_t)g.first].foundPath = g.second;
+    j->ready.clear();
+  }
+  if (j->th.joinable()) j->th.join();
+  if (!j->stop) j->imp->saveEmbeddedCache(j->dir);
+  bool shown = j->imp == st->imp;
+  st->embedJob.reset();
+  if (shown) {
+    st->peaks.start(st->imp->session());
+    st->peakSeen = -1;
+  }
+  embedStartNext(st);
+}
+
+// stops unpacking (one AAF, or all with nullptr) and waits for the file in work
+static void embedCancel(State *st, Importer *imp) {
+  for (size_t i = st->embedQueue.size(); i-- > 0;)
+    if (!imp || st->embedQueue[i].first == imp) st->embedQueue.erase(st->embedQueue.begin() + (long)i);
+  if (st->embedJob && (!imp || st->embedJob->imp == imp)) {
+    st->embedJob->stop = true;
+    if (st->embedJob->th.joinable()) st->embedJob->th.join();
+    st->embedJob->finished = true;
+    embedPoll(st); // what is unpacked so far is kept (the import copies it)
+  }
+  if (imp) st->embedAsked.erase(imp);
+}
+
+// the shown AAF has audio inside: use an earlier unpacking, or ask (once per AAF)
+static void embedCheck(State *st) {
+  if (!st->host || !st->host->embeddedDir || st->embedAsked.count(st->imp)) return;
+  if (st->imp->embeddedCount() == 0) return;
+  st->embedAsked.insert(st->imp);
+  if (st->imp->loadEmbeddedCache(st->host->embeddedDir(st->imp->session().aafPath))) {
+    st->peaks.start(st->imp->session());
+    st->peakSeen = -1;
+    return;
+  }
+  st->embedAsk = true;
+}
+
+static void embedAnswer(State *st, bool load) {
+  st->embedAsk = false;
+  if (load && st->host && st->host->embeddedDir) {
+    st->embedQueue.push_back({st->imp, st->host->embeddedDir(st->imp->session().aafPath)});
+    embedStartNext(st);
+    st->tip = "Unpacking the AAF's audio in the background: waveforms and listening follow when it is done.";
+  } else
+    st->tip = "Items only: the AAF's audio is unpacked on import.";
+}
+
+void paintEmbedAsk(State *st, const Gfx &g) {
+  if (!st->embedAsk || st->reelAsk) return;
+  uint64_t bytes = 0;
+  int n = st->imp->embeddedCount(&bytes);
+  const double w = 540, pad = 24, tw = w - 2 * pad, btnW = 150, btnH = 32, btnGap = 10;
+  std::string size = bytes >= (1ull << 30) ? strprintf("about %.1f GB", bytes / 1073741824.0)
+                                           : strprintf("about %d MB", (int)std::max<uint64_t>(1, bytes >> 20));
+  std::string finding = strprintf("This AAF carries its audio inside the file: %d file%s, %s.", n, n == 1 ? "" : "s", size.c_str());
+  bool cut = false;
+  std::vector<std::string> body = fitLines(g, st->fBody, finding, tw, 3, &cut);
+  std::vector<std::string> notes;
+  for (const char *t2 : {"Load waveforms: OLAAF unpacks the audio into a temporary folder first, so you see waveforms and can listen. "
+                         "This preview takes a little longer to get ready, more so for big AAFs.",
+                         "Items only: nothing is unpacked now. You see the events without waveforms; the audio is unpacked on import."})
+    for (auto &ln : fitLines(g, st->fSmall, t2, tw, 3, &cut)) notes.push_back(ln);
+  const double titleH = 26, bodyLH = 21, noteLH = 18;
+  double h = pad + titleH + 10 + body.size() * bodyLH + 10 + notes.size() * noteLH + 20 + btnH + pad;
+  double cx = (kTlx + kTlr) / 2 - 40, cy = (kLT + kLB) / 2;
+  double l = cx - w / 2, t = cy - h / 2;
+  g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 14, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
+  g.rbox(l, t, l + w, t + h, 14, kLine, kPop);
+  addHit(st, l, t, l + w, t + h, H_EMBED_BG, 0, nullptr);
+  double y = t + pad;
+  g.text(st->fHead, kInk, "Embedded audio", l + pad, y, l + w - pad, y + titleH, DT_LEFT);
+  y += titleH + 10;
+  for (auto &ln : body) {
+    g.text(st->fBody, kInk, ln, l + pad, y, l + w - pad, y + bodyLH, DT_LEFT);
+    y += bodyLH;
+  }
+  y += 10;
+  for (auto &ln : notes) {
+    g.text(st->fSmall, kMute, ln, l + pad, y, l + w - pad, y + noteLH, DT_LEFT);
+    y += noteLH;
+  }
+  double bb = t + h - pad, bt = bb - btnH, br = l + w - pad;
+  button(st, g, br - btnW, bt, br, bb, "Items only", H_EMBED_SKIP, 0,
+         "Show the events without waveforms. Nothing is unpacked until the import.");
+  button(st, g, br - 2 * btnW - btnGap, bt, br - btnW - btnGap, bb, "Load waveforms", H_EMBED_LOAD, 0,
+         "Unpack the audio now (in the background) for waveforms and listening. Takes a little longer.", true);
+}
 
 // after adding AAFs: do they go onto the same tracks, or their own?
 void paintReelAsk(State *st, const Gfx &g) {
@@ -2780,6 +2944,7 @@ void paint(State *st, HDC dc) {
   paintEventBar(st, g);
   paintFpsWarning(st, g);
   paintReelAsk(st, g);
+  paintEmbedAsk(st, g);
   if (st->folderTrack >= 0 && st->opt->folders) paintFolderPopover(st, g);
   if (st->destTrack >= 0) paintDestPopover(st, g);
   if (st->palTrack >= 0 || !st->palFolder.empty()) paintPalette(st, g);
@@ -3481,6 +3646,8 @@ void switchReel(State *st, int to) {
   buildRows(st);
   st->peaks.start(st->imp->session());
   st->peakSeen = -1;
+  if (st->hwnd) SetTimer(st->hwnd, kPeakTimer, 150, NULL);
+  embedCheck(st);
 }
 
 // the last import's choices for this AAF, when it is the same edit
@@ -3541,6 +3708,13 @@ void click(State *st, int x, int y, bool shift) {
   const Hit *h = hitAt(st, x, y);
   int id = h ? h->id : H_NONE;
   if (st->reelAsk && id != H_REEL_SHARE && id != H_REEL_OWN) return; // answer the question first
+  if (!st->reelAsk && st->embedAsk) {
+    if (id == H_EMBED_LOAD || id == H_EMBED_SKIP) {
+      embedAnswer(st, id == H_EMBED_LOAD);
+      InvalidateRect(st->hwnd, NULL, FALSE);
+    }
+    return;
+  }
   bool inFolderPop = id == H_FOLD_ASSIGN || id == H_FOLD_NONE || id == H_FOLD_RENAME || id == H_FOLD_DELETE ||
                      id == H_FOLD_NEW || id == H_FOLD_POP || id == H_FOLD_COLOR;
   bool inPal = id == H_PAL || id == H_PAL_CUSTOM || id == H_PAL_NONE || id == H_PAL_BG;
@@ -3887,6 +4061,11 @@ void click(State *st, int x, int y, bool shift) {
       switchReel(st, k + 1 < sh.size() ? sh[k + 1] : sh[k - 1]);
     }
     int shownNow = st->reel;
+    { // its audio may still be unpacking: stop that before the AAF goes away
+      Importer *ri;
+      ImportOptions *ro;
+      if (reelAt(st, i, &ri, &ro)) embedCancel(st, ri);
+    }
     st->host->removeReel(i);
     st->laneShow.clear(); // the tabs after it move up
     if (i >= 1) { // gone from the list: the ones after it move up
@@ -4557,6 +4736,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (st->host && st->host->getSetting) st->showSamples = st->host->getSetting("samples") == "1";
     st->peaks.start(st->imp->session()); // waveforms fill in as the files are read
     SetTimer(hwnd, kPeakTimer, 150, NULL);
+    embedCheck(st); // audio inside the AAF: unpack it for waveforms, or items only?
     SetTimer(hwnd, kUpdTimer, 1000, NULL); // is there a newer OLAAF?
     return 0;
   }
@@ -4595,8 +4775,12 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     }
     if (st && wp == kPeakTimer) {
+      if (st->embedJob) {
+        embedPoll(st);
+        InvalidateRect(hwnd, NULL, FALSE);
+      }
       if (st->peaks.version() != st->peakSeen) InvalidateRect(hwnd, NULL, FALSE);
-      if (!st->peaks.busy() && st->peaks.version() == st->peakSeen) KillTimer(hwnd, kPeakTimer);
+      if (!st->embedJob && !st->peaks.busy() && st->peaks.version() == st->peakSeen) KillTimer(hwnd, kPeakTimer);
     }
     return 0;
   case WM_ERASEBKGND: return 1;
@@ -4659,7 +4843,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   case WM_LBUTTONDBLCLK: // the second click of a double-click (Windows / macOS send it instead of a down)
   case WM_LBUTTONDOWN: {
     POINT p = {(short)LOWORD(lp), (short)HIWORD(lp)};
-    if (st->reelAsk) { // the reel question waits for its answer: no drags, no selections underneath
+    if (st->reelAsk || st->embedAsk) { // a question waits for its answer: no drags, no selections underneath
       st->drag = 0; // the buttons answer on release (click)
       return 0;
     }
@@ -4925,13 +5109,13 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return 0;
   }
   case WM_RBUTTONUP: { // the event's file / the track: their menus
-    if (st && st->reelAsk) return 0;
+    if (st && (st->reelAsk || st->embedAsk)) return 0;
     POINT p = {(short)LOWORD(lp), (short)HIWORD(lp)};
     rightClick(st, p);
     return 0;
   }
   case WM_CONTEXTMENU: { // some systems send this instead (or as well): the same menus, once
-    if (st && st->reelAsk) return 0;
+    if (st && (st->reelAsk || st->embedAsk)) return 0;
     if (GetTickCount() - st->menuTick < 600) return 0;
     POINT p = {(short)LOWORD(lp), (short)HIWORD(lp)};
     if (p.x == -1 && p.y == -1) return 0; // from the keyboard: no place to point at
@@ -5011,6 +5195,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     KillTimer(hwnd, kTipTimer);
     KillTimer(hwnd, kUpdTimer);
     if (st) stopPlay(st);
+    if (st) embedCancel(st, nullptr); // waits for the file being unpacked; the import uses the AAF next
     if (st) st->peaks.stop();
     if (st) {
       freeFonts(st);
@@ -5074,6 +5259,7 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   }
   if (getenv("OLAAF_RULESTEXT")) setSortRules(sortRulesFromText(getenv("OLAAF_RULESTEXT")));
   if (getenv("OLAAF_SORTED")) st.imp->assignDefaultFolders();
+  if (getenv("OLAAF_EMBEDASK")) st.embedAsk = true;
   if (getenv("OLAAF_RULES")) st.rulesOpen = true;
   if (getenv("OLAAF_CLOSEFX")) {
     st.closedFolders.insert("FX");
@@ -5294,6 +5480,13 @@ int dialogTranslateKey(MSG *msg) {
       return 1;
     }
     return -1;
+  }
+  if (!st->reelAsk && st->embedAsk && msg->message == WM_KEYDOWN) { // Return: load waveforms, Esc: items only
+    if (msg->wParam == VK_RETURN || msg->wParam == VK_ESCAPE) {
+      embedAnswer(st, msg->wParam == VK_RETURN);
+      InvalidateRect(st->hwnd, NULL, FALSE);
+    }
+    return 1;
   }
   if (st->reelAsk && msg->message == WM_KEYDOWN) { // the reel question: Return / Esc take the suggested answer
     if (msg->wParam == VK_RETURN || msg->wParam == VK_ESCAPE) {

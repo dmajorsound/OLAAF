@@ -467,6 +467,11 @@ static DialogHost makeHost() {
   h.copyText = [](HWND hwnd, const std::string &text) { copyTextToClipboard(hwnd, text); };
   // waveforms already read stay on disk: <REAPER resource folder>/OLAAF/peaks
   PeakCache::setDiskFolder(joinPath(GetResourcePath(), "OLAAF/peaks"));
+  // embedded audio unpacked for the dialog: <REAPER resource folder>/OLAAF/embedded/<AAF>, the newest 5 GB stay
+  trimSubfolders(joinPath(GetResourcePath(), "OLAAF/embedded"), 5000ull << 20);
+  h.embeddedDir = [](const std::string &aafPath) {
+    return joinPath(joinPath(GetResourcePath(), "OLAAF/embedded"), embeddedCacheName(aafPath));
+  };
   // the choices per AAF: <REAPER resource folder>/OLAAF/choices/<name>
   h.loadChoices = [](const std::string &name) {
     std::string text;
