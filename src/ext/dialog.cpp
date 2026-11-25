@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -215,6 +216,11 @@ struct State {
   struct { double l, t, r, b; } optsBtn{0, 0, 0, 0};
   bool fpsDismissed = false;             // the frame rate warning was closed
   // audio inside the AAF: asked once per AAF whether to unpack it now (waveforms, listening) or show the items only
+  // which media files exist (mediaThere)
+  Importer *exImp = nullptr;
+  int exRev = -1, mediaRev = 0;
+  long long exTick = 0;
+  std::vector<char> ex;
   bool embedAsk = false;
   std::set<Importer *> embedAsked;
   struct EmbedJob { // one AAF being unpacked on a worker thread
@@ -847,21 +853,39 @@ std::string fpsShort(double f) {
   return strprintf("%.3f", f);
 }
 
-// media the import needs that are not there
-void mediaCount(State *st, int *ok, int *total) {
-  Session &s = st->imp->session();
+// Is a media file there? Asked for every file on every repaint, so the answers are kept for two seconds
+// (a drive that was just plugged in still shows up) and until the session or a path changes (mediaRev).
+bool mediaThere(State *st, int mi) {
+  const Session &s = st->imp->session();
+  long long now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  if (st->exImp != st->imp || st->exRev != st->mediaRev || st->ex.size() != s.media.size() || now - st->exTick > 2000) {
+    st->ex.assign(s.media.size(), 0);
+    for (size_t i = 0; i < s.media.size(); i++)
+      st->ex[i] = s.media[i].kind == MediaKind::Embedded || fileExists(s.media[i].foundPath);
+    st->exImp = st->imp;
+    st->exRev = st->mediaRev;
+    st->exTick = now;
+  }
+  return mi >= 0 && mi < (int)st->ex.size() && st->ex[(size_t)mi];
+}
+
+// the media the import needs: those of the events that go along
+std::set<int> usedMedia(State *st) {
   std::set<int> used;
-  for (auto &tr : s.tracks)
+  for (auto &tr : st->imp->session().tracks)
     if (tr.import)
       for (auto &c : tr.clips)
         if (!c.excluded)
           for (auto &src : c.sources)
             if (src.media >= 0) used.insert(src.media);
+  return used;
+}
+
+void mediaCount(State *st, int *ok, int *total) {
   *ok = *total = 0;
-  for (int mi : used) {
+  for (int mi : usedMedia(st)) {
     (*total)++;
-    const Media &m = s.media[(size_t)mi];
-    if (m.kind == MediaKind::Embedded || fileExists(m.foundPath)) (*ok)++;
+    if (mediaThere(st, mi)) (*ok)++;
   }
 }
 
@@ -1871,7 +1895,7 @@ void paintArrange(State *st, const Gfx &g) {
             s.media[(size_t)src.media].kind != MediaKind::Embedded)
           missingFile = true;
       if (missingFile && !c.excluded) {
-        double k = std::min(12.0, std::max(6.0, x1 - x0 - 2));
+        double k = std::min(12.0, std::max(2.0, x1 - x0)); // never wider than the event itself
         g.polyAA({{x1 - k, y0}, {x1, y0}, {x1, y0 + k}}, kRed);
       }
       if (x1 - x0 > 30 && !c.name.empty())
@@ -2345,19 +2369,9 @@ void paintRules(State *st, const Gfx &g) {
 
 // media the import needs that are not there (embedded audio is always there)
 std::vector<int> missingMedia(State *st) {
-  Session &s = st->imp->session();
-  std::set<int> used;
-  for (auto &tr : s.tracks)
-    if (tr.import)
-      for (auto &c : tr.clips)
-        if (!c.excluded)
-          for (auto &src : c.sources)
-            if (src.media >= 0) used.insert(src.media);
   std::vector<int> out;
-  for (int mi : used) {
-    const Media &m = s.media[(size_t)mi];
-    if (m.kind != MediaKind::Embedded && !fileExists(m.foundPath)) out.push_back(mi);
-  }
+  for (int mi : usedMedia(st))
+    if (!mediaThere(st, mi)) out.push_back(mi);
   return out;
 }
 
@@ -2529,7 +2543,7 @@ void paintFooter(State *st, const Gfx &g) {
            reelCount(st) > 1 ? "Only this tab: back to its AAF as it is, without the changes and the last import's choices (Cmd/Ctrl+Z brings them back)."
                              : "Back to the AAF as it is, without the changes and the last import's choices (Cmd/Ctrl+Z brings them back).");
     hr = lr - lw - 20;
-    if (!st->tip) hint = "Your choices from the last import of this AAF are back: names, folders, colors, removed and moved events.";
+    if (!st->tip && st->choicesBack) hint = "Your choices from the last import of this AAF are back: names, folders, colors, removed and moved events.";
   }
   bool taken = st->tip && strstr(st->tip, " is taken by ") && strstr(st->tip, "nothing mov");
   if (!st->peaks.busy() && st->peaks.failed() > 0) { // some files found, but no waveform from them
@@ -2539,25 +2553,20 @@ void paintFooter(State *st, const Gfx &g) {
     g.text(st->fSmall, kWarn, pl, hr - pw, t + 1, hr, b, DT_RIGHT);
     hr -= pw + 20;
   }
-  if (st->embedJob && !st->embedJob->media.empty()) { // the AAF's own audio is being unpacked
-    int tot = (int)st->embedJob->media.size(), dn = std::min(st->embedJob->done.load(), tot);
-    std::string pl = strprintf("Unpacking embedded audio\xe2\x80\xa6 %d of %d", dn, tot);
-    double pw = g.width(st->fSmall, pl), barW = 90, pr = hr;
-    double bx = pr - barW, cy = (t + b) / 2;
-    g.rfill(bx, cy - 3, pr, cy + 3, 3, mixColor(kPanel, kInk, 0.12));
+  // background work, with a small bar: unpacking the AAF's own audio, then reading the waveforms
+  auto progress = [&](const char *what, int dn, int tot) {
+    std::string pl = strprintf("%s\xe2\x80\xa6 %d of %d", what, dn, tot);
+    double pw = g.width(st->fSmall, pl), barW = 90, bx = hr - barW, cy = (t + b) / 2;
+    g.rfill(bx, cy - 3, hr, cy + 3, 3, mixColor(kPanel, kInk, 0.12));
     g.rfill(bx, cy - 3, bx + std::max(6.0, barW * dn / tot), cy + 3, 3, kBlue);
     g.text(st->fSmall, kInk, pl, bx - 10 - pw, t + 1, bx - 8, b, DT_RIGHT);
     hr = bx - 24 - pw;
-  } else if (st->peaks.busy() && st->peaks.total() > 0) { // the waveforms are still being read
-    int dn = std::min(st->peaks.done(), st->peaks.total()), tot = st->peaks.total();
-    std::string pl = strprintf("Creating waveforms\xe2\x80\xa6 %d of %d", dn, tot);
-    double pw = g.width(st->fSmall, pl), barW = 90, pr = hr;
-    double bx = pr - barW, cy = (t + b) / 2;
-    g.rfill(bx, cy - 3, pr, cy + 3, 3, mixColor(kPanel, kInk, 0.12));
-    g.rfill(bx, cy - 3, bx + std::max(6.0, barW * dn / tot), cy + 3, 3, kBlue);
-    g.text(st->fSmall, kInk, pl, bx - 10 - pw, t + 1, bx - 8, b, DT_RIGHT);
-    hr = bx - 24 - pw;
-  }
+  };
+  if (st->embedJob && !st->embedJob->media.empty()) {
+    int tot = (int)st->embedJob->media.size();
+    progress("Unpacking embedded audio", std::min(st->embedJob->done.load(), tot), tot);
+  } else if (st->peaks.busy() && st->peaks.total() > 0)
+    progress("Creating waveforms", std::min(st->peaks.done(), st->peaks.total()), st->peaks.total());
   g.text(st->fSmall, taken ? kRed : (st->tip ? kInk : kMute), hint, kL, t + 1, hr, b, DT_LEFT);
 }
 
@@ -2604,6 +2613,7 @@ static void embedPoll(State *st) {
   Session &s = j->imp->session();
   for (auto &g : got)
     if (!g.second.empty() && g.first >= 0 && g.first < (int)s.media.size()) s.media[(size_t)g.first].foundPath = g.second;
+  if (!got.empty()) st->mediaRev++;
   if (!j->finished) return;
   { // (the thread may have added its last file after the swap above)
     std::lock_guard<std::mutex> l(j->mu);
@@ -2640,6 +2650,7 @@ static void embedCheck(State *st) {
   if (!st->host || !st->host->embeddedDir || st->embedAsked.count(st->imp)) return;
   if (st->imp->embeddedCount() == 0) return;
   st->embedAsked.insert(st->imp);
+  st->mediaRev++;
   if (st->imp->loadEmbeddedCache(st->host->embeddedDir(st->imp->session().aafPath))) {
     st->peaks.start(st->imp->session());
     st->peakSeen = -1;
@@ -2658,30 +2669,26 @@ static void embedAnswer(State *st, bool load) {
     st->tip = "Items only: the AAF's audio is unpacked on import.";
 }
 
-void paintEmbedAsk(State *st, const Gfx &g) {
-  if (!st->embedAsk || st->reelAsk) return;
-  uint64_t bytes = 0;
-  int n = st->imp->embeddedCount(&bytes);
+// A question the user answers before going on: title, what was found, gray notes, two buttons
+// (right-aligned on their own row; the suggested one is blue). The height follows the text.
+struct AskButton { const char *label; int id; const char *tip; bool primary; };
+void paintAsk(State *st, const Gfx &g, const char *title, const std::string &finding,
+              const std::vector<const char *> &noteTexts, int bgHit, const AskButton &left, const AskButton &right) {
   const double w = 540, pad = 24, tw = w - 2 * pad, btnW = 150, btnH = 32, btnGap = 10;
-  std::string size = bytes >= (1ull << 30) ? strprintf("about %.1f GB", bytes / 1073741824.0)
-                                           : strprintf("about %d MB", (int)std::max<uint64_t>(1, bytes >> 20));
-  std::string finding = strprintf("This AAF carries its audio inside the file: %d file%s, %s.", n, n == 1 ? "" : "s", size.c_str());
   bool cut = false;
   std::vector<std::string> body = fitLines(g, st->fBody, finding, tw, 3, &cut);
   std::vector<std::string> notes;
-  for (const char *t2 : {"Load waveforms: OLAAF unpacks the audio into a temporary folder first, so you see waveforms and can listen. "
-                         "This preview takes a little longer to get ready, more so for big AAFs.",
-                         "Items only: nothing is unpacked now. You see the events without waveforms; the audio is unpacked on import."})
-    for (auto &ln : fitLines(g, st->fSmall, t2, tw, 3, &cut)) notes.push_back(ln);
+  for (const char *n : noteTexts)
+    for (auto &ln : fitLines(g, st->fSmall, n, tw, 3, &cut)) notes.push_back(ln);
   const double titleH = 26, bodyLH = 21, noteLH = 18;
   double h = pad + titleH + 10 + body.size() * bodyLH + 10 + notes.size() * noteLH + 20 + btnH + pad;
   double cx = (kTlx + kTlr) / 2 - 40, cy = (kLT + kLB) / 2;
   double l = cx - w / 2, t = cy - h / 2;
   g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 14, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
   g.rbox(l, t, l + w, t + h, 14, kLine, kPop);
-  addHit(st, l, t, l + w, t + h, H_EMBED_BG, 0, nullptr);
+  addHit(st, l, t, l + w, t + h, bgHit, 0, nullptr);
   double y = t + pad;
-  g.text(st->fHead, kInk, "Embedded audio", l + pad, y, l + w - pad, y + titleH, DT_LEFT);
+  g.text(st->fHead, kInk, title, l + pad, y, l + w - pad, y + titleH, DT_LEFT);
   y += titleH + 10;
   for (auto &ln : body) {
     g.text(st->fBody, kInk, ln, l + pad, y, l + w - pad, y + bodyLH, DT_LEFT);
@@ -2693,51 +2700,52 @@ void paintEmbedAsk(State *st, const Gfx &g) {
     y += noteLH;
   }
   double bb = t + h - pad, bt = bb - btnH, br = l + w - pad;
-  button(st, g, br - btnW, bt, br, bb, "Items only", H_EMBED_SKIP, 0,
-         "Show the events without waveforms. Nothing is unpacked until the import.");
-  button(st, g, br - 2 * btnW - btnGap, bt, br - btnW - btnGap, bb, "Load waveforms", H_EMBED_LOAD, 0,
-         "Unpack the audio now (in the background) for waveforms and listening. Takes a little longer.", true);
+  button(st, g, br - btnW, bt, br, bb, right.label, right.id, 0, right.tip, right.primary);
+  button(st, g, br - 2 * btnW - btnGap, bt, br - btnW - btnGap, bb, left.label, left.id, 0, left.tip, left.primary);
+}
+
+void paintEmbedAsk(State *st, const Gfx &g) {
+  if (!st->embedAsk || st->reelAsk) return;
+  uint64_t bytes = 0;
+  int n = st->imp->embeddedCount(&bytes);
+  std::string size = bytes >= (1ull << 30) ? strprintf("about %.1f GB", bytes / 1073741824.0)
+                                           : strprintf("about %d MB", (int)std::max<uint64_t>(1, bytes >> 20));
+  paintAsk(st, g, "Embedded audio",
+           strprintf("This AAF carries its audio inside the file: %d file%s, %s.", n, n == 1 ? "" : "s", size.c_str()),
+           {"Load waveforms: OLAAF unpacks the audio into a temporary folder first, so you see waveforms and can listen. "
+            "This preview takes a little longer to get ready, more so for big AAFs.",
+            "Items only: nothing is unpacked now. You see the events without waveforms; the audio is unpacked on import."},
+           H_EMBED_BG,
+           {"Load waveforms", H_EMBED_LOAD, "Unpack the audio now (in the background) for waveforms and listening. Takes a little longer.", true},
+           {"Items only", H_EMBED_SKIP, "Show the events without waveforms. Nothing is unpacked until the import.", false});
+}
+
+// same tracks for all AAFs, or each its own: one setting for every tab
+void reelAnswer(State *st, bool share) {
+  st->reelAsk = false;
+  for (int i = 0; i < reelCount(st); i++) {
+    Importer *ri;
+    ImportOptions *ro;
+    if (reelAt(st, i, &ri, &ro)) ro->reelsShareTracks = share;
+  }
+  st->opt->reelsShareTracks = share;
+  st->tip = share ? "Same tracks: tracks with the same name share one REAPER track."
+                  : "Own tracks: every AAF gets its own REAPER tracks.";
 }
 
 // after adding AAFs: do they go onto the same tracks, or their own?
 void paintReelAsk(State *st, const Gfx &g) {
   if (!st->reelAsk) return;
-  // measured layout: title, the finding, two notes, then the buttons on their own row (right-aligned)
-  const double w = 540, pad = 24, tw = w - 2 * pad, btnW = 150, btnH = 32, btnGap = 10;
-  std::string finding = st->reelAskRelated ? st->reelAskNames + " look like parts of one film: " + st->reelAskWhy + "."
-                                           : st->reelAskNames + " have different track layouts.";
-  bool cut = false;
-  std::vector<std::string> body = fitLines(g, st->fBody, finding, tw, 3, &cut);
-  std::vector<std::string> notes;
-  for (const char *n : {"Same tracks: tracks with the same name share one REAPER track.",
-                        "Own tracks: every AAF keeps its own tracks. Automation never mixes either way.",
-                        "You can change it any time next to the tabs."})
-    for (auto &ln : fitLines(g, st->fSmall, n, tw, 2, &cut)) notes.push_back(ln);
-  const double titleH = 26, bodyLH = 21, noteLH = 18;
-  double h = pad + titleH + 10 + body.size() * bodyLH + 10 + notes.size() * noteLH + 20 + btnH + pad;
-  double cx = (kTlx + kTlr) / 2 - 40, cy = (kLT + kLB) / 2;
-  double l = cx - w / 2, t = cy - h / 2;
-  g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 14, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
-  g.rbox(l, t, l + w, t + h, 14, kLine, kPop);
-  addHit(st, l, t, l + w, t + h, H_REEL_ASK_BG, 0, nullptr);
-  double y = t + pad;
-  g.text(st->fHead, kInk, st->reelAskRelated ? "Same film?" : "A different film?", l + pad, y, l + w - pad, y + titleH, DT_LEFT);
-  y += titleH + 10;
-  for (auto &ln : body) {
-    g.text(st->fBody, kInk, ln, l + pad, y, l + w - pad, y + bodyLH, DT_LEFT);
-    y += bodyLH;
-  }
-  y += 10;
-  for (auto &ln : notes) {
-    g.text(st->fSmall, kMute, ln, l + pad, y, l + w - pad, y + noteLH, DT_LEFT);
-    y += noteLH;
-  }
   bool rec = st->reelAskRelated; // the suggested answer is blue
-  double bb = t + h - pad, bt = bb - btnH, br = l + w - pad;
-  button(st, g, br - btnW, bt, br, bb, "Own tracks", H_REEL_OWN, 0,
-         "Every AAF gets its own REAPER tracks, with the reel in the name.", !rec);
-  button(st, g, br - 2 * btnW - btnGap, bt, br - btnW - btnGap, bb, "Same tracks", H_REEL_SHARE, 0,
-         "Tracks with the same name share one REAPER track; each AAF's automation stays in its own time.", rec);
+  paintAsk(st, g, rec ? "Same film?" : "A different film?",
+           rec ? st->reelAskNames + " look like parts of one film: " + st->reelAskWhy + "."
+               : st->reelAskNames + " have different track layouts.",
+           {"Same tracks: tracks with the same name share one REAPER track.",
+            "Own tracks: every AAF keeps its own tracks. Automation never mixes either way.",
+            "You can change it any time next to the tabs."},
+           H_REEL_ASK_BG,
+           {"Same tracks", H_REEL_SHARE, "Tracks with the same name share one REAPER track; each AAF's automation stays in its own time.", rec},
+           {"Own tracks", H_REEL_OWN, "Every AAF gets its own REAPER tracks, with the reel in the name.", !rec});
 }
 
 void paintFpsWarning(State *st, const Gfx &g) {
@@ -3066,6 +3074,7 @@ void locateOne(State *st, int mi) {
   if (!st->host->pickFile(title.c_str(), &p) || p.empty()) return;
   opt.searchFolders.insert(opt.searchFolders.begin(), dirName(p)); // the others may be next to it
   st->imp->locateMedia(opt);
+  st->mediaRev++;
   s.media[(size_t)mi].foundPath = p; // the file chosen by hand wins
   st->peaks.start(s);
   SetTimer(st->hwnd, kPeakTimer, 150, NULL);
@@ -3100,7 +3109,6 @@ void swapTrack(State *st, int idx) {
 }
 
 void pushUndo(State *st);
-void buildRows(State *st);
 
 // L+R: combines an .L / .R pair into one stereo track, or splits it again (an undo step is pushed before)
 void toggleStereo(State *st, int idx) {
@@ -3565,7 +3573,6 @@ void copyShared(const ImportOptions &from, ImportOptions &to) {
 
 void restoreChoices(State *st);
 void stopPlay(State *st);
-void buildRows(State *st);
 
 // a reel shown for the first time: its whole edit in view, its last choices back
 void initReelView(State *st) {
@@ -4001,16 +4008,7 @@ void click(State *st, int x, int y, bool shift) {
   case H_REEL_SHARE:
   case H_REEL_OWN:
   case H_REEL_MODE: {
-    bool share = id == H_REEL_SHARE ? true : id == H_REEL_OWN ? false : !opt.reelsShareTracks;
-    st->reelAsk = false;
-    for (int i = 0; i < reelCount(st); i++) { // one setting for all AAFs
-      Importer *ri;
-      ImportOptions *ro;
-      if (reelAt(st, i, &ri, &ro)) ro->reelsShareTracks = share;
-    }
-    opt.reelsShareTracks = share;
-    st->tip = share ? "Same tracks: tracks with the same name share one REAPER track."
-                    : "Own tracks: every AAF gets its own REAPER tracks.";
+    reelAnswer(st, id == H_REEL_SHARE ? true : id == H_REEL_OWN ? false : !opt.reelsShareTracks);
     break;
   }
   case H_REEL_ADD: {
@@ -4256,6 +4254,8 @@ void click(State *st, int x, int y, bool shift) {
     if (pickFolder(st->hwnd, "OLAAF: choose the folder that holds the media", dirName(s.aafPath), &p)) {
       opt.searchFolders.insert(opt.searchFolders.begin(), p); // searched first, remembered for next time
       st->imp->locateMedia(opt);
+      st->mediaRev++;
+  st->mediaRev++;
       st->peaks.start(s);
       SetTimer(st->hwnd, kPeakTimer, 150, NULL);
     }
@@ -5440,6 +5440,13 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
     st.fpY = 240;
     st.fpY0 = 210;
   }
+  if (const char *bn = getenv("OLAAF_BENCH")) { // how long one repaint takes
+    auto t0 = std::chrono::steady_clock::now();
+    int n = std::max(1, atoi(bn));
+    for (int i = 0; i < n; i++) paint(&st, dc);
+    fprintf(stderr, "paint: %.2f ms each\n",
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / n);
+  }
   paint(&st, dc);
   if (const char *hp = getenv("OLAAF_HITAT")) { // which hit answers a click at x,y (logical px)
     int x = 0, y = 0;
@@ -5490,14 +5497,7 @@ int dialogTranslateKey(MSG *msg) {
   }
   if (st->reelAsk && msg->message == WM_KEYDOWN) { // the reel question: Return / Esc take the suggested answer
     if (msg->wParam == VK_RETURN || msg->wParam == VK_ESCAPE) {
-      bool share = st->reelAskRelated;
-      st->reelAsk = false;
-      for (int i = 0; i < reelCount(st); i++) {
-        Importer *ri;
-        ImportOptions *ro;
-        if (reelAt(st, i, &ri, &ro)) ro->reelsShareTracks = share;
-      }
-      st->opt->reelsShareTracks = share;
+      reelAnswer(st, st->reelAskRelated);
       InvalidateRect(st->hwnd, NULL, FALSE);
     }
     return 1;

@@ -55,7 +55,7 @@ static int mDraw(HDC, const char *buf, int, RECT *r, int align) {
   int x = (align & DT_CENTER) ? (r->left + r->right) / 2 : (align & DT_RIGHT) ? r->right : r->left;
   clipN++;
   snprintf(t, 1024, "<clipPath id='c%d'><rect x='%ld' y='%ld' width='%ld' height='%ld'/></clipPath><text clip-path='url(#c%d)' x='%d' y='%ld' font-family='%s' font-size='%d' font-weight='%s' fill='%s' text-anchor='%s' dominant-baseline='%s'>",
-           clipN, r->left, r->top, r->right - r->left, r->bottom - r->top, clipN, x, (align & DT_VCENTER) ? (r->top + r->bottom) / 2 : r->top + (long)(curFont.h * 0.95), (curFont.mono ? famMono() : famSans()).c_str(), curFont.h, curFont.bold ? "bold" : "normal", hex(curText).c_str(), anchor, (align & DT_VCENTER) ? "central" : "alphabetic");
+           clipN, r->left, r->top, r->right - r->left, r->bottom - r->top, clipN, x, (align & DT_VCENTER) ? (long)std::lround((r->top + r->bottom) / 2.0 + curFont.h * 0.36) : r->top + (long)(curFont.h * 0.95), (curFont.mono ? famMono() : famSans()).c_str(), curFont.h, curFont.bold ? "bold" : "normal", hex(curText).c_str(), anchor, "alphabetic");
   svg += t; svg += esc(buf); svg += "</text>\n"; return 0; }
 static void mPoly(HDC, POINT *p, int n) { svg += "<polygon points='"; char t[32]; for (int i = 0; i < n; i++) { snprintf(t, 32, "%ld,%ld ", p[i].x, p[i].y); svg += t; } svg += "' fill='" + hex(curBrush) + "'/>\n"; }
 static BOOL mTm(HDC, TEXTMETRIC *tm) { tm->tmHeight = (int)(curFont.h * 1.2); tm->tmInternalLeading = tm->tmHeight - curFont.h; tm->tmAscent = (int)(curFont.h * 0.95); tm->tmDescent = tm->tmHeight - tm->tmAscent; return 1; }
