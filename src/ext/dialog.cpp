@@ -951,14 +951,17 @@ int totalTracks(State *st, std::string *tip) {
 // the OLAAF mark, the name and the version, at the top left, centered on `mid`
 void paintBrand(State *st, const Gfx &g, double mid) {
   g.rfill(16, mid - 15, 46, mid + 15, 8, kBlue);
-  { // the mark: three events of an edit, with their fades (drawn on a 120 grid, 30 units here)
+  { // the mark: two events of an edit and a paper plane landing (drawn on a 120 grid, 30 units here)
     auto clip = [&](double x, double y, double w, double h, double fi, double fo) {
       const double k = 0.25, ox0 = 16, oy0 = mid - 15;
       g.polyAA({{ox0 + x * k, oy0 + (y + h) * k}, {ox0 + (x + fi) * k, oy0 + y * k}, {ox0 + (x + w - fo) * k, oy0 + y * k},
                 {ox0 + (x + w) * k, oy0 + (y + h) * k}},
                kWhiteFixed);
     };
-    clip(22, 30, 52, 16, 10, 0);
+    // a paper plane coming in to land on the tracks (the AAFUGO mark has one taking off)
+    auto pt = [&](double x, double y) { return std::make_pair(16 + x * 0.25, mid - 15 + y * 0.25); };
+    g.polyAA({pt(80, 46), pt(32, 22), pt(54, 24)}, kWhiteFixed);
+    g.polyAA({pt(80, 46), pt(54, 24), pt(53, 9)}, RGB(0xD6, 0xE6, 0xF7));
     clip(46, 52, 52, 16, 12, 12);
     clip(22, 74, 40, 16, 0, 10);
   }
