@@ -64,6 +64,7 @@ struct SortRule {
 };
 std::vector<SortRule> defaultSortRules(); // DX, FX, MX, BG
 void setSortRules(const std::vector<SortRule> &rules);
+bool migrateFolder(std::string &name, uint32_t &color); // DIA/MUS/ATMO of older versions -> DX/MX/BG
 const std::vector<SortRule> &sortRules();
 std::string sortRulesToText(const std::vector<SortRule> &rules);
 std::vector<SortRule> sortRulesFromText(const std::string &text);

@@ -2,6 +2,7 @@
 // Copyright (C) 2026 dmajorsound. Licensed under the GNU GPL v2 or later.
 
 #pragma once
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,12 @@ std::string dirName(const std::string &path);
 std::string joinPath(const std::string &a, const std::string &b);
 bool fileExists(const std::string &path);
 bool makeDirs(const std::string &path);
+bool renamePath(const std::string &from, const std::string &to); // replaces `to`
+void removePath(const std::string &path);
+// deletes the oldest files of a folder (not below it) until it holds at most maxBytes
+void trimFolder(const std::string &dir, uint64_t maxBytes);
+// size and last change of a file (for caches); false if it isn't there
+bool fileStamp(const std::string &path, uint64_t *size, int64_t *changed);
 bool copyFile(const std::string &from, const std::string &to);
 std::string safeFileName(const std::string &name);     // strips / \ : * ? " < > |
 std::string uniquePath(const std::string &path);       // adds -1, -2 … if taken

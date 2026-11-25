@@ -4898,6 +4898,7 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
     st.missingOpen = true;
     st.missScroll = atoi(getenv("OLAAF_MISSING"));
   }
+  if (getenv("OLAAF_RULESTEXT")) setSortRules(sortRulesFromText(getenv("OLAAF_RULESTEXT")));
   if (getenv("OLAAF_RULES")) st.rulesOpen = true;
   if (getenv("OLAAF_CLOSEFX")) {
     st.closedFolders.insert("FX");

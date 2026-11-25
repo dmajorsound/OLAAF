@@ -126,8 +126,17 @@ bool applyChoices(const std::string &text, Importer &imp, ImportOptions &opt, st
   bool bad = false;
   for (size_t i = 0; i < rows.size() && !bad; i++) {
     const auto &r = rows[i];
-    if (r[0] == "folder" && r.size() >= 4)
-      folders.push_back({r[1], r[3], (uint32_t)strtoul(r[2].c_str(), nullptr, 16)});
+    if (r[0] == "folder" && r.size() >= 4) {
+      Folder f{r[1], r[3], (uint32_t)strtoul(r[2].c_str(), nullptr, 16)};
+      std::string key = f.key;
+      uint32_t c = f.color;
+      if (migrateFolder(key, c)) { // a folder saved by an older version
+        if (f.name == f.key) f.name = key;
+        f.key = key;
+        f.color = c;
+      }
+      folders.push_back(f);
+    }
     if (r[0] != "track") continue;
     if (r.size() < 10) { bad = true; break; }
     int uid = atoi(r[1].c_str());
@@ -146,6 +155,13 @@ bool applyChoices(const std::string &text, Importer &imp, ImportOptions &opt, st
     t.import = r[3] == "1";
     t.color = (uint32_t)strtoul(r[5].c_str(), nullptr, 16);
     t.group = r[6];
+    if (!t.group.empty()) { // older versions: DIA/MUS/ATMO, and the folder's old color copied onto the track
+      uint32_t c = t.color;
+      std::string g = t.group;
+      migrateFolder(g, c);
+      t.group = g;
+      if (c != t.color) t.color = 0; // the track takes its folder's color again
+    }
     t.target = r[7];
     t.targetName = r[8];
     if (!r[9].empty()) t.name = r[9];

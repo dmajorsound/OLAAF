@@ -9,6 +9,7 @@
 #include <algorithm>
 #include "../core/audiofile.h"
 #include "../core/importer.h"
+#include "../core/peaks.h"
 #include "../core/report.h"
 #include "../core/track_template.h"
 #include "../core/reels.h"
@@ -464,6 +465,8 @@ static DialogHost makeHost() {
   h.openUrl = [](const std::string &url) { openWebPage(url); };
   h.revealFile = [](const std::string &path) { revealInFileBrowser(path); };
   h.copyText = [](HWND hwnd, const std::string &text) { copyTextToClipboard(hwnd, text); };
+  // waveforms already read stay on disk: <REAPER resource folder>/OLAAF/peaks
+  PeakCache::setDiskFolder(joinPath(GetResourcePath(), "OLAAF/peaks"));
   // the choices per AAF: <REAPER resource folder>/OLAAF/choices/<name>
   h.loadChoices = [](const std::string &name) {
     std::string text;

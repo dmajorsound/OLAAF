@@ -47,10 +47,25 @@ std::vector<SortRule> defaultSortRules() {
                          "ot", "o-ton", "oton", "guide", "sprache", "mic", "off", "narration", "narr", "voice over"}},
       {"FX", 0xF2A6C8, {"sfx", "fx", "effect", "effects", "hardfx", "design", "sd", "foley", "fol", "ger\xc3\xa4usche",
                         "ger\xc3\xa4usch", "gerausche", "steps", "fs", "spot", "moves", "zs", "prop", "nt", "wildtrack"}},
-      {"MX", 0x4A86E8, {"mus", "music", "musik", "mx", "score", "song", "source", "temp", "layout"}},
+      {"MX", 0x7DB4F0, {"mus", "music", "musik", "mx", "score", "song", "source", "temp", "layout"}},
       {"BG", 0x8FD48A, {"atmo", "atmos", "amb", "ambi", "ambience", "bg", "bgs", "roomtone", "rt", "at", "raum"}},
   };
 }
+// Folders saved by older OLAAF versions (DIA, MUS, ATMO and their old colors) become today's DX, FX, MX, BG.
+// A color the user picked stays; only the old default colors are replaced. Returns true when something changed.
+bool migrateFolder(std::string &name, uint32_t &color) {
+  static const std::pair<const char *, const char *> oldNames[] = {{"DIA", "DX"}, {"MUS", "MX"}, {"ATMO", "BG"}};
+  static const uint32_t oldColors[] = {0x5580d4, 0xd9822b, 0xc8423b, 0x1f9a8a, 0x4a86e8};
+  bool changed = false;
+  for (auto &o : oldNames)
+    if (foldCase(name) == foldCase(o.first)) { name = o.second; changed = true; }
+  bool oldColor = std::find(std::begin(oldColors), std::end(oldColors), color & 0xffffff) != std::end(oldColors);
+  if (oldColor)
+    for (auto &d : defaultSortRules())
+      if (d.name == name) { color = d.color; changed = true; }
+  return changed;
+}
+
 void setSortRules(const std::vector<SortRule> &rules) { g_rules = rules.empty() ? defaultSortRules() : rules; }
 const std::vector<SortRule> &sortRules() { return g_rules; }
 
@@ -78,6 +93,11 @@ std::vector<SortRule> sortRulesFromText(const std::string &text) {
       r.name = row.substr(0, p1);
       r.color = (uint32_t)strtoul(row.substr(p1 + 1, p2 - p1 - 1).c_str(), nullptr, 16);
       r.words = splitWords(row.substr(p2 + 1));
+      if (migrateFolder(r.name, r.color)) // an older version's folder: it also gets today's words
+        for (auto &d : defaultSortRules())
+          if (d.name == r.name)
+            for (auto &w : d.words)
+              if (std::find(r.words.begin(), r.words.end(), w) == r.words.end()) r.words.push_back(w);
       if (!r.name.empty()) out.push_back(r);
     }
     a = e + 1;

@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -46,6 +47,8 @@ private:
 
 class PeakCache {
 public:
+  // Where waveforms are kept between imports (REAPER's resource folder/OLAAF/peaks); "" = only in memory.
+  static void setDiskFolder(const std::string &dir);
   ~PeakCache() { stop(); }
   // Starts reading all found media of the session in the background.
   void start(const Session &s);
@@ -78,12 +81,18 @@ private:
     size_t blocks = 0, coarseBlocks = 0;
   };
   void run(std::vector<Job> jobs);
+  static std::shared_ptr<Peaks> loadDisk(const std::string &path);
+  static void saveDisk(const std::string &path, const Peaks &p);
   static std::shared_ptr<Peaks> scan(const Job &j, const std::atomic<bool> &stop, std::string *why);
   std::vector<Job> jobsFor(const Session &s);
 
   mutable std::mutex mu_;
   std::vector<std::shared_ptr<Peaks>> peaks_;
   std::vector<std::string> why_; // why a found file gives no waveform ("" = fine or not read yet)
+  // every file read in this dialog, by path: switching reel tabs doesn't read them again
+  std::map<std::string, std::shared_ptr<Peaks>> byPath_;
+  std::map<std::string, std::string> whyByPath_;
+  void prefill(const std::vector<Job> &jobs); // peaks_ / why_ from what was read before
   std::thread th_;
   std::atomic<bool> stop_{false}, busy_{false};
   std::atomic<int> version_{0}, done_{0}, total_{0};

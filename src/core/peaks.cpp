@@ -43,11 +43,7 @@ std::vector<PeakCache::Job> PeakCache::jobsFor(const Session &s) {
 void PeakCache::start(const Session &s) {
   stop();
   auto jobs = jobsFor(s);
-  {
-    std::lock_guard<std::mutex> l(mu_);
-    peaks_.assign(jobs.size(), nullptr);
-    why_.assign(jobs.size(), std::string());
-  }
+  prefill(jobs);
   stop_ = false;
   busy_ = true;
   th_ = std::thread([this, jobs]() { run(jobs); });
@@ -56,13 +52,112 @@ void PeakCache::start(const Session &s) {
 void PeakCache::runNow(const Session &s) {
   stop();
   auto jobs = jobsFor(s);
-  {
-    std::lock_guard<std::mutex> l(mu_);
-    peaks_.assign(jobs.size(), nullptr);
-    why_.assign(jobs.size(), std::string());
-  }
+  prefill(jobs);
   stop_ = false;
   run(jobs);
+}
+
+// ---- waveforms on disk: one small file per media file, named by a hash of its path ----
+// It is used only while the media file has the same size and date as when it was read.
+static std::string g_diskDir;
+static std::mutex g_diskMu;
+void PeakCache::setDiskFolder(const std::string &dir) {
+  {
+    std::lock_guard<std::mutex> l(g_diskMu);
+    g_diskDir = dir;
+  }
+  if (!dir.empty()) trimFolder(dir, 2000ull << 20); // keeps the newest 2 GB
+}
+
+static uint64_t fnv64(const std::string &s) {
+  uint64_t h = 1469598103934665603ull;
+  for (unsigned char c : s) h = (h ^ c) * 1099511628211ull;
+  return h;
+}
+
+static const char kPeakMagic[8] = {'O', 'L', 'P', 'K', '0', '0', '0', '1'};
+
+static std::string diskName(const std::string &path) {
+  std::lock_guard<std::mutex> l(g_diskMu);
+  if (g_diskDir.empty()) return "";
+  return joinPath(g_diskDir, strprintf("%016llx.olpk", (unsigned long long)fnv64(path)));
+}
+
+std::shared_ptr<PeakCache::Peaks> PeakCache::loadDisk(const std::string &path) {
+  std::string name = diskName(path);
+  uint64_t size = 0;
+  int64_t changed = 0;
+  if (name.empty() || !fileStamp(path, &size, &changed)) return nullptr;
+  FILE *f = openUtf8(name, "rb");
+  if (!f) return nullptr;
+  auto p = std::make_shared<Peaks>();
+  bool ok = false;
+  do {
+    char magic[8];
+    uint64_t sz, fineN, coarseN, blocks, cblocks;
+    int64_t ch;
+    int32_t channels, rate;
+    uint32_t plen;
+    if (fread(magic, 1, 8, f) != 8 || memcmp(magic, kPeakMagic, 8)) break;
+    if (fread(&plen, 4, 1, f) != 1 || plen > 65536) break;
+    std::string stored(plen, '\0');
+    if (plen && fread(&stored[0], 1, plen, f) != plen) break;
+    if (stored != path) break; // another file with the same hash
+    if (fread(&sz, 8, 1, f) != 1 || fread(&ch, 8, 1, f) != 1 || sz != size || ch != changed) break;
+    if (fread(&channels, 4, 1, f) != 1 || fread(&rate, 4, 1, f) != 1) break;
+    if (fread(&blocks, 8, 1, f) != 1 || fread(&cblocks, 8, 1, f) != 1) break;
+    if (fread(&fineN, 8, 1, f) != 1 || fread(&coarseN, 8, 1, f) != 1) break;
+    if (channels <= 0 || channels > 64 || fineN != blocks * (uint64_t)channels || coarseN != cblocks * (uint64_t)channels ||
+        fineN > (1ull << 32))
+      break;
+    p->channels = channels;
+    p->rate = rate;
+    p->blocks = (size_t)blocks;
+    p->coarseBlocks = (size_t)cblocks;
+    p->fine.resize((size_t)fineN);
+    p->coarse.resize((size_t)coarseN);
+    if (fineN && fread(p->fine.data(), 1, (size_t)fineN, f) != fineN) break;
+    if (coarseN && fread(p->coarse.data(), 1, (size_t)coarseN, f) != coarseN) break;
+    ok = true;
+  } while (false);
+  fclose(f);
+  return ok ? p : nullptr;
+}
+
+void PeakCache::saveDisk(const std::string &path, const Peaks &p) {
+  std::string name = diskName(path);
+  uint64_t size = 0;
+  int64_t changed = 0;
+  if (name.empty() || !fileStamp(path, &size, &changed)) return;
+  makeDirs(dirName(name));
+  std::string tmp = name + ".part";
+  FILE *f = openUtf8(tmp, "wb");
+  if (!f) return;
+  uint32_t plen = (uint32_t)path.size();
+  int32_t channels = p.channels, rate = p.rate;
+  uint64_t blocks = p.blocks, cblocks = p.coarseBlocks, fineN = p.fine.size(), coarseN = p.coarse.size();
+  bool ok = fwrite(kPeakMagic, 1, 8, f) == 8 && fwrite(&plen, 4, 1, f) == 1 &&
+            (!plen || fwrite(path.data(), 1, plen, f) == plen) && fwrite(&size, 8, 1, f) == 1 &&
+            fwrite(&changed, 8, 1, f) == 1 && fwrite(&channels, 4, 1, f) == 1 && fwrite(&rate, 4, 1, f) == 1 &&
+            fwrite(&blocks, 8, 1, f) == 1 && fwrite(&cblocks, 8, 1, f) == 1 && fwrite(&fineN, 8, 1, f) == 1 &&
+            fwrite(&coarseN, 8, 1, f) == 1 && (!fineN || fwrite(p.fine.data(), 1, fineN, f) == fineN) &&
+            (!coarseN || fwrite(p.coarse.data(), 1, coarseN, f) == coarseN);
+  fclose(f);
+  if (ok) ok = renamePath(tmp, name);
+  if (!ok) removePath(tmp);
+}
+
+void PeakCache::prefill(const std::vector<Job> &jobs) {
+  std::lock_guard<std::mutex> l(mu_);
+  peaks_.assign(jobs.size(), nullptr);
+  why_.assign(jobs.size(), std::string());
+  for (size_t i = 0; i < jobs.size(); i++) {
+    if (jobs[i].path.empty()) continue;
+    auto p = byPath_.find(jobs[i].path);
+    if (p != byPath_.end()) peaks_[i] = p->second;
+    auto w = whyByPath_.find(jobs[i].path);
+    if (w != whyByPath_.end()) why_[i] = w->second;
+  }
 }
 
 void PeakCache::stop() {
@@ -74,12 +169,20 @@ void PeakCache::stop() {
 void PeakCache::run(std::vector<Job> jobs) {
   busy_ = true;
   int n = 0;
-  for (auto &j : jobs) n += !j.path.empty();
+  {
+    std::lock_guard<std::mutex> l(mu_); // only the files not read before count
+    for (size_t i = 0; i < jobs.size(); i++)
+      if (!jobs[i].path.empty() && !peaks_[i] && why_[i].empty()) n++;
+  }
   total_ = n;
   done_ = 0;
   // the same file can feed several media entries: read it once
   for (size_t i = 0; i < jobs.size() && !stop_; i++) {
     if (jobs[i].path.empty()) continue;
+    {
+      std::lock_guard<std::mutex> l(mu_);
+      if (peaks_[i] || !why_[i].empty()) continue; // read before (another reel, or the last time this one was shown)
+    }
     std::shared_ptr<Peaks> p;
     for (size_t k = 0; k < i; k++)
       if (jobs[k].path == jobs[i].path) {
@@ -88,16 +191,23 @@ void PeakCache::run(std::vector<Job> jobs) {
         break;
       }
     std::string why;
-    if (!p) p = scan(jobs[i], stop_, &why);
+    bool fromDisk = false;
+    if (!p) fromDisk = (p = loadDisk(jobs[i].path)) != nullptr; // read in an earlier import
+    if (!p) {
+      p = scan(jobs[i], stop_, &why);
+      if (p && !stop_ && !fromDisk) saveDisk(jobs[i].path, *p);
+    }
     if (!p && !stop_) {
       std::lock_guard<std::mutex> l(mu_);
       if (i < why_.size()) why_[i] = why.empty() ? "the file can't be read" : why;
+      whyByPath_[jobs[i].path] = why_[i];
     }
     done_++;
     if (!p) continue;
     {
       std::lock_guard<std::mutex> l(mu_);
       peaks_[i] = p;
+      byPath_[jobs[i].path] = p;
     }
     version_++;
   }

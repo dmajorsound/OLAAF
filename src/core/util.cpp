@@ -75,6 +75,49 @@ bool fileExists(const std::string &path) {
   return !path.empty() && fs::is_regular_file(P(path), ec);
 }
 
+bool fileStamp(const std::string &path, uint64_t *size, int64_t *changed) {
+  std::error_code ec;
+  auto sz = fs::file_size(P(path), ec);
+  if (ec) return false;
+  auto t = fs::last_write_time(P(path), ec);
+  if (ec) return false;
+  *size = (uint64_t)sz;
+  *changed = (int64_t)t.time_since_epoch().count();
+  return true;
+}
+
+bool renamePath(const std::string &from, const std::string &to) {
+  std::error_code ec;
+  fs::rename(P(from), P(to), ec);
+  return !ec;
+}
+
+void removePath(const std::string &path) {
+  std::error_code ec;
+  fs::remove(P(path), ec);
+}
+
+void trimFolder(const std::string &dir, uint64_t maxBytes) {
+  std::error_code ec;
+  std::vector<std::pair<fs::file_time_type, std::pair<fs::path, uint64_t>>> files;
+  uint64_t total = 0;
+  for (fs::directory_iterator it(P(dir), ec), end; !ec && it != end; it.increment(ec)) {
+    std::error_code e2;
+    if (!it->is_regular_file(e2)) continue;
+    uint64_t sz = (uint64_t)it->file_size(e2);
+    if (e2) continue;
+    files.push_back({it->last_write_time(e2), {it->path(), sz}});
+    total += sz;
+  }
+  if (total <= maxBytes) return;
+  std::sort(files.begin(), files.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+  for (auto &f : files) {
+    if (total <= maxBytes) break;
+    std::error_code e3;
+    if (fs::remove(f.second.first, e3)) total -= f.second.second;
+  }
+}
+
 bool makeDirs(const std::string &path) {
   std::error_code ec;
   fs::create_directories(P(path), ec);
