@@ -140,7 +140,7 @@ enum HitId {
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
   H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE,
-  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE, H_TC_RESET, H_REMOVE_EMPTY, H_TRACK_STEREO, H_FOLD_TOGGLE, H_SORT_NOW
+  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE, H_TC_RESET, H_REMOVE_EMPTY, H_TRACK_STEREO, H_FOLD_TOGGLE, H_SORT_NOW, H_REEL_SHARE, H_REEL_OWN, H_REEL_ASK_BG, H_REEL_MODE
 };
 
 struct Hit {
@@ -210,6 +210,9 @@ struct State {
   bool optsOpen = false;                 // the Options panel
   struct { double l, t, r, b; } optsBtn{0, 0, 0, 0};
   bool fpsDismissed = false;             // the frame rate warning was closed
+  bool reelAsk = false;                  // after adding AAFs: same tracks or their own tracks?
+  bool reelAskRelated = false;           // ... they look like one film (numbered reels / same track layout)
+  std::string reelAskWhy, reelAskNames;
   int hoverRow = -1;                     // row under the mouse (its track icons show)
   int playClip = 0;                      // the event being listened to (0 = none)
   double playPos = -1;                   // seconds into it
@@ -244,6 +247,7 @@ struct State {
   bool rulesOpen = false;                // the folder sorting rules and the track template
   std::set<std::string> closedFolders;   // folders shown closed in the track list (their tracks still import)
   bool choicesBack = false;              // the last import's choices for this AAF were put back
+  bool freshNow = false;                 // "Start fresh" was the last step (nothing to go back to)
   struct Fresh { std::vector<Track> tracks; std::vector<Folder> folders; std::vector<VideoClip> video; ImportOptions opt; };
   Fresh fresh;                           // how it was before, for "Start fresh"
   // reels: what each AAF tab had when another one was shown
@@ -251,7 +255,7 @@ struct State {
     bool inited = false;
     int scrollRow = 0;
     double viewStart = 0, viewLen = 60, tcAbs = 0, playhead = -1;
-    bool tcMinus = false, edited = false, merge = true, choicesBack = false;
+    bool tcMinus = false, edited = false, merge = true, choicesBack = false, freshNow = false;
     std::set<int> sel, solo;
     std::vector<Snap> undo, redo;
     Fresh fresh;
@@ -868,13 +872,15 @@ int totalTracks(State *st, std::string *tip) {
       own++;
       std::string k = lower(tr.name);
       while (!k.empty() && k.back() == ' ') k.pop_back();
+      if (!ro->reelsShareTracks) k += strprintf("|reel%d", i); // every AAF its own tracks
       keys.insert(k + "|" + tr.target);
     }
     list += (list.empty() ? "" : ", ") + reelLabel(ri->session(), i) + strprintf(": %d", own);
   }
   if (tip)
-    *tip = strprintf("%d tracks in REAPER from all AAFs (%s). Tracks with the same name share one track.",
-                     (int)keys.size(), list.c_str());
+    *tip = strprintf("%d tracks in REAPER from all AAFs (%s). %s", (int)keys.size(), list.c_str(),
+                     st->opt->reelsShareTracks ? "Tracks with the same name share one track."
+                                               : "Every AAF gets its own tracks.");
   return (int)keys.size();
 }
 
@@ -1054,6 +1060,16 @@ void paintTopBar(State *st, const Gfx &g) {
       g.text(st->fSmall, kMute, al, x, mid - 22, x + aw + 2, mid, DT_LEFT);
       addHit(st, x, mid - 22, x + aw + 2, mid, H_NONE, 0, allTip.c_str());
       x += aw + 4;
+      // same tracks for all AAFs, or each its own: click to switch
+      const char *ml = st->opt->reelsShareTracks ? "same tracks" : "own tracks";
+      double mw = g.width(st->fSmall, ml) + 16;
+      g.rbox(x, mid - 20, x + mw, mid - 2, 9, kLine, kFace);
+      g.text(st->fSmall, kInk, ml, x, mid - 20, x + mw, mid - 2, DT_CENTER);
+      addHit(st, x, mid - 21, x + mw, mid - 1, H_REEL_MODE, 0,
+             st->opt->reelsShareTracks
+                 ? "Same tracks: tracks with the same name share one REAPER track (each AAF's automation stays in its own time). Click: every AAF gets its own tracks."
+                 : "Own tracks: every AAF gets its own REAPER tracks (the reel in the name). Click: tracks with the same name share one track.");
+      x += mw + 4;
     }
     nmW = x - x0;
   } else {
@@ -2470,13 +2486,15 @@ void paintFooter(State *st, const Gfx &g) {
                              : "Hover over anything for a hint. Space plays from the playhead, Shift + Space the selected event, H "
                                "shows all shortcuts.";
   double hr = kR - 150;
-  if (st->choicesBack) {
+  // every AAF (tab) can go back to how it came in: after the last import's choices, or after edits here
+  if ((st->choicesBack || st->edited || !st->undo.empty()) && !st->freshNow) {
     const char *ll = "Start fresh";
     double lw = g.width(st->fSmall, ll);
     double lr = kR - 170;
     g.text(st->fSmall, kBlue, ll, lr - lw, t + 1, lr, b, DT_RIGHT);
     addHit(st, lr - lw - 4, t + 4, lr + 4, b - 4, H_FRESH, 0,
-           "Forget the last import's choices for this AAF and start with the AAF as it is (Cmd/Ctrl+Z brings them back).");
+           reelCount(st) > 1 ? "Only this tab: back to its AAF as it is, without the changes and the last import's choices (Cmd/Ctrl+Z brings them back)."
+                             : "Back to the AAF as it is, without the changes and the last import's choices (Cmd/Ctrl+Z brings them back).");
     hr = lr - lw - 20;
     if (!st->tip) hint = "Your choices from the last import of this AAF are back: names, folders, colors, removed and moved events.";
   }
@@ -2502,6 +2520,38 @@ void paintFooter(State *st, const Gfx &g) {
 }
 
 // ------------------------------------------------------------------ frame rate warning
+
+// after adding AAFs: do they go onto the same tracks, or their own?
+void paintReelAsk(State *st, const Gfx &g) {
+  if (!st->reelAsk) return;
+  double w = 520, h = 172;
+  double cx = (kTlx + kTlr) / 2 - 40, cy = (kLT + kLB) / 2;
+  double l = cx - w / 2, t = cy - h / 2;
+  g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 14, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
+  g.rbox(l, t, l + w, t + h, 14, kLine, kPop);
+  addHit(st, l, t, l + w, t + h, H_REEL_ASK_BG, 0, nullptr);
+  g.text(st->fHead, kInk, st->reelAskRelated ? "Same film?" : "A different film?", l + 24, t + 18, l + w - 16, t + 42, DT_LEFT);
+  double y = t + 50;
+  std::string line1 = st->reelAskRelated ? st->reelAskNames + " look like parts of one film: " + st->reelAskWhy + "."
+                                         : st->reelAskNames + " have different track layouts.";
+  bool cut = false;
+  for (auto &ln : fitLines(g, st->fBody, line1, w - 48, 2, &cut)) {
+    g.text(st->fBody, kInk, ln, l + 24, y, l + w - 24, y + 20, DT_LEFT);
+    y += 20;
+  }
+  y += 4;
+  g.text(st->fSmall, kMute, "Same tracks: tracks with the same name share one REAPER track.", l + 24, y, l + w - 24, y + 18, DT_LEFT);
+  y += 17;
+  g.text(st->fSmall, kMute, "Own tracks: every AAF keeps its own tracks. Automation never mixes either way.", l + 24, y,
+         l + w - 24, y + 18, DT_LEFT);
+  bool rec = st->reelAskRelated; // the recommended one is blue
+  double bt = t + h - 46, bb = t + h - 16;
+  button(st, g, l + w - 296, bt, l + w - 160, bb, "Same tracks", H_REEL_SHARE, 0,
+         "Tracks with the same name share one REAPER track; each AAF's automation stays in its own time.", rec);
+  button(st, g, l + w - 152, bt, l + w - 16, bb, "Own tracks", H_REEL_OWN, 0,
+         "Every AAF gets its own REAPER tracks, with the reel in the name.", !rec);
+  g.text(st->fSmall, kMute, "Change it any time next to the tabs.", l + 24, bt, l + w - 300, bb, DT_LEFT);
+}
 
 void paintFpsWarning(State *st, const Gfx &g) {
   double proj = 0, projSr = 0;
@@ -2703,6 +2753,7 @@ void paint(State *st, HDC dc) {
   paintArrange(st, g);
   paintEventBar(st, g);
   paintFpsWarning(st, g);
+  paintReelAsk(st, g);
   if (st->folderTrack >= 0 && st->opt->folders) paintFolderPopover(st, g);
   if (st->destTrack >= 0) paintDestPopover(st, g);
   if (st->palTrack >= 0 || !st->palFolder.empty()) paintPalette(st, g);
@@ -2760,6 +2811,7 @@ void pushUndo(State *st) {
   st->undo.push_back({s.tracks, s.folders, st->sel, st->edited});
   if (st->undo.size() > 100) st->undo.erase(st->undo.begin());
   st->redo.clear();
+  st->freshNow = false;
 }
 
 void undoRedo(State *st, bool isUndo) {
@@ -2776,6 +2828,7 @@ void undoRedo(State *st, bool isUndo) {
   s.folders = sn.folders;
   st->sel = sn.sel;
   st->edited = sn.edited;
+  st->freshNow = false;
   from.pop_back();
   if (st->playClip || st->playTL) stopPlay(st);
   st->selTracks.clear();
@@ -3339,6 +3392,7 @@ void initReelView(State *st) {
   st->undo.clear();
   st->redo.clear();
   st->edited = false;
+  st->freshNow = false;
 }
 
 void switchReel(State *st, int to) {
@@ -3365,6 +3419,7 @@ void switchReel(State *st, int to) {
   v.edited = st->edited;
   v.merge = st->merge;
   v.choicesBack = st->choicesBack;
+  v.freshNow = st->freshNow;
   v.sel = st->sel;
   v.solo = st->solo;
   v.undo = std::move(st->undo);
@@ -3389,6 +3444,7 @@ void switchReel(State *st, int to) {
     st->edited = w.edited;
     st->merge = w.merge;
     st->choicesBack = w.choicesBack;
+    st->freshNow = w.freshNow;
     st->sel = w.sel;
     st->solo = w.solo;
     st->undo = std::move(w.undo);
@@ -3458,6 +3514,7 @@ void click(State *st, int x, int y, bool shift) {
   ImportOptions &opt = *st->opt;
   const Hit *h = hitAt(st, x, y);
   int id = h ? h->id : H_NONE;
+  if (st->reelAsk && id != H_REEL_SHARE && id != H_REEL_OWN) return; // answer the question first
   bool inFolderPop = id == H_FOLD_ASSIGN || id == H_FOLD_NONE || id == H_FOLD_RENAME || id == H_FOLD_DELETE ||
                      id == H_FOLD_NEW || id == H_FOLD_POP || id == H_FOLD_COLOR;
   bool inPal = id == H_PAL || id == H_PAL_CUSTOM || id == H_PAL_NONE || id == H_PAL_BG;
@@ -3741,6 +3798,21 @@ void click(State *st, int x, int y, bool shift) {
   case H_MISS_CLOSE: st->missingOpen = false; break;
   case H_MISS_PAGE: st->missScroll += (h ? h->idx : 1) * ((int)kMissRows - 1); break;
   case H_REEL: switchReel(st, h ? h->idx : 0); break;
+  case H_REEL_SHARE:
+  case H_REEL_OWN:
+  case H_REEL_MODE: {
+    bool share = id == H_REEL_SHARE ? true : id == H_REEL_OWN ? false : !opt.reelsShareTracks;
+    st->reelAsk = false;
+    for (int i = 0; i < reelCount(st); i++) { // one setting for all AAFs
+      Importer *ri;
+      ImportOptions *ro;
+      if (reelAt(st, i, &ri, &ro)) ro->reelsShareTracks = share;
+    }
+    opt.reelsShareTracks = share;
+    st->tip = share ? "Same tracks: tracks with the same name share one REAPER track."
+                    : "Own tracks: every AAF gets its own REAPER tracks.";
+    break;
+  }
   case H_REEL_ADD: {
     if (!st->host || !st->host->addReels) break;
     stopPlay(st);
@@ -3750,8 +3822,26 @@ void click(State *st, int x, int y, bool shift) {
     if (added > 0) {
       switchReel(st, before);
       if (st->reelMsg.empty())
-        st->reelMsg = strprintf("%d reel%s added at %s own timecode. Tracks with the same name share one REAPER track.", added,
-                                added == 1 ? "" : "s", added == 1 ? "its" : "their");
+        st->reelMsg = strprintf("%d reel%s added at %s own timecode.", added, added == 1 ? "" : "s", added == 1 ? "its" : "their");
+      // one film (numbered reels, the same track layout)? Then ask: same tracks or their own?
+      std::vector<Session> ss;
+      std::vector<std::string> names;
+      for (int i : shownReels(st)) {
+        Importer *ri;
+        ImportOptions *ro;
+        if (!reelAt(st, i, &ri, &ro)) continue;
+        ss.push_back(ri->session());
+        names.push_back(reelLabel(ri->session(), i));
+      }
+      if (ss.size() >= 2) {
+        std::vector<std::string> nl = reelNumberLabels(names);
+        if (nl.empty()) nl = reelShortLabels(names);
+        st->reelAskNames.clear();
+        for (size_t k = 0; k < nl.size(); k++)
+          st->reelAskNames += (k == 0 ? "" : k + 1 == nl.size() ? " and " : ", ") + nl[k];
+        st->reelAskRelated = reelsBelongTogether(ss, &st->reelAskWhy);
+        st->reelAsk = true;
+      }
     }
     st->tip = st->reelMsg.empty() ? nullptr : st->reelMsg.c_str();
     break;
@@ -3794,9 +3884,12 @@ void click(State *st, int x, int y, bool shift) {
     opt = st->fresh.opt;
     st->merge = opt.mergeStereo;
     st->choicesBack = false;
+    st->edited = false;
+    st->freshNow = true;
     st->sel.clear();
     buildRows(st);
-    st->tip = "Started fresh: the AAF as it is.";
+    st->tip = reelCount(st) > 1 ? "Started fresh: this tab's AAF as it is (the other tabs keep their changes)."
+                                : "Started fresh: the AAF as it is.";
     break;
   }
   case H_RULES: st->rulesOpen = true; st->optsOpen = false; break;
@@ -5010,6 +5103,23 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
       return true;
     };
     st.reelViews.resize(1 + moreImp.size());
+    if (getenv("OLAAF_REELASK")) { // the question after adding AAFs
+      std::vector<Session> ss;
+      std::vector<std::string> names2;
+      for (int i = 0; i < 1 + (int)moreImp.size(); i++) {
+        Importer *ri;
+        ImportOptions *ro;
+        host.reelAt(i, &ri, &ro);
+        ss.push_back(ri->session());
+        names2.push_back(reelLabel(ri->session(), i));
+      }
+      std::vector<std::string> nl = reelNumberLabels(names2);
+      if (nl.empty()) nl = reelShortLabels(names2);
+      for (size_t k = 0; k < nl.size(); k++) st.reelAskNames += (k == 0 ? "" : k + 1 == nl.size() ? " and " : ", ") + nl[k];
+      st.reelAskRelated = reelsBelongTogether(ss, &st.reelAskWhy);
+      st.reelAsk = true;
+    }
+    if (getenv("OLAAF_OWN")) opt.reelsShareTracks = false;
   }
   if (getenv("OLAAF_LONGNAME") && imp.session().tracks.size() > 1) {
     imp.session().tracks[0].name = "Dialog_Boom_Szene_12_Take_3_Close_Mic_Rechts";
@@ -5137,6 +5247,20 @@ int dialogTranslateKey(MSG *msg) {
       return 1;
     }
     return -1;
+  }
+  if (st->reelAsk && msg->message == WM_KEYDOWN) { // the reel question: Return / Esc take the suggested answer
+    if (msg->wParam == VK_RETURN || msg->wParam == VK_ESCAPE) {
+      bool share = st->reelAskRelated;
+      st->reelAsk = false;
+      for (int i = 0; i < reelCount(st); i++) {
+        Importer *ri;
+        ImportOptions *ro;
+        if (reelAt(st, i, &ri, &ro)) ro->reelsShareTracks = share;
+      }
+      st->opt->reelsShareTracks = share;
+      InvalidateRect(st->hwnd, NULL, FALSE);
+    }
+    return 1;
   }
   if (msg->message == WM_KEYDOWN && msg->wParam == VK_ESCAPE) {
     if (st->helpOpen || st->optsOpen || st->missingOpen || st->rulesOpen || st->themeMenu || st->folderTrack >= 0 || st->destTrack >= 0 || st->palTrack >= 0 || !st->palFolder.empty()) {

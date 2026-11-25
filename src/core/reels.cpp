@@ -101,7 +101,69 @@ static std::string key(const std::string &name) {
   return a == std::string::npos ? std::string() : k.substr(a, b - a + 1);
 }
 
-Session combineReels(const std::vector<Session> &reels, const std::vector<double> &shift) {
+static std::set<std::string> trackKeys(const Session &s) {
+  std::set<std::string> k;
+  for (auto &t : s.tracks)
+    if (!key(t.name).empty()) k.insert(key(t.name));
+  return k;
+}
+
+bool reelsBelongTogether(const std::vector<Session> &reels, std::string *why) {
+  if (reels.size() < 2) return false;
+  std::vector<std::string> names;
+  for (size_t i = 0; i < reels.size(); i++) names.push_back(reelLabel(reels[i], (int)i));
+  if (!reelNumberLabels(names).empty()) {
+    if (why) *why = "their names number the reels";
+    return true;
+  }
+  std::set<std::string> a = trackKeys(reels[0]);
+  for (size_t r = 1; r < reels.size(); r++) {
+    std::set<std::string> b = trackKeys(reels[r]);
+    size_t common = 0;
+    for (auto &k : b) common += a.count(k);
+    size_t smaller = std::min(a.size(), b.size());
+    if (smaller == 0 || common * 10 < smaller * 6) return false; // less than 60 % of the names in common
+  }
+  if (why) *why = "they have the same track layout";
+  return true;
+}
+
+// the value of an envelope at a time (straight lines between the points)
+static double envValue(const std::vector<GainPoint> &env, double t, double def) {
+  if (env.empty()) return def;
+  if (t <= env.front().time) return env.front().gain;
+  if (t >= env.back().time) return env.back().gain;
+  for (size_t i = 1; i < env.size(); i++)
+    if (env[i].time >= t) {
+      double a = env[i - 1].time, b = env[i].time;
+      double f = b > a ? (t - a) / (b - a) : 1.0;
+      return env[i - 1].gain + (env[i].gain - env[i - 1].gain) * f;
+    }
+  return def;
+}
+
+// One reel's part of a shared track: its automation only counts between its start and end.
+struct EnvPart {
+  double start = 0, end = 0;
+  std::vector<GainPoint> vol, pan;
+  double volume = 1, pan0 = 0;
+};
+
+static std::vector<GainPoint> joinParts(const std::vector<EnvPart> &parts, bool pan) {
+  std::vector<GainPoint> out;
+  for (auto &p : parts) {
+    const std::vector<GainPoint> &env = pan ? p.pan : p.vol;
+    double def = pan ? p.pan0 : p.volume;
+    out.push_back({p.start, envValue(env, p.start, def)});
+    for (auto &pt : env)
+      if (pt.time > p.start && pt.time < p.end) out.push_back(pt);
+    out.push_back({p.end, envValue(env, p.end, def)});
+  }
+  std::stable_sort(out.begin(), out.end(), [](const GainPoint &a, const GainPoint &b) { return a.time < b.time; });
+  return out;
+}
+
+Session combineReels(const std::vector<Session> &reels, const std::vector<double> &shift, bool shareTracks) {
   if (reels.empty()) return Session();
   Session out = reels[0];
   auto sh = [&](size_t i) { return i < shift.size() ? shift[i] : 0.0; };
@@ -125,6 +187,23 @@ Session combineReels(const std::vector<Session> &reels, const std::vector<double
   }
   out.warnings.clear();
   for (auto &w : reels[0].warnings) out.warnings.push_back(reelLabel(reels[0], 0) + ": " + w);
+  // every reel's automation per combined track (uid), to keep each inside its own time
+  std::map<int, std::vector<EnvPart>> parts;
+  auto partOf = [](const Track &t, const Session &s) {
+    EnvPart p;
+    p.start = s.start;
+    p.end = s.end;
+    p.vol = t.volEnv;
+    p.pan = t.panEnv;
+    p.volume = t.volume;
+    p.pan0 = t.pan;
+    return p;
+  };
+  for (auto &t : out.tracks) parts[t.uid].push_back(partOf(t, out));
+  // short reel names for tracks of their own: "Reel 2", or the part of the AAF name that differs
+  std::vector<std::string> allNames;
+  for (size_t i = 0; i < reels.size(); i++) allNames.push_back(reelLabel(reels[i], (int)i));
+  std::vector<std::string> shortNames = reelShortLabels(allNames);
 
   for (size_t r = 1; r < reels.size(); r++) {
     Session s = reels[r];
@@ -145,35 +224,36 @@ Session combineReels(const std::vector<Session> &reels, const std::vector<double
         for (auto &src : c.sources)
           if (src.media >= 0) src.media += mediaBase;
       }
-      // the same name (and the same "put on" target): one track
+      // the same name (and the same "put on" target): one track, unless every AAF keeps its own tracks
       Track *same = nullptr;
-      for (auto &o : out.tracks)
-        if (o.import && key(o.name) == key(t.name) && o.target == t.target) {
-          same = &o;
-          break;
-        }
+      if (shareTracks)
+        for (auto &o : out.tracks)
+          if (o.import && key(o.name) == key(t.name) && o.target == t.target) {
+            same = &o;
+            break;
+          }
       if (!same) {
         Track n = t;
         n.uid = ++maxUid;
+        if (!shareTracks) { // its own track: the reel in the name, so the tracks can be told apart in REAPER
+          if (n.aafName.empty()) n.aafName = n.name;
+          n.name += " (" + (r < shortNames.size() ? shortNames[r] : label) + ")";
+        }
         uidMap[t.uid] = n.uid;
         out.tracks.push_back(n);
+        parts[n.uid].push_back(partOf(t, s));
         continue;
       }
       uidMap[t.uid] = same->uid;
       // a different fader level: the reel's events keep their level through their clip gain
-      if (std::fabs(t.volume - same->volume) > 1e-6 && same->volume > 0)
+      // (only without automation of its own: then the automation sets the level)
+      if (t.volEnv.empty() && std::fabs(t.volume - same->volume) > 1e-6 && same->volume > 0)
         for (auto &c : t.clips) c.gain *= t.volume / same->volume;
-      if (std::fabs(t.pan - same->pan) > 1e-6 && t.panEnv.empty())
-        out.warnings.push_back(label + ": \"" + t.name + "\" is panned differently; the first reel's pan is used.");
-      if (same->volEnv.empty() != t.volEnv.empty() || same->panEnv.empty() != t.panEnv.empty())
-        out.warnings.push_back(label + ": \"" + t.name + "\" has volume or pan automation in only some reels; check the level where the reels meet.");
+      EnvPart p = partOf(t, s);
+      if (p.vol.empty()) p.volume = same->volume; // its level is in the clip gain now
+      parts[same->uid].push_back(p);
       same->channels = std::max(same->channels, t.channels);
       same->clips.insert(same->clips.end(), t.clips.begin(), t.clips.end());
-      same->volEnv.insert(same->volEnv.end(), t.volEnv.begin(), t.volEnv.end());
-      same->panEnv.insert(same->panEnv.end(), t.panEnv.begin(), t.panEnv.end());
-      auto byTime = [](const GainPoint &a, const GainPoint &b) { return a.time < b.time; };
-      std::stable_sort(same->volEnv.begin(), same->volEnv.end(), byTime);
-      std::stable_sort(same->panEnv.begin(), same->panEnv.end(), byTime);
       if (same->group.empty()) same->group = t.group;
     }
     for (auto &t : out.tracks)
@@ -186,6 +266,25 @@ Session combineReels(const std::vector<Session> &reels, const std::vector<double
     out.markers.insert(out.markers.end(), s.markers.begin(), s.markers.end());
     out.start = std::min(out.start, s.start);
     out.end = std::max(out.end, s.end);
+  }
+  // shared tracks: each reel's volume and pan automation only within its own time, the others' left alone
+  // (a reel without automation keeps its level and pan there)
+  for (auto &t : out.tracks) {
+    auto it = parts.find(t.uid);
+    if (it == parts.end() || it->second.size() < 2) continue;
+    bool anyVol = false, anyPan = false;
+    for (auto &p : it->second) {
+      anyVol = anyVol || !p.vol.empty();
+      anyPan = anyPan || !p.pan.empty() || std::fabs(p.pan0 - it->second[0].pan0) > 1e-6;
+    }
+    std::vector<EnvPart> ps = it->second;
+    std::stable_sort(ps.begin(), ps.end(), [](const EnvPart &a, const EnvPart &b) { return a.start < b.start; });
+    bool overlap = false;
+    for (size_t k = 1; k < ps.size(); k++) overlap = overlap || reelsOverlap(ps[k - 1].start, ps[k - 1].end, ps[k].start, ps[k].end);
+    if (overlap && (anyVol || anyPan))
+      out.warnings.push_back("\"" + t.name + "\": reels overlap in time, so their automation on this shared track overlaps too.");
+    if (anyVol) t.volEnv = joinParts(ps, false);
+    if (anyPan) t.panEnv = joinParts(ps, true);
   }
   for (auto &t : out.tracks)
     std::stable_sort(t.clips.begin(), t.clips.end(), [](const Clip &a, const Clip &b) { return a.pos < b.pos; });

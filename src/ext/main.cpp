@@ -702,7 +702,7 @@ static bool finishReels(ReelSet &rs, MediaReport &rep, int &merged, std::string 
   }
   if (combine && !sessions.empty()) {
     // combineReels shifts its first reel too, so the offsets stay right without the first AAF
-    rs.first->adoptSession(combineReels(sessions, shift));
+    rs.first->adoptSession(combineReels(sessions, shift, rs.opt(0).reelsShareTracks));
   }
   return true;
 }

@@ -16,6 +16,7 @@ namespace olaaf {
 struct ImportOptions {
   ReadOptions read;
   bool mergeStereo = true;      // ".L" + ".R" tracks -> one stereo track
+  bool reelsShareTracks = true; // several AAFs: tracks with the same name share one REAPER track (else each AAF its own)
   bool fades = true;            // import fades and crossfades
   bool clipGain = true;         // import clip gain as take volume
   bool clipGainToTrack = false; // ... or fold clip gain and its automation into the track volume envelope

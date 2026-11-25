@@ -24,8 +24,14 @@ std::vector<std::string> reelShortLabels(const std::vector<std::string> &names);
 // Do two reels land on top of each other? (start / end in REAPER time)
 bool reelsOverlap(double a0, double a1, double b0, double b1);
 
+// Do these AAFs belong to the same film? Yes when their names number the reels ("Reel 1", "Rolle 2")
+// or they have the same track layout (most track names in common). `why` says which.
+bool reelsBelongTogether(const std::vector<Session> &reels, std::string *why = nullptr);
+
 // One session from all reels, after their media is ready (clip files set). `shift[i]` is added to
 // every position of reel i (its offset minus the first reel's). Reel names go into the warnings.
-Session combineReels(const std::vector<Session> &reels, const std::vector<double> &shift);
+// shareTracks: tracks with the same name become one track (each reel's volume and pan automation stays
+// inside its own stretch of time); otherwise every reel after the first gets its own tracks.
+Session combineReels(const std::vector<Session> &reels, const std::vector<double> &shift, bool shareTracks = true);
 
 } // namespace olaaf
