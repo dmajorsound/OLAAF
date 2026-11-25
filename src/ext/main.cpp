@@ -10,6 +10,12 @@
 #include "../core/audiofile.h"
 #include "../core/importer.h"
 #include "../core/peaks.h"
+#ifdef __APPLE__
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+extern char **environ;
+#endif
 #include "../core/report.h"
 #include "../core/track_template.h"
 #include "../core/reels.h"
@@ -409,6 +415,35 @@ static std::string writeReport(Importer &imp, const ImportOptions &opt, const Me
 }
 
 static void copyTextToClipboard(HWND hwnd, const std::string &text) {
+#ifdef __APPLE__
+  // macOS: pbcopy puts it on the general pasteboard as text (the SWELL clipboard didn't reach other apps)
+  int fd[2];
+  if (pipe(fd) == 0) {
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_adddup2(&fa, fd[0], 0);
+    posix_spawn_file_actions_addclose(&fa, fd[1]);
+    const char *tool = "/usr/bin/pbcopy";
+    char *argv[] = {(char *)tool, NULL};
+    pid_t pid;
+    bool ok = posix_spawn(&pid, tool, &fa, NULL, argv, environ) == 0;
+    posix_spawn_file_actions_destroy(&fa);
+    close(fd[0]);
+    if (ok) {
+      size_t off = 0;
+      while (off < text.size()) {
+        ssize_t w = write(fd[1], text.data() + off, text.size() - off);
+        if (w <= 0) break;
+        off += (size_t)w;
+      }
+      close(fd[1]);
+      int stt;
+      waitpid(pid, &stt, 0);
+      if (off == text.size()) return;
+    } else
+      close(fd[1]);
+  }
+#endif
   if (!OpenClipboard(hwnd)) return;
   EmptyClipboard();
 #ifdef _WIN32

@@ -2477,7 +2477,9 @@ void paintHelp(State *st, const Gfx &g) {
                     {"Delete/Backspace", "Remove / restore"},
                     {"Drag names", "Order tracks, put them in folders"},
                     {"Double-click", "Rename (Tab: the next track\xe2\x80\x99s name)"},
-                    {"C", "Two selected mono tracks into one stereo track"}};
+                    {"C", "Two selected mono tracks into stereo"},
+                    {"Shift|F", "Show the event\xe2\x80\x99s file (Finder / Explorer)"},
+                    {"Shift|C", "Copy the event\xe2\x80\x99s file path"}};
   const KeyRow win[] = {{"Cmd/Ctrl|Z", "Undo (Shift: redo)"},
                      {"Return", "Import"},
                      {"O", "Options"},
@@ -3248,6 +3250,66 @@ void trackMenu(State *st, POINT screen, int idx) {
   InvalidateRect(st->hwnd, NULL, FALSE);
 }
 
+// The file of an event (the first one; embedded audio: the AAF), for Show in Finder / Explorer and Copy path.
+// `found` false: it is missing and the path is the one the AAF gave.
+std::string clipFilePath(State *st, const Clip &c, int side, bool *found) {
+  const Session &s = st->imp->session();
+  *found = false;
+  if (side < 0 || side >= (int)c.sources.size()) return std::string();
+  int mi = c.sources[(size_t)side].media;
+  if (mi < 0 || mi >= (int)s.media.size()) return std::string();
+  const Media &md = s.media[(size_t)mi];
+  if (md.kind == MediaKind::Embedded) {
+    *found = true;
+    return s.aafPath;
+  }
+  if (!md.foundPath.empty()) {
+    *found = true;
+    return md.foundPath;
+  }
+  return uriToPath(md.originalUri);
+}
+
+const Clip *selectedClip(State *st) {
+  if (st->sel.empty()) return nullptr;
+  return st->imp->findClip(*st->sel.begin());
+}
+
+// Shift + F: the selected event's file in the Finder / Explorer; Shift + C: its path to the clipboard
+void revealSelected(State *st) {
+  static std::string tip;
+  const Clip *c = selectedClip(st);
+  bool found = false;
+  std::string path = c ? clipFilePath(st, *c, 0, &found) : std::string();
+  if (!c) tip = "Select an event first: Shift + F shows its file in the " +
+                std::string(
+#ifdef _WIN32
+                    "Explorer"
+#else
+                    "Finder"
+#endif
+                    ) + ", Shift + C copies its path.";
+  else if (!found) tip = "Its file is missing, so it can't be shown. Right-click the event to locate it.";
+  else {
+    if (st->host && st->host->revealFile) st->host->revealFile(path);
+    tip = "Shown: " + path;
+  }
+  st->tip = tip.c_str();
+}
+
+void copySelectedPath(State *st) {
+  static std::string tip;
+  const Clip *c = selectedClip(st);
+  bool found = false;
+  std::string path = c ? clipFilePath(st, *c, 0, &found) : std::string();
+  if (!c || path.empty()) tip = "Select an event first: Shift + C copies the path of its file.";
+  else {
+    if (st->host && st->host->copyText) st->host->copyText(st->hwnd, path);
+    tip = (found ? "Path copied: " : "Path from the AAF copied (the file is missing): ") + path;
+  }
+  st->tip = tip.c_str();
+}
+
 // Right-click on an event: where its file is, show it in the Finder / Explorer, copy the path
 void clipMenu(State *st, POINT screen, int clipId) {
   Session &s = st->imp->session();
@@ -3281,8 +3343,8 @@ void clipMenu(State *st, POINT screen, int clipId) {
       menuAdd(m, idDis++, shortPath(md.foundPath, 90), false);
       std::string why = st->peaks.why(media[k]);
       if (!why.empty()) menuAdd(m, idDis++, "No waveform: " + why, false);
-      menuAdd(m, 100 + (int)k, showIn, true);
-      menuAdd(m, 200 + (int)k, "Copy the file path", true);
+      menuAdd(m, 100 + (int)k, std::string(showIn) + (k == 0 ? "\tShift+F" : ""), true);
+      menuAdd(m, 200 + (int)k, std::string("Copy the file path") + (k == 0 ? "\tShift+C" : ""), true);
     } else {
       menuAdd(m, idDis++, "Missing: " + shortPath(uriToPath(md.originalUri), 80), false);
       menuAdd(m, 300 + (int)k, "Locate\xe2\x80\xa6", true);
@@ -3314,7 +3376,7 @@ void clipMenu(State *st, POINT screen, int clipId) {
     } else if (cmd < 300) {
       if (path.empty()) path = uriToPath(md.originalUri);
       if (st->host->copyText) st->host->copyText(st->hwnd, path);
-      tipBuf = "Copied: " + path;
+      tipBuf = "Path copied: " + path;
       st->tip = tipBuf.c_str();
     } else
       locateOne(st, media[k]);
@@ -4590,6 +4652,12 @@ bool handleKey(State *st, int vk) {
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
   }
+  if ((vk == 'F' || vk == 'C') && (GetAsyncKeyState(VK_SHIFT) & 0x8000) && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) {
+    if (vk == 'F') revealSelected(st);
+    else copySelectedPath(st);
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    return true;
+  }
   if (vk == 'F') {
     double a, b;
     sessionRange(st->imp->session(), &a, &b);
@@ -4620,7 +4688,8 @@ bool handleKey(State *st, int vk) {
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
   }
-  if (vk == 'C' && !(GetAsyncKeyState(VK_CONTROL) & 0x8000) && !(GetAsyncKeyState(VK_MENU) & 0x8000)) {
+  if (vk == 'C' && !(GetAsyncKeyState(VK_CONTROL) & 0x8000) && !(GetAsyncKeyState(VK_MENU) & 0x8000) &&
+      !(GetAsyncKeyState(VK_SHIFT) & 0x8000)) {
     combineSelected(st);
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
