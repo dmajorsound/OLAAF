@@ -105,6 +105,14 @@ public:
   // Empty means nothing can be lost by deleting it: no events on it (not even removed ones), no
   // events that came from it and go back to it on Reset, no volume or pan automation.
   bool trackIsEmpty(int track) const;
+  // One .L / .R pair at a time (the button on the track): the other half of a mono track
+  // ("Dia.L" <-> "Dia.R"), -1 if there is none.
+  int stereoPartner(int track) const;
+  // Combines the track and its partner into one stereo track; returns its index, -1 (and why) if
+  // their events don't line up.
+  int combineStereo(int track, std::string *why);
+  // Splits a combined stereo track into its two mono tracks again; returns the index of the L half.
+  int splitStereo(int track, std::string *why);
   std::vector<int> emptyTracks() const;
   // deletes the empty tracks (each checked again); their names in `names`; returns how many
   int removeEmptyTracks(std::vector<std::string> *names);

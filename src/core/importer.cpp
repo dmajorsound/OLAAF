@@ -396,6 +396,102 @@ bool Importer::removeCreatedTrack(int track, bool withAutomation) {
   return true;
 }
 
+int Importer::stereoPartner(int track) const {
+  if (track < 0 || track >= (int)s_.tracks.size()) return -1;
+  const Track &t = s_.tracks[(size_t)track];
+  std::string base, b2;
+  char side, s2;
+  if (t.channels != 1 || !t.mergedFrom.empty() || !splitSide(t.name, &base, &side)) return -1;
+  for (size_t j = 0; j < s_.tracks.size(); j++) {
+    const Track &o = s_.tracks[j];
+    if ((int)j != track && o.channels == 1 && splitSide(o.name, &b2, &s2) && b2 == base && s2 != side && s2 != 0 &&
+        ((side == 'L' && s2 == 'R') || (side == 'R' && s2 == 'L')))
+      return (int)j;
+  }
+  return -1;
+}
+
+int Importer::combineStereo(int track, std::string *why) {
+  int p = stereoPartner(track);
+  if (p < 0) {
+    if (why) *why = "This track has no .L / .R partner.";
+    return -1;
+  }
+  std::string base;
+  char side;
+  splitSide(s_.tracks[(size_t)track].name, &base, &side);
+  size_t i = (size_t)(side == 'L' ? track : p), j = (size_t)(side == 'L' ? p : track);
+  if (!sameTimeline(s_.tracks[i], s_.tracks[j])) {
+    if (why)
+      *why = "\"" + s_.tracks[i].name + "\" and \"" + s_.tracks[j].name +
+             "\" can't be combined: their events don't line up (one has events the other hasn't, or they were moved).";
+    return -1;
+  }
+  Track &L = s_.tracks[i];
+  Track &R = s_.tracks[j];
+  for (auto &o : s_.tracks) // events that came from R now belong to the stereo track
+    for (auto &c : o.clips)
+      if (c.home == R.uid) c.home = L.uid;
+  L.mergedFrom = L.name + " + " + R.name;
+  L.panL = L.pan;
+  L.panR = R.pan;
+  L.pan = 0.0;
+  L.panEnv.clear();
+  L.name = base;
+  L.channels = 2;
+  for (size_t c = 0; c < L.clips.size(); c++) {
+    L.clips[c].sources.push_back(R.clips[c].sources[0]);
+    L.clips[c].excluded = L.clips[c].excluded && R.clips[c].excluded; // removed only if both halves were
+  }
+  s_.tracks.erase(s_.tracks.begin() + (long)j);
+  return (int)(j < i ? i - 1 : i);
+}
+
+int Importer::splitStereo(int track, std::string *why) {
+  if (track < 0 || track >= (int)s_.tracks.size()) return -1;
+  Track &M = s_.tracks[(size_t)track];
+  size_t plus = M.mergedFrom.find(" + ");
+  if (M.channels != 2 || plus == std::string::npos) {
+    if (why) *why = "Only a track combined from .L / .R can be split.";
+    return -1;
+  }
+  int maxId = 0, maxUid = 0;
+  for (auto &t : s_.tracks) {
+    maxUid = std::max(maxUid, t.uid);
+    for (auto &c : t.clips) maxId = std::max(maxId, c.id);
+  }
+  Track R = M;
+  R.name = M.mergedFrom.substr(plus + 3);
+  R.uid = maxUid + 1;
+  R.channels = 1;
+  R.pan = M.panR;
+  R.mergedFrom.clear();
+  R.clips.clear();
+  M.name = M.mergedFrom.substr(0, plus);
+  M.channels = 1;
+  M.pan = M.panL;
+  M.mergedFrom.clear();
+  std::vector<Clip> keepL;
+  for (auto &c : M.clips) {
+    if (c.sources.size() == 2) { // left half stays, right half goes to R (exchanged: the other way round)
+      Clip r = c;
+      r.id = ++maxId;
+      r.home = c.home == M.uid ? R.uid : c.home;
+      r.sources = {c.sources[c.swapLR ? 0 : 1]};
+      r.swapLR = false;
+      R.clips.push_back(r);
+      Clip l = c;
+      l.sources = {c.sources[c.swapLR ? 1 : 0]};
+      l.swapLR = false;
+      keepL.push_back(l);
+    } else
+      keepL.push_back(c); // an event moved here that was not a pair stays on the L track
+  }
+  M.clips = keepL;
+  s_.tracks.insert(s_.tracks.begin() + track + 1, R);
+  return track;
+}
+
 bool Importer::trackIsEmpty(int track) const {
   if (track < 0 || track >= (int)s_.tracks.size()) return false;
   const Track &t = s_.tracks[(size_t)track];
@@ -546,6 +642,8 @@ int Importer::mergeStereoTracks() {
       Track &L = s_.tracks[i];
       Track &R = s_.tracks[j];
       L.mergedFrom = L.name + " + " + R.name;
+      L.panL = L.pan;
+      L.panR = R.pan;
       L.pan = 0.0; // the hard L / hard R pan of the halves is now the stereo file itself
       if (!L.panEnv.empty() || !R.panEnv.empty())
         s_.warnings.push_back("\"" + bl + "\": pan automation of the L/R tracks is not carried over to the stereo track.");

@@ -140,7 +140,7 @@ enum HitId {
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
   H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE,
-  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE, H_TC_RESET, H_REMOVE_EMPTY
+  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE, H_TC_RESET, H_REMOVE_EMPTY, H_TRACK_STEREO
 };
 
 struct Hit {
@@ -219,6 +219,8 @@ struct State {
   bool helpOpen = false;                 // the help and shortcut window
   bool tipVisible = false;               // the tooltip shows after a short hover
   std::string tipHold;                   // the hovered hint, copied (st->tip points here then)
+  std::vector<std::string> stereoTips;   // the L+R button's hint per track
+  bool showVol = true, showPan = true;   // which automation shows when it is on (V, P)
   double mouseLX = -1, mouseLY = -1;     // mouse, in layout units
   std::string updTag, updUrl;            // a newer OLAAF on GitHub
   int updPolls = 0;
@@ -493,9 +495,18 @@ struct Gfx {
     return true;
   }
   // a check mark drawn as two strokes, centred in a 16 x 16 box at (x, y)
+  // the check mark of a 16 x 16 box at x, y: two filled strokes drawn the same way as the box
+  // (smooth fill), so it sits in the middle on every system (lines were rounded differently)
   void check(double x, double y, COLORREF c) const {
-    line(x + 3.75, y + 8.25, x + 6.75, y + 11.25, c, 2);
-    line(x + 6.75, y + 11.25, x + 12.25, y + 4.75, c, 2);
+    const double cx = x + 8, cy = y + 8, w = 1.05; // half the stroke width
+    auto stroke = [&](double ax, double ay, double bx, double by) {
+      double dx = bx - ax, dy = by - ay, l = std::sqrt(dx * dx + dy * dy);
+      double nx = -dy / l * w, ny = dx / l * w, ex = dx / l * w * 0.5, ey = dy / l * w * 0.5;
+      polyAA({{cx + ax + nx - ex, cy + ay + ny - ey}, {cx + bx + nx + ex, cy + by + ny + ey},
+              {cx + bx - nx + ex, cy + by - ny + ey}, {cx + ax - nx - ex, cy + ay - ny - ey}}, c);
+    };
+    stroke(-4.0, 0.2, -1.2, 3.0); // the short stroke
+    stroke(-1.2, 3.0, 4.2, -3.4); // the long one
   }
 };
 
@@ -1094,14 +1105,14 @@ void paintAutomation(State *st, const Gfx &g, const Track &tr, double y, double 
     return bot - n * (bot - top);
   };
   const COLORREF panC = RGB(0xD9, 0x82, 0x2B);
-  bool hasPan = !tr.panEnv.empty() || std::fabs(tr.pan) > 1e-4;
+  bool hasPan = st->showPan && (!tr.panEnv.empty() || std::fabs(tr.pan) > 1e-4);
   double px = -1, pv = 0, pp = 0;
   for (double x = kTlx + 1; x <= kTlr - 1; x += 2) {
     double t = st->viewStart + (x - kTlx) * spp;
     double v = volY(st->imp->trackVolumeAt(tr, t, opt));
     double pn = (top + bot) / 2 - lerpEnv(tr.panEnv, t, tr.pan) * (bot - top) / 2;
     if (px >= 0) {
-      g.line(px, pv, x, v, kBlue);
+      if (st->showVol) g.line(px, pv, x, v, kBlue);
       if (hasPan) g.line(px, pp, x, pn, panC);
     }
     px = x;
@@ -1479,7 +1490,8 @@ void paintArrange(State *st, const Gfx &g) {
       g.rbox(ax, cy - 7, ax + 14, cy + 7, 4, theme().empty, kPanel);
     g.text(st->fSmall, kInk, lab, ax + 20, ry, ax + 24 + cw, ry + kRuler, DT_LEFT);
     addHit(st, ax - 4, by0, ax + 24 + cw, by1, H_SHOW_AUTO, 0,
-           "Show the volume (blue) and pan (orange) automation in the lanes. A view only, it changes nothing in the import.");
+           "Show the volume (blue) and pan (orange) automation in the lanes (A; V volume only, P pan only). A view only, it "
+           "changes nothing in the import.");
   }
 
   // lanes
@@ -1583,17 +1595,34 @@ void paintArrange(State *st, const Gfx &g) {
       addHit(st, nameR - 18, y + 4, nameR, y + kRowH - 4, H_TRACK_FOLDERMENU, row.track, "Choose the folder for this track.");
       nameR -= 18;
     }
-    if (tr.channels >= 2) {
+    { // L+R: combine an .L / .R pair into one stereo track, or split it again (right-click: swap L / R)
       bool sw = false;
       for (auto &c : tr.clips) sw = sw || c.swapLR;
-      const char *badge = tr.channels == 2 ? (tr.mergedFrom.empty() ? (sw ? "R/L" : "ST") : (sw ? "R+L" : "L+R")) : "MC";
-      g.rbox(nameR - 30, y + 11, nameR - 2, y + 25, 4, sw ? kWarn : theme().blueLine, sw ? mixColor(kWarn, kPanel, 0.8) : kBlueSoft);
-      g.text(st->fClip, sw ? kWarn : kBlue, badge, nameR - 30, y + 11, nameR - 2, y + 25, DT_CENTER);
-      if (tr.channels == 2)
-        addHit(st, nameR - 30, y + 9, nameR - 2, y + 27, H_TRACK_SWAP, row.track,
-               sw ? "Left and right are exchanged on import. Click to put them back." :
-                    "Click to exchange left and right for every event on this track (on import and when listening).");
-      nameR -= 34;
+      bool combined = tr.channels == 2 && !tr.mergedFrom.empty();
+      int partner = combined ? -1 : st->imp->stereoPartner(row.track);
+      if (st->stereoTips.size() < s.tracks.size()) st->stereoTips.resize(s.tracks.size());
+      std::string &tip = st->stereoTips[(size_t)row.track];
+      if (combined || partner >= 0) {
+        const char *badge = sw ? "R+L" : "L+R";
+        if (combined)
+          g.rbox(nameR - 30, y + 11, nameR - 2, y + 25, 4, sw ? kWarn : theme().blueLine, sw ? mixColor(kWarn, kPanel, 0.8) : kBlueSoft);
+        else
+          g.rbox(nameR - 30, y + 11, nameR - 2, y + 25, 4, kLine, kPanel);
+        g.text(st->fClip, combined ? (sw ? kWarn : kBlue) : kMute, badge, nameR - 30, y + 11, nameR - 2, y + 25, DT_CENTER);
+        tip = combined ? "One stereo track from " + tr.mergedFrom + ". Click to split it into the two mono tracks again." +
+                             (sw ? " Left and right are exchanged." : "") + " Right-click the name to swap left and right."
+                       : "Click to combine " + tr.name + " and " + s.tracks[(size_t)partner].name + " into one stereo track.";
+        addHit(st, nameR - 30, y + 9, nameR - 2, y + 27, H_TRACK_STEREO, row.track, tip.c_str());
+        nameR -= 34;
+      } else if (tr.channels >= 2) { // a stereo (or multichannel) file: information only
+        const char *badge = tr.channels == 2 ? (sw ? "R/L" : "ST") : "MC";
+        g.text(st->fClip, sw ? kWarn : kMute, badge, nameR - 30, y + 11, nameR - 2, y + 25, DT_CENTER);
+        tip = tr.channels == 2 ? std::string(sw ? "Stereo, left and right exchanged." : "Stereo.") +
+                                     " Right-click the name to swap left and right for the whole track."
+                               : strprintf("%d channels.", tr.channels);
+        addHit(st, nameR - 30, y + 9, nameR - 2, y + 27, H_NONE, 0, tip.c_str());
+        nameR -= 34;
+      }
     }
     COLORREF nameC = (on && !grabbed) ? kInk : kMute;
     if (st->editKind == 4 && st->editTrack == row.track) nameC = trSel ? kBlueSoft : kPanel; // the editor sits on top
@@ -2256,7 +2285,7 @@ void paintHelp(State *st, const Gfx &g) {
                       {"Shift|Wheel", "Move through time"},
                       {"F", "Show the whole AAF"},
                       {"Z", "Zoom to the selection, playhead to it"},
-                      {"A", "Show automation in the lanes"}};
+                      {"A/V/P", "Automation: all / volume / pan"}};
   const KeyRow ev[] = {{"Click", "Select an event (Shift-click: more)"},
                     {"Drag", "Select in a frame (start on an empty lane)"},
                     {"Cmd/Ctrl|A", "Select all events"},
@@ -2642,7 +2671,7 @@ bool isEditHit(int id) {
   case H_TRACK_CHECK: case H_PAL: case H_PAL_CUSTOM: case H_PAL_NONE: case H_FOLD_ASSIGN: case H_FOLD_NONE:
   case H_FOLD_DELETE: case H_FOLD_NEW: case H_EV_REMOVE: case H_EV_RESTORE: case H_EV_UP: case H_EV_DOWN:
   case H_EV_RESET: case H_EV_MUTE: case H_NEW_FOLDER: case H_TRACK_DELETE: case H_DEST_NEW: case H_DEST_MATCHALL:
-  case H_DEST_PICK: case H_EV_SWAP: case H_TRACK_SWAP: case H_RULES_SORT: case H_REMOVE_EMPTY:
+  case H_DEST_PICK: case H_EV_SWAP: case H_TRACK_SWAP: case H_RULES_SORT: case H_REMOVE_EMPTY: case H_TRACK_STEREO:
     return true;
   }
   return false;
@@ -2695,6 +2724,93 @@ void menuAdd(HMENU m, int id, const std::string &text, bool enabled) {
 
 void menuSep(HMENU m) { InsertMenu(m, GetMenuItemCount(m), MF_BYPOSITION | MF_SEPARATOR, 0, NULL); }
 
+// left and right exchanged for every stereo event of a track (or back)
+void swapTrack(State *st, int idx) {
+  Session &s = st->imp->session();
+  if (idx < 0 || idx >= (int)s.tracks.size()) return;
+  bool all = true;
+  for (auto &c : s.tracks[(size_t)idx].clips)
+    if (clipIsStereo(st, c)) all = all && c.swapLR;
+  for (auto &c : s.tracks[(size_t)idx].clips)
+    if (clipIsStereo(st, c)) c.swapLR = !all;
+  st->edited = true;
+  if (st->playClip || st->playTL) stopPlay(st);
+}
+
+void pushUndo(State *st);
+void buildRows(State *st);
+
+// L+R: combines an .L / .R pair into one stereo track, or splits it again (an undo step is pushed before)
+void toggleStereo(State *st, int idx) {
+  Session &s = st->imp->session();
+  {
+    if (idx < 0 || idx >= (int)s.tracks.size()) return;
+    static std::string why;
+    why.clear();
+    if (st->playClip || st->playTL) stopPlay(st);
+    bool combined = s.tracks[(size_t)idx].channels == 2 && !s.tracks[(size_t)idx].mergedFrom.empty();
+    int r = combined ? st->imp->splitStereo(idx, &why) : st->imp->combineStereo(idx, &why);
+    if (r < 0) {
+      if (!st->undo.empty()) st->undo.pop_back(); // nothing changed
+      st->tip = why.c_str();
+      return;
+    }
+    why = combined ? "Split into " + s.tracks[(size_t)r].name + " and " + s.tracks[(size_t)r + 1].name + "."
+                   : "Combined into the stereo track " + s.tracks[(size_t)r].name + ".";
+    st->tip = why.c_str();
+    st->sel.clear();
+    st->selTracks.clear();
+    st->edited = true;
+    buildRows(st); // the waveforms stay: the files are the same
+  }
+}
+
+void startEdit(State *st, int kind, RECT r, const std::string &text, const std::string &key);
+
+// Right-click on a track name: swap left and right for the whole track, combine / split .L / .R
+void trackMenu(State *st, POINT screen, int idx) {
+  Session &s = st->imp->session();
+  if (idx < 0 || idx >= (int)s.tracks.size()) return;
+  const Track &tr = s.tracks[(size_t)idx];
+  bool stereo = false, sw = true;
+  for (auto &c : tr.clips)
+    if (clipIsStereo(st, c)) {
+      stereo = true;
+      sw = sw && c.swapLR;
+    }
+  bool combined = tr.channels == 2 && !tr.mergedFrom.empty();
+  int partner = combined ? -1 : st->imp->stereoPartner(idx);
+  HMENU m = CreatePopupMenu();
+  menuAdd(m, 1, tr.name, false);
+  menuSep(m);
+  if (stereo) menuAdd(m, 10, sw ? "Put left and right back (whole track)" : "Swap left and right (whole track)", true);
+  if (combined) menuAdd(m, 11, "Split into " + tr.mergedFrom.substr(0, tr.mergedFrom.find(" + ")) + " and " +
+                                   tr.mergedFrom.substr(tr.mergedFrom.find(" + ") + 3), true);
+  if (partner >= 0) menuAdd(m, 12, "Combine with " + s.tracks[(size_t)partner].name + " into one stereo track", true);
+  menuAdd(m, 13, "Rename\xe2\x80\xa6", true);
+  if (!stereo && !combined && partner < 0) menuAdd(m, 2, "(mono: nothing to swap)", false);
+  int cmd = TrackPopupMenu(m, TPM_NONOTIFY | TPM_RETURNCMD, screen.x, screen.y, 0, st->hwnd, NULL);
+  DestroyMenu(m);
+  if (cmd == 10) {
+    pushUndo(st);
+    swapTrack(st, idx);
+  } else if (cmd == 11 || cmd == 12) {
+    pushUndo(st);
+    toggleStereo(st, idx);
+  } else if (cmd == 13) {
+    for (auto &h : st->hits)
+      if (h.id == H_TRACK_NAME && h.idx == idx) {
+        st->selTracks.clear();
+        st->selTracks.insert(idx);
+        st->editTrack = idx;
+        st->nameRc = h.r;
+        startEdit(st, 4, h.r, tr.name, std::string());
+        break;
+      }
+  }
+  InvalidateRect(st->hwnd, NULL, FALSE);
+}
+
 // Right-click on an event: where its file is, show it in the Finder / Explorer, copy the path
 void clipMenu(State *st, POINT screen, int clipId) {
   Session &s = st->imp->session();
@@ -2736,8 +2852,20 @@ void clipMenu(State *st, POINT screen, int clipId) {
       menuAdd(m, 200 + (int)k, "Copy the path from the AAF", true);
     }
   }
+  if (clipIsStereo(st, *c)) {
+    menuSep(m);
+    menuAdd(m, 900, c->swapLR ? "Put left and right back (this event)" : "Swap left and right (this event)", true);
+  }
   int cmd = TrackPopupMenu(m, TPM_NONOTIFY | TPM_RETURNCMD, screen.x, screen.y, 0, st->hwnd, NULL);
   DestroyMenu(m);
+  if (cmd == 900) {
+    pushUndo(st);
+    c->swapLR = !c->swapLR;
+    st->edited = true;
+    if (st->playClip || st->playTL) stopPlay(st);
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    return;
+  }
   static std::string tipBuf;
   if (cmd >= 100 && cmd < 400) {
     size_t k = (size_t)(cmd % 100);
@@ -3452,7 +3580,7 @@ void click(State *st, int x, int y, bool shift) {
     } else
       opt.clipGain = true;
     break;
-  case H_SHOW_AUTO: opt.showAutomation = !opt.showAutomation; break;
+  case H_SHOW_AUTO: opt.showAutomation = !opt.showAutomation; st->showVol = st->showPan = true; break;
   case H_OPTS: st->optsOpen = !st->optsOpen; st->folderTrack = st->destTrack = st->palTrack = -1; st->palFolder.clear(); break;
   case H_OPTS_BG: return;
   case H_THEME: st->themeMenu = !st->themeMenu; break;
@@ -3618,18 +3746,8 @@ void click(State *st, int x, int y, bool shift) {
     if (st->playClip) stopPlay(st);
     break;
   }
-  case H_TRACK_SWAP: {
-    int idx = h ? h->idx : -1;
-    if (idx < 0 || idx >= (int)s.tracks.size()) break;
-    bool all = true;
-    for (auto &c : s.tracks[(size_t)idx].clips)
-      if (clipIsStereo(st, c)) all = all && c.swapLR;
-    for (auto &c : s.tracks[(size_t)idx].clips)
-      if (clipIsStereo(st, c)) c.swapLR = !all;
-    st->edited = true;
-    if (st->playClip || st->playTL) stopPlay(st);
-    break;
-  }
+  case H_TRACK_SWAP: swapTrack(st, h ? h->idx : -1); break;
+  case H_TRACK_STEREO: toggleStereo(st, h ? h->idx : -1); break;
   case H_HELP_CLOSE: st->helpOpen = false; break;
   case H_UPDATE:
     if (st->host && st->host->openUrl && !st->updUrl.empty()) st->host->openUrl(st->updUrl);
@@ -3951,8 +4069,27 @@ bool handleKey(State *st, int vk) {
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
   }
-  if (vk == 'A' && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) {
-    st->opt->showAutomation = !st->opt->showAutomation;
+  if ((vk == 'A' || vk == 'V' || vk == 'P') && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) {
+    // A: volume and pan, V: volume only, P: pan only (again: hide it)
+    bool &on = st->opt->showAutomation;
+    if (vk == 'A') {
+      on = !on;
+      st->showVol = st->showPan = true;
+    } else {
+      bool &mine = vk == 'V' ? st->showVol : st->showPan;
+      if (!on) { // only this one
+        on = true;
+        st->showVol = vk == 'V';
+        st->showPan = vk == 'P';
+      } else
+        mine = !mine;
+      if (!st->showVol && !st->showPan) {
+        on = false;
+        st->showVol = st->showPan = true;
+      }
+    }
+    st->tip = !on ? "Automation hidden." : st->showVol && st->showPan ? "Volume (blue) and pan (orange) automation shown."
+              : st->showVol ? "Volume automation shown (P adds pan)." : "Pan automation shown (V adds volume).";
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
   }
@@ -3978,8 +4115,8 @@ bool handleKey(State *st, int vk) {
     closeDialog(st, true);
     return true;
   }
-  if (vk == VK_SPACE || vk == 'P' || vk == 'p') { // Space: the timeline; Shift + Space (or P): the selected event
-    bool event = vk != VK_SPACE || (GetAsyncKeyState(VK_SHIFT) & 0x8000);
+  if (vk == VK_SPACE) { // Space: the timeline; Shift + Space: the selected event
+    bool event = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
     if (st->playClip || st->playTL) stopPlay(st);
     else if (event) togglePlay(st);
     else toggleTimeline(st);
@@ -4423,6 +4560,13 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   case WM_RBUTTONUP: { // the event's file: where it is, show it, copy its path
     POINT p = {(short)LOWORD(lp), (short)HIWORD(lp)};
     if (st->drag) return 0;
+    if (const Hit *hn = hitAt(st, p.x, p.y))
+      if (hn->id == H_TRACK_NAME || hn->id == H_TRACK_STEREO) {
+        int ti = hn->idx;
+        ClientToScreen(hwnd, &p);
+        trackMenu(st, p, ti);
+        return 0;
+      }
     const ClipHit *c = clipAt(st, p.x, p.y);
     if (!c) return 0;
     int id = c->id;
@@ -4571,6 +4715,15 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   }
   if (getenv("OLAAF_RULES")) st.rulesOpen = true;
   if (getenv("OLAAF_TCOFF")) st.tcAbs = atof(getenv("OLAAF_TCOFF"));
+  if (getenv("OLAAF_SPLIT")) { // the first combined track split again
+    for (size_t i = 0; i < imp.session().tracks.size(); i++)
+      if (!imp.session().tracks[i].mergedFrom.empty()) {
+        imp.splitStereo((int)i, nullptr);
+        break;
+      }
+    buildRows(&st);
+  }
+  if (getenv("OLAAF_VOLONLY")) st.showPan = false;
   if (getenv("OLAAF_RMEMPTY")) {
     static std::string done;
     std::vector<std::string> names;
