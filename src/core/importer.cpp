@@ -16,10 +16,21 @@
 
 namespace olaaf {
 
+// lower case for matching names, with the German capitals too ("GERÄUSCHE" = "geräusche")
+static std::string foldCase(const std::string &in) {
+  std::string s = lower(in);
+  for (size_t i = 0; i + 1 < s.size(); i++)
+    if ((unsigned char)s[i] == 0xC3) {
+      unsigned char &b = (unsigned char &)s[i + 1];
+      if (b == 0x84 || b == 0x96 || b == 0x9C) b = (unsigned char)(b + 0x20); // Ä Ö Ü -> ä ö ü
+    }
+  return s;
+}
+
 static std::vector<std::string> tokens(const std::string &name) {
   std::vector<std::string> out;
   std::string cur;
-  for (unsigned char c : lower(name)) {
+  for (unsigned char c : foldCase(name)) {
     if (std::isalnum(c) || c >= 0x80) cur += (char)c;
     else if (!cur.empty()) { out.push_back(cur); cur.clear(); }
   }
@@ -35,9 +46,9 @@ std::vector<SortRule> defaultSortRules() {
       {"DX", 0xE8923A, {"dia", "dx", "dlg", "dial", "dialog", "dialogue", "boom", "lav", "anstecker", "fr", "vo", "adr", "voice",
                          "ot", "o-ton", "oton", "guide", "sprache", "mic"}},
       {"FX", 0xF2A6C8, {"sfx", "fx", "effect", "effects", "hardfx", "design", "sd", "foley", "fol", "ger\xc3\xa4usche",
-                        "ger\xc3\xa4usch", "gerausche", "steps", "fs", "spot", "moves", "zs", "prop"}},
+                        "ger\xc3\xa4usch", "gerausche", "steps", "fs", "spot", "moves", "zs", "prop", "nt", "wildtrack"}},
       {"MX", 0x4A86E8, {"mus", "music", "musik", "mx", "score", "song", "source", "temp", "layout"}},
-      {"BG", 0x8FD48A, {"atmo", "atmos", "amb", "ambi", "ambience", "bg", "bgs", "roomtone", "rt", "nt", "at", "raum"}},
+      {"BG", 0x8FD48A, {"atmo", "atmos", "amb", "ambi", "ambience", "bg", "bgs", "roomtone", "rt", "at", "raum"}},
   };
 }
 void setSortRules(const std::vector<SortRule> &rules) { g_rules = rules.empty() ? defaultSortRules() : rules; }
@@ -92,17 +103,16 @@ std::vector<std::string> splitWords(const std::string &text) {
 
 std::string trackGroup(const std::string &trackName) {
   auto tk = tokens(trackName);
-  std::string low = lower(trackName);
+  std::string low = foldCase(trackName); // never case sensitive
   for (auto &row : g_rules) // words with a separator ("o-ton"): anywhere in the name
     for (auto &k : row.words)
-      if (k.find_first_of(" -_.") != std::string::npos && low.find(lower(k)) != std::string::npos) return row.name;
+      if (k.find_first_of(" -_.") != std::string::npos && low.find(foldCase(k)) != std::string::npos) return row.name;
   // whole words first (so "FX Boom" is not caught by a longer word elsewhere), then word starts
   for (int pass = 0; pass < 2; pass++)
     for (auto &row : g_rules)
       for (auto &t : tk)
         for (auto &k : row.words) {
-          std::string kl = k;
-          for (auto &ch : kl) ch = (char)tolower((unsigned char)ch);
+          std::string kl = foldCase(k);
           if (pass == 0 ? t == kl : (kl.size() >= 4 && t.compare(0, kl.size(), kl) == 0)) return row.name;
         }
   return "OTHER";
