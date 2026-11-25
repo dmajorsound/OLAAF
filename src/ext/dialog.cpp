@@ -223,7 +223,7 @@ struct State {
   bool tipVisible = false;               // the tooltip shows after a short hover
   std::string tipHold;                   // the hovered hint, copied (st->tip points here then)
   std::vector<std::string> stereoTips;   // the L+R button's hint per track
-  std::map<int, int> laneShow;           // track uid -> automation shown on that track: 1 volume (V), 2 pan (P)
+  std::map<long long, int> laneShow;     // reel + track uid (laneKey) -> automation shown: 1 volume (V), 2 pan (P)
   unsigned menuTick = 0;                 // when a right-click menu last opened
   double mouseLX = -1, mouseLY = -1;     // mouse, in layout units
   std::string updTag, updUrl;            // a newer OLAAF on GitHub
@@ -561,6 +561,9 @@ double niceStep(double secPerPx) {
 }
 
 double tcOffset(const State *st) { return st->tcMinus ? -st->tcAbs : st->tcAbs; }
+
+// automation shown per track: each reel (tab) has its own track uids
+long long laneKey(const State *st, int uid) { return ((long long)st->reel << 32) | (unsigned)uid; }
 
 int reelCount(const State *st) { return st->host && st->host->reelCount ? std::max(1, st->host->reelCount()) : 1; }
 
@@ -1871,7 +1874,7 @@ void paintArrange(State *st, const Gfx &g) {
         }
       }
     if (on) { // A / the Automation box: every track; V / P: only the tracks they were pressed on
-      auto ls = st->laneShow.find(tr.uid);
+      auto ls = st->laneShow.find(laneKey(st, tr.uid));
       int mine = ls == st->laneShow.end() ? 0 : ls->second;
       if (opt.showAutomation || mine) paintAutomation(st, g, tr, y, spp, opt.showAutomation ? 3 | mine : mine, mine & 2);
     }
@@ -3862,6 +3865,7 @@ void click(State *st, int x, int y, bool shift) {
     }
     int shownNow = st->reel;
     st->host->removeReel(i);
+    st->laneShow.clear(); // the tabs after it move up
     if (i >= 1) { // gone from the list: the ones after it move up
       if (i < (int)st->reelViews.size()) st->reelViews.erase(st->reelViews.begin() + i);
       if (shownNow > i) shownNow--;
@@ -3881,7 +3885,11 @@ void click(State *st, int x, int y, bool shift) {
     s.tracks = st->fresh.tracks;
     s.folders = st->fresh.folders;
     s.video = st->fresh.video;
-    opt = st->fresh.opt;
+    {
+      bool share = opt.reelsShareTracks; // one setting for all tabs: not part of this tab's fresh start
+      opt = st->fresh.opt;
+      opt.reelsShareTracks = share;
+    }
     st->merge = opt.mergeStereo;
     st->choicesBack = false;
     st->edited = false;
@@ -4366,10 +4374,10 @@ bool handleKey(State *st, int vk) {
     } else {
       bool allOn = true;
       for (int t : idx)
-        if (t >= 0 && t < (int)s.tracks.size() && !(st->laneShow[s.tracks[(size_t)t].uid] & bit)) allOn = false;
+        if (t >= 0 && t < (int)s.tracks.size() && !(st->laneShow[laneKey(st, s.tracks[(size_t)t].uid)] & bit)) allOn = false;
       for (int t : idx)
         if (t >= 0 && t < (int)s.tracks.size()) {
-          int &m = st->laneShow[s.tracks[(size_t)t].uid];
+          int &m = st->laneShow[laneKey(st, s.tracks[(size_t)t].uid)];
           m = allOn ? (m & ~bit) : (m | bit);
         }
       const char *what = vk == 'V' ? "Volume (blue)" : "Pan (purple)";
@@ -4619,6 +4627,10 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   case WM_LBUTTONDBLCLK: // the second click of a double-click (Windows / macOS send it instead of a down)
   case WM_LBUTTONDOWN: {
     POINT p = {(short)LOWORD(lp), (short)HIWORD(lp)};
+    if (st->reelAsk) { // the reel question waits for its answer: no drags, no selections underneath
+      st->drag = 0; // the buttons answer on release (click)
+      return 0;
+    }
     if (st->editKind && !PtInRect(&st->editRc, p)) endEdit(st, true); // clicking elsewhere applies what was typed
     if (!st->editKind) SetFocus(hwnd); // so the arrow keys reach the selected events
     st->dragMoved = false;
@@ -4881,11 +4893,13 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return 0;
   }
   case WM_RBUTTONUP: { // the event's file / the track: their menus
+    if (st && st->reelAsk) return 0;
     POINT p = {(short)LOWORD(lp), (short)HIWORD(lp)};
     rightClick(st, p);
     return 0;
   }
   case WM_CONTEXTMENU: { // some systems send this instead (or as well): the same menus, once
+    if (st && st->reelAsk) return 0;
     if (GetTickCount() - st->menuTick < 600) return 0;
     POINT p = {(short)LOWORD(lp), (short)HIWORD(lp)};
     if (p.x == -1 && p.y == -1) return 0; // from the keyboard: no place to point at
@@ -5041,8 +5055,8 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
       }
     buildRows(&st);
   }
-  if (getenv("OLAAF_VOLONLY")) st.laneShow[st.imp->session().tracks[0].uid] = 1;
-  if (getenv("OLAAF_PANSEL")) { st.laneShow[st.imp->session().tracks[0].uid] = 2; st.selTracks = {0}; }
+  if (getenv("OLAAF_VOLONLY")) st.laneShow[laneKey(&st, st.imp->session().tracks[0].uid)] = 1;
+  if (getenv("OLAAF_PANSEL")) { st.laneShow[laneKey(&st, st.imp->session().tracks[0].uid)] = 2; st.selTracks = {0}; }
   if (getenv("OLAAF_RENAME")) { // the first two tracks renamed
     imp.session().tracks[0].name = "Dialog";
     if (imp.session().tracks.size() > 2) imp.session().tracks[2].name = "Atmo Wind";
