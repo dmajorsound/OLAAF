@@ -49,6 +49,12 @@ SWELL_DEFINE_DIALOG_RESOURCE_BEGIN(IDD_OLAAF_IMPORT, SWELL_DLG_WS_FLIPPED | SWEL
 BEGIN
 END
 SWELL_DEFINE_DIALOG_RESOURCE_END(IDD_OLAAF_IMPORT)
+#define IDD_OLAAF_START 4713
+SWELL_DEFINE_DIALOG_RESOURCE_BEGIN(IDD_OLAAF_START, SWELL_DLG_WS_FLIPPED | SWELL_DLG_WS_NOAUTOSIZE | SWELL_DLG_WS_OPAQUE | SWELL_DLG_WS_RESIZABLE,
+                                   "OLAAF", 760, 540, 1.0)
+BEGIN
+END
+SWELL_DEFINE_DIALOG_RESOURCE_END(IDD_OLAAF_START)
 #define OL_GETUSER(h) GetWindowLong(h, GWL_USERDATA)
 #define OL_SETUSER(h, v) SetWindowLong(h, GWL_USERDATA, (LONG_PTR)(v))
 #else
@@ -145,7 +151,8 @@ enum HitId {
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
   H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE,
-  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE, H_TC_RESET, H_REMOVE_EMPTY, H_TRACK_STEREO, H_FOLD_TOGGLE, H_SORT_NOW, H_REEL_SHARE, H_REEL_OWN, H_REEL_ASK_BG, H_REEL_MODE, H_SORT_RESET, H_EMBED_LOAD, H_EMBED_SKIP, H_EMBED_BG
+  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE, H_TC_RESET, H_REMOVE_EMPTY, H_TRACK_STEREO, H_FOLD_TOGGLE, H_SORT_NOW, H_REEL_SHARE, H_REEL_OWN, H_REEL_ASK_BG, H_REEL_MODE, H_SORT_RESET, H_EMBED_LOAD, H_EMBED_SKIP, H_EMBED_BG,
+  H_START_PICK, H_START_RECENT, H_START_CANCEL, H_START_FMT
 };
 
 struct Hit {
@@ -165,6 +172,13 @@ struct Row {
   int kind;            // 0 track, 1 folder, 2 drop line
   int track = -1;
   std::string folder;
+};
+
+// the start window: what it offers, and what was picked
+struct StartData {
+  std::vector<std::string> recent;                              // AAFs opened before, newest first
+  std::function<std::vector<std::string>(HWND parent)> pick;    // the file chooser (several at once)
+  std::vector<std::string> result;
 };
 
 struct State {
@@ -221,6 +235,8 @@ struct State {
   int exRev = -1, mediaRev = 0;
   long long exTick = 0;
   std::vector<char> ex;
+  StartData *start = nullptr;            // the start window (no AAF yet)
+  int startHover = -1;
   bool embedAsk = false;
   std::set<Importer *> embedAsked;
   struct EmbedJob { // one AAF being unpacked on a worker thread
@@ -322,7 +338,7 @@ struct State {
   HBRUSH editBrush = nullptr;
   HFONT fTheme = nullptr, fCheck = nullptr, fClip = nullptr, fTitle = nullptr, fTitleThin = nullptr, fTag = nullptr,
         fBody = nullptr, fBold = nullptr, fSmall = nullptr, fSec = nullptr, fMono = nullptr, fMonoBig = nullptr,
-        fMonoSmall = nullptr, fHead = nullptr, fWord = nullptr, fKey = nullptr, fName = nullptr, fTiny = nullptr, fMicro = nullptr;
+        fMonoSmall = nullptr, fHead = nullptr, fWord = nullptr, fKey = nullptr, fName = nullptr, fTiny = nullptr, fMicro = nullptr, fHero = nullptr;
 };
 
 HFONT makeFont(double px, bool bold, double scale, bool mono = false) {
@@ -348,6 +364,7 @@ void makeFonts(State *st) {
   st->fMonoSmall = makeFont(10.5, false, s, true);
   st->fHead = makeFont(15, true, s);
   st->fWord = makeFont(20, true, s);
+  st->fHero = makeFont(28, true, s);
   st->fKey = makeFont(11.5, true, s, true);
   st->fName = makeFont(11.5, false, s);
   st->fTiny = makeFont(9.5, false, s);
@@ -356,7 +373,7 @@ void makeFonts(State *st) {
 
 void freeFonts(State *st) {
   HFONT *fs[] = {&st->fTheme, &st->fCheck, &st->fClip, &st->fTitle, &st->fTitleThin, &st->fTag, &st->fBody,
-                 &st->fBold, &st->fSmall, &st->fSec, &st->fMono, &st->fMonoBig, &st->fMonoSmall, &st->fHead, &st->fWord, &st->fKey, &st->fName, &st->fTiny, &st->fMicro};
+                 &st->fBold, &st->fSmall, &st->fSec, &st->fMono, &st->fMonoBig, &st->fMonoSmall, &st->fHead, &st->fWord, &st->fKey, &st->fName, &st->fTiny, &st->fMicro, &st->fHero};
   for (HFONT *f : fs) {
     if (*f) DeleteObject(*f);
     *f = nullptr;
@@ -931,15 +948,8 @@ int totalTracks(State *st, std::string *tip) {
 }
 
 // One bar on top: the AAF, where it lands in REAPER, options, import.
-void paintTopBar(State *st, const Gfx &g) {
-  Session &s = st->imp->session();
-  g.fill(0, 0, W, kTopH, kFace);
-  g.fill(0, kTopH - 1, W, kTopH, kLine);
-  double mid = kTopH / 2;
-  // the OLAAF mark and name: "OLAAF" from the top of the mark, the version on its bottom line
-  // (IBM Plex: capitals are 0.698 of the type size)
-  double wordR = 56 + std::max(60.0, std::min(90.0, g.width(st->fWord, "OLAAF")));
-  if (st->themeMenu) g.rbox(10, mid - 21, wordR + 6, mid + 21, 8, kBlue, kBlueSoft); // the menu is open
+// the OLAAF mark, the name and the version, at the top left, centered on `mid`
+void paintBrand(State *st, const Gfx &g, double mid) {
   g.rfill(16, mid - 15, 46, mid + 15, 8, kBlue);
   { // the mark: three events of an edit, with their fades (drawn on a 120 grid, 30 units here)
     auto clip = [&](double x, double y, double w, double h, double fi, double fo) {
@@ -954,6 +964,18 @@ void paintTopBar(State *st, const Gfx &g) {
   }
   g.textBase(st->fWord, kInk, "OLAAF", 56, mid - 15 + 20 * 0.698);
   g.textBase(st->fTiny, kMute, "V " OLAAF_VERSION_STRING " beta", 57, mid + 15);
+}
+
+void paintTopBar(State *st, const Gfx &g) {
+  Session &s = st->imp->session();
+  g.fill(0, 0, W, kTopH, kFace);
+  g.fill(0, kTopH - 1, W, kTopH, kLine);
+  double mid = kTopH / 2;
+  // the OLAAF mark and name: "OLAAF" from the top of the mark, the version on its bottom line
+  // (IBM Plex: capitals are 0.698 of the type size)
+  double wordR = 56 + std::max(60.0, std::min(90.0, g.width(st->fWord, "OLAAF")));
+  if (st->themeMenu) g.rbox(10, mid - 21, wordR + 6, mid + 21, 8, kBlue, kBlueSoft); // the menu is open
+  paintBrand(st, g, mid);
   addHit(st, 10, mid - 21, wordR + 6, mid + 21, H_THEME, 0,
          "OLAAF " OLAAF_VERSION_STRING " beta, developed with AI assistance. dmajorsound.com");
   g.fill(wordR + 14, mid - 16, wordR + 15, mid + 16, kLine);
@@ -2723,6 +2745,29 @@ void paintEmbedAsk(State *st, const Gfx &g) {
            {"Items only", H_EMBED_SKIP, "Show the events without waveforms. Nothing is unpacked until the import.", false});
 }
 
+// several AAFs: do they look like one film? Then ask whether they share tracks.
+void askAboutReels(State *st) {
+  // one film (numbered reels, the same track layout)? Then ask: same tracks or their own?
+  std::vector<Session> ss;
+  std::vector<std::string> names;
+  for (int i : shownReels(st)) {
+    Importer *ri;
+    ImportOptions *ro;
+    if (!reelAt(st, i, &ri, &ro)) continue;
+    ss.push_back(ri->session());
+    names.push_back(reelLabel(ri->session(), i));
+  }
+  if (ss.size() >= 2) {
+    std::vector<std::string> nl = reelNumberLabels(names);
+    if (nl.empty()) nl = reelShortLabels(names);
+    st->reelAskNames.clear();
+    for (size_t k = 0; k < nl.size(); k++)
+      st->reelAskNames += (k == 0 ? "" : k + 1 == nl.size() ? " and " : ", ") + nl[k];
+    st->reelAskRelated = reelsBelongTogether(ss, &st->reelAskWhy);
+    st->reelAsk = true;
+  }
+}
+
 // same tracks for all AAFs, or each its own: one setting for every tab
 void reelAnswer(State *st, bool share) {
   st->reelAsk = false;
@@ -4150,25 +4195,7 @@ void click(State *st, int x, int y, bool shift) {
       switchReel(st, before);
       if (st->reelMsg.empty())
         st->reelMsg = strprintf("%d reel%s added at %s own timecode.", added, added == 1 ? "" : "s", added == 1 ? "its" : "their");
-      // one film (numbered reels, the same track layout)? Then ask: same tracks or their own?
-      std::vector<Session> ss;
-      std::vector<std::string> names;
-      for (int i : shownReels(st)) {
-        Importer *ri;
-        ImportOptions *ro;
-        if (!reelAt(st, i, &ri, &ro)) continue;
-        ss.push_back(ri->session());
-        names.push_back(reelLabel(ri->session(), i));
-      }
-      if (ss.size() >= 2) {
-        std::vector<std::string> nl = reelNumberLabels(names);
-        if (nl.empty()) nl = reelShortLabels(names);
-        st->reelAskNames.clear();
-        for (size_t k = 0; k < nl.size(); k++)
-          st->reelAskNames += (k == 0 ? "" : k + 1 == nl.size() ? " and " : ", ") + nl[k];
-        st->reelAskRelated = reelsBelongTogether(ss, &st->reelAskWhy);
-        st->reelAsk = true;
-      }
+      askAboutReels(st);
     }
     st->tip = st->reelMsg.empty() ? nullptr : st->reelMsg.c_str();
     break;
@@ -4804,6 +4831,7 @@ bool handleKey(State *st, int vk) {
 }
 
 State *g_open = nullptr; // the dialog that is open (for REAPER's keyboard hook)
+HWND g_startHwnd = nullptr; // the start window, while it is open
 
 // Right-click at a point of the window (client coordinates): the track menu on a track name,
 // the file menu on an event
@@ -4878,6 +4906,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     st->peaks.start(st->imp->session()); // waveforms fill in as the files are read
     SetTimer(hwnd, kPeakTimer, 150, NULL);
     embedCheck(st); // audio inside the AAF: unpack it for waveforms, or items only?
+    if (shownReels(st).size() > 1) askAboutReels(st); // several AAFs chosen at once
     SetTimer(hwnd, kUpdTimer, 1000, NULL); // is there a newer OLAAF?
     return 0;
   }
@@ -5361,6 +5390,8 @@ struct DlgTemplate {
 
 } // namespace
 
+void relayoutStart(State *st);
+void paintStart(State *st, HDC dc);
 #ifdef OLAAF_DIALOG_TEST
 // renders the dialog into any HDC, for checking the layout without REAPER
 // palTrack: >= 0 color popover of that track, <= -2 folder popover of track (-2 - n)
@@ -5370,6 +5401,22 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   static ImportOptions *firstOpt;
   firstImp = &imp;
   firstOpt = &opt;
+  if (getenv("OLAAF_START")) { // the start window
+    static StartData sd;
+    sd.recent.clear();
+    if (atoi(getenv("OLAAF_START")) == 2)
+      sd.recent = {imp.session().aafPath, "/Volumes/Projects/Pathologie/AAF/Pathologie_Reel2_v3.aaf",
+                   "/Users/bernd/Desktop/Namib_Edit_V1.aaf"};
+    State ss;
+    ss.start = &sd;
+    ss.hwnd = (HWND)1;
+    ss.tip = tip;
+    if (getenv("OLAAF_STARTHOVER")) ss.startHover = 0;
+    relayoutStart(&ss);
+    paintStart(&ss, dc);
+    freeFonts(&ss);
+    return;
+  }
   State st;
   st.imp = &imp;
   st.opt = &opt;
@@ -5612,6 +5659,8 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
 // REAPER hands every key press to registered extensions first (otherwise its own shortcuts,
 // like M, take them): returns 1 when the dialog used the key, -1 to let the dialog have it, 0 if not ours
 int dialogTranslateKey(MSG *msg) {
+  if (g_startHwnd && msg && (msg->hwnd == g_startHwnd || IsChild(g_startHwnd, msg->hwnd)))
+    return -1; // the start window takes its keys itself (Return, Esc), not REAPER
   State *st = g_open;
   if (!st || !st->hwnd || !msg) return 0;
   if (msg->hwnd != st->hwnd && !IsChild(st->hwnd, msg->hwnd)) return 0;
@@ -5671,6 +5720,283 @@ int dialogTranslateKey(MSG *msg) {
   if (msg->message == WM_KEYDOWN || msg->message == WM_CHAR || msg->message == WM_KEYUP) return -1;
   return 0;
 }
+
+// ------------------------------------------------------------------ the start window
+// Shown when OLAAF opens: what it does, in three steps, which file type, the AAFs opened before,
+// and one button to choose the file.
+
+const double SW = 760, SH = 540;
+
+void relayoutStart(State *st) {
+  RECT cr;
+  GetClientRect(st->hwnd, &cr);
+  double zoom = std::max(0.5, std::min(cr.right / (SW * st->base), cr.bottom / (SH * st->base)));
+  double scale = st->base * zoom;
+  st->ox = std::max(0.0, std::floor((cr.right - SW * scale) / 2));
+  st->oy = std::max(0.0, std::floor((cr.bottom - SH * scale) / 2));
+  if (std::fabs(scale - st->scale) > 1e-6 || !st->fBody) {
+    st->scale = scale;
+    freeFonts(st);
+    makeFonts(st);
+  }
+}
+
+void paintStart(State *st, HDC dc) {
+  Gfx g{dc, st->scale, st->ox, st->oy};
+  st->hits.clear();
+  RECT cr;
+  GetClientRect(st->hwnd, &cr);
+  {
+    HBRUSH br = CreateSolidBrush(kFace);
+    FillRect(dc, &cr, br);
+    DeleteObject(br);
+  }
+  const double L = 32, R = SW - 32, colR = 484;
+  // top: the OLAAF mark, and dmajorsound on the right
+  g.fill(0, kTopH - 1, SW, kTopH, kLine);
+  paintBrand(st, g, kTopH / 2);
+  drawDmajorLogo(g.dc, g.X(R), g.Y(kTopH / 2), g.S(16), kMute, kMute, st->fSmall);
+
+  // the headline, with a paper plane coming in to land
+  g.text(st->fHero, kInk, "Prepare for landing", L, 86, R, 124, DT_LEFT);
+  double px = L + g.width(st->fHero, "Prepare for landing") + 16;
+  g.polyAA({{px + 40, 120}, {px, 98}, {px + 18, 99}}, kBlue);
+  g.polyAA({{px + 40, 120}, {px + 18, 99}, {px + 17, 84}}, theme().blueLine);
+  g.fill(px - 2, 123, px + 54, 125, kLine); // the runway
+  bool cut = false;
+  double y = 130;
+  for (auto &ln : fitLines(g, st->fBody, "Bring an edit from the picture department into REAPER: its tracks, clips, fades and levels, "
+                                         "at the right timecode.", R - L, 2, &cut)) {
+    g.text(st->fBody, kMute, ln, L, y, R, y + 19, DT_LEFT);
+    y += 19;
+  }
+
+  // three steps
+  struct Step { const char *title, *text; };
+  static const Step steps[3] = {
+      {"Choose the file", "The AAF the editor sent you. Several reels? Choose them all at once."},
+      {"Look it over", "Tracks, timecode and missing audio. Nothing changes until you import."},
+      {"Land in REAPER", "OLAAF builds the tracks in the project you have open."}};
+  y = 190;
+  for (int i = 0; i < 3; i++) {
+    g.rfill(L, y, L + 26, y + 26, 13, kBlue);
+    g.text(st->fBold, kWhiteFixed, strprintf("%d", i + 1), L, y, L + 26, y + 26, DT_CENTER);
+    g.text(st->fBold, kInk, steps[i].title, L + 40, y + 2, colR - 32, y + 22, DT_LEFT);
+    double ty = y + 24;
+    for (auto &ln : fitLines(g, st->fSmall, steps[i].text, colR - 32 - (L + 40), 2, &cut)) {
+      g.text(st->fSmall, kMute, ln, L + 40, ty, colR - 32, ty + 17, DT_LEFT);
+      ty += 17;
+    }
+    y += 62;
+  }
+
+  // the file type
+  g.text(st->fSmall, kMute, "What did you get?", L, 382, colR - 32, 400, DT_LEFT);
+  struct Fmt { const char *name, *from; bool ready; };
+  static const Fmt fmts[2] = {{"AAF", "from Avid, Premiere, Resolve, Pro Tools, Nuendo, Logic", true},
+                              {"DAWproject", "from Cubase, Bitwig, Studio One \xc2\xb7 coming soon", false}};
+  for (int i = 0; i < 2; i++) {
+    double ry = 404 + i * 36;
+    bool on = i == 0;
+    if (on) g.rbox(L - 8, ry, colR - 24, ry + 32, 8, theme().blueLine, kBlueSoft);
+    double cx = L + 8, cy = ry + 16;
+    if (on) {
+      g.rfill(cx - 8, cy - 8, cx + 8, cy + 8, 8, kBlue);
+      g.rfill(cx - 3, cy - 3, cx + 3, cy + 3, 3, kWhiteFixed);
+    } else
+      g.rbox(cx - 8, cy - 8, cx + 8, cy + 8, 8, kLine, kPanel);
+    double nx = L + 26, nw = g.width(st->fBold, fmts[i].name);
+    g.text(st->fBold, fmts[i].ready ? kInk : kMute, fmts[i].name, nx, ry, nx + nw + 4, ry + 32, DT_LEFT);
+    std::vector<std::string> fl = fitLines(g, st->fSmall, fmts[i].from, colR - 32 - (nx + nw + 10), 1, &cut);
+    g.text(st->fSmall, kMute, fl.empty() ? "" : fl[0], nx + nw + 10, ry, colR - 32, ry + 32, DT_LEFT);
+    addHit(st, L - 8, ry, colR - 24, ry + 32, fmts[i].ready ? H_START_FMT : H_NONE, i,
+           fmts[i].ready ? "AAF: the usual way to hand an edit to sound. Most picture editors can export it."
+                         : "DAWproject files can't be opened yet. Ask for an AAF in the meantime.");
+  }
+
+  // the AAFs opened before
+  g.fill(colR - 8, 190, colR - 7, 470, kLine);
+  g.text(st->fSmall, kMute, "Opened before", colR + 12, 186, R, 204, DT_LEFT);
+  const StartData *sd = st->start;
+  if (!sd || sd->recent.empty()) {
+    double ey = 210;
+    for (auto &ln : fitLines(g, st->fSmall, "The AAFs you open show up here, so the next landing is one click away.",
+                             R - colR - 12, 3, &cut)) {
+      g.text(st->fSmall, kMute, ln, colR + 12, ey, R, ey + 17, DT_LEFT);
+      ey += 17;
+    }
+  } else
+    for (size_t i = 0; i < sd->recent.size() && i < 6; i++) {
+      double ry = 210 + i * 44;
+      const std::string &path = sd->recent[i];
+      bool there = fileExists(path);
+      bool hov = st->startHover == (int)i;
+      if (hov && there) g.rfill(colR + 4, ry, R + 4, ry + 40, 8, kBlueSoft);
+      std::vector<std::string> nl = fitLines(g, st->fBody, baseName(path), R - colR - 16, 1, &cut);
+      g.text(st->fBody, there ? kInk : kMute, nl.empty() ? "" : nl[0], colR + 12, ry + 3, R, ry + 22, DT_LEFT);
+      std::string where = there ? shortPath(dirName(path), 60) : std::string("Not found: ") + shortPath(dirName(path), 48);
+      std::vector<std::string> wl = fitLines(g, st->fTiny, where, R - colR - 16, 1, &cut);
+      g.text(st->fTiny, there ? kMute : kRed, wl.empty() ? "" : wl[0], colR + 12, ry + 22, R, ry + 38, DT_LEFT);
+      if (there) addHit(st, colR + 4, ry, R + 4, ry + 40, H_START_RECENT, (int)i, "Open this AAF again.");
+      else addHit(st, colR + 4, ry, R + 4, ry + 40, H_NONE, (int)i, "This AAF isn't where it was. Choose it with the button below.");
+    }
+
+  // bottom: a hint, Cancel and the one main button
+  g.fill(0, SH - 60, SW, SH - 59, kLine);
+  double bt = SH - 46, bb = SH - 14;
+  const char *pl = "Choose AAF\xe2\x80\xa6";
+  double pw = std::max(150.0, g.width(st->fBold, pl) + 40);
+  button(st, g, R - pw, bt, R, bb, pl, H_START_PICK, 0, "Opens the file chooser (Return).", true);
+  double cw = g.width(st->fBody, "Cancel") + 24;
+  g.text(st->fBody, kMute, "Cancel", R - pw - 8 - cw, bt, R - pw - 8, bb, DT_CENTER);
+  addHit(st, R - pw - 8 - cw, bt, R - pw - 8, bb, H_START_CANCEL, 0, "Close OLAAF (Esc).");
+  const char *hint = st->tip ? st->tip : "Return opens the file chooser, Esc closes this window.";
+  std::vector<std::string> hl = fitLines(g, st->fSmall, hint, R - pw - 16 - cw - L, 2, &cut);
+  double hy = (bt + bb) / 2 - hl.size() * 8.5;
+  for (auto &ln : hl) {
+    g.text(st->fSmall, st->tip ? kInk : kMute, ln, L, hy, R - pw - 16 - cw, hy + 17, DT_LEFT);
+    hy += 17;
+  }
+}
+
+static void startPick(State *st) {
+  if (!st->start || !st->start->pick) return;
+  std::vector<std::string> files = st->start->pick(st->hwnd);
+  if (files.empty()) return; // cancelled: the start window stays
+  st->start->result = files;
+  EndDialog(st->hwnd, 1);
+}
+
+INT_PTR CALLBACK startProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+  State *st = (State *)OL_GETUSER(hwnd);
+  if (!st && msg != WM_INITDIALOG) return 0;
+  switch (msg) {
+  case WM_INITDIALOG: {
+    st = (State *)lp;
+    OL_SETUSER(hwnd, st);
+    st->hwnd = hwnd;
+#ifdef _WIN32
+    st->base = st->scale = windowDpi(hwnd) / 96.0;
+    RECT want = {0, 0, (LONG)std::lround(SW * st->base), (LONG)std::lround(SH * st->base)};
+    AdjustWindowRectEx(&want, (DWORD)GetWindowLongPtr(hwnd, GWL_STYLE), FALSE, (DWORD)GetWindowLongPtr(hwnd, GWL_EXSTYLE));
+    int w = want.right - want.left, h = want.bottom - want.top;
+    RECT pr;
+    HWND par = GetParent(hwnd);
+    if (par && GetWindowRect(par, &pr))
+      SetWindowPos(hwnd, NULL, std::max((int)pr.left, (int)(pr.left + pr.right - w) / 2),
+                   std::max((int)pr.top, (int)(pr.top + pr.bottom - h) / 2), w, h, SWP_NOZORDER);
+#endif
+    olSetText(hwnd, "OLAAF \xe2\x80\x93 AAF Import for Reaper");
+    g_startHwnd = hwnd;
+    relayoutStart(st);
+    SetFocus(hwnd);
+    return 0;
+  }
+  case WM_ERASEBKGND: return 1;
+  case WM_SIZE:
+    relayoutStart(st);
+    InvalidateRect(hwnd, NULL, FALSE);
+    return 0;
+  case WM_GETMINMAXINFO: {
+    MINMAXINFO *mm = (MINMAXINFO *)lp;
+    mm->ptMinTrackSize.x = (LONG)(SW * st->base * 0.7);
+    mm->ptMinTrackSize.y = (LONG)(SH * st->base * 0.7);
+    return 0;
+  }
+  case WM_PAINT: {
+    PAINTSTRUCT ps;
+    HDC dc = BeginPaint(hwnd, &ps);
+#ifdef _WIN32
+    RECT cr;
+    GetClientRect(hwnd, &cr);
+    HDC mem = CreateCompatibleDC(dc);
+    HBITMAP bmp = CreateCompatibleBitmap(dc, cr.right, cr.bottom);
+    HGDIOBJ old = SelectObject(mem, bmp);
+    paintStart(st, mem);
+    BitBlt(dc, 0, 0, cr.right, cr.bottom, mem, 0, 0, SRCCOPY);
+    SelectObject(mem, old);
+    DeleteObject(bmp);
+    DeleteDC(mem);
+#else
+    paintStart(st, dc);
+#endif
+    EndPaint(hwnd, &ps);
+    return 0;
+  }
+  case WM_MOUSEMOVE: {
+    const Hit *h = hitAt(st, (short)LOWORD(lp), (short)HIWORD(lp));
+    const char *tip = h ? h->tip : nullptr;
+    int hov = h && h->id == H_START_RECENT ? h->idx : -1;
+    if (tip != st->tip || hov != st->startHover) {
+      st->tip = tip;
+      st->startHover = hov;
+      InvalidateRect(hwnd, NULL, FALSE);
+    }
+    return 0;
+  }
+  case WM_LBUTTONUP: {
+    const Hit *h = hitAt(st, (short)LOWORD(lp), (short)HIWORD(lp));
+    if (!h) return 0;
+    if (h->id == H_START_PICK) startPick(st);
+    else if (h->id == H_START_CANCEL) EndDialog(hwnd, 0);
+    else if (h->id == H_START_RECENT && st->start && h->idx >= 0 && h->idx < (int)st->start->recent.size()) {
+      st->start->result = {st->start->recent[(size_t)h->idx]};
+      EndDialog(hwnd, 1);
+    }
+    return 0;
+  }
+#ifdef _WIN32
+  case WM_GETDLGCODE:
+    SetWindowLongPtr(hwnd, DWLP_MSGRESULT, DLGC_WANTALLKEYS);
+    return TRUE;
+#endif
+  case WM_KEYDOWN:
+    if (wp == VK_RETURN) {
+      startPick(st);
+      return 1;
+    }
+    if (wp == VK_ESCAPE) {
+      EndDialog(hwnd, 0);
+      return 1;
+    }
+    return 0;
+  case WM_COMMAND:
+    if (LOWORD(wp) == IDOK) startPick(st);
+    else if (LOWORD(wp) == IDCANCEL) EndDialog(hwnd, 0);
+    return 0;
+  case WM_CLOSE:
+    EndDialog(hwnd, 0);
+    return 0;
+  case WM_DESTROY:
+    if (g_startHwnd == hwnd) g_startHwnd = nullptr;
+    freeFonts(st);
+    return 0;
+  }
+  return 0;
+}
+
+std::vector<std::string> showStartWindow(HWND parent, const std::vector<std::string> &recent,
+                                         std::function<std::vector<std::string>(HWND parent)> pick) {
+  StartData sd;
+  sd.recent = recent;
+  sd.pick = std::move(pick);
+  State st;
+  st.start = &sd;
+#ifdef _WIN32
+  DlgTemplate dt;
+  memset(&dt, 0, sizeof(dt));
+  dt.t.style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME;
+  dt.t.cx = 380;
+  dt.t.cy = 270;
+  wcscpy(dt.title, L"OLAAF");
+  DialogBoxIndirectParam((HINSTANCE)g_hInst, &dt.t, parent, (DLGPROC)startProc, (LPARAM)&st);
+#else
+  DialogBoxParam(g_hInst, MAKEINTRESOURCE(IDD_OLAAF_START), parent, startProc, (LPARAM)&st);
+#endif
+  return sd.result;
+}
+
+HWND openDialogHwnd() { return g_open ? g_open->hwnd : nullptr; }
 
 HWND openImportDialog(HWND parent, Importer &imp, ImportOptions &opt, const DialogHost &host,
                       std::function<void(bool accepted)> onClose) {

@@ -79,6 +79,14 @@ struct DialogHost {
 
 // Shows the dialog. Returns true when the user pressed Import; `opt` and the session's
 // track flags / colors then hold the choices.
+// the import window when one is open (one at a time), else nullptr
+HWND openDialogHwnd();
+
+// The start window: what OLAAF does, the AAFs opened before and the button to choose one.
+// Returns the AAFs to open (several = reels), empty when it was closed.
+std::vector<std::string> showStartWindow(HWND parent, const std::vector<std::string> &recent,
+                                         std::function<std::vector<std::string>(HWND parent)> pick);
+
 bool showImportDialog(HWND parent, Importer &imp, ImportOptions &opt, const DialogHost &host);
 // The same window without blocking REAPER: returns at once; onClose runs after the window is closed
 // (accepted = Build session). Only one can be open; a second call brings it to the front and returns nullptr.

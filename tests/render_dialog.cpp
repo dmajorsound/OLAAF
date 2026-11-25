@@ -60,7 +60,9 @@ static int mDraw(HDC, const char *buf, int, RECT *r, int align) {
 static void mPoly(HDC, POINT *p, int n) { svg += "<polygon points='"; char t[32]; for (int i = 0; i < n; i++) { snprintf(t, 32, "%ld,%ld ", p[i].x, p[i].y); svg += t; } svg += "' fill='" + hex(curBrush) + "'/>\n"; }
 static BOOL mTm(HDC, TEXTMETRIC *tm) { tm->tmHeight = (int)(curFont.h * 1.2); tm->tmInternalLeading = tm->tmHeight - curFont.h; tm->tmAscent = (int)(curFont.h * 0.95); tm->tmDescent = tm->tmHeight - tm->tmAscent; return 1; }
 static int zoomK() { const char *e = getenv("OLAAF_ZOOM"); return e ? atoi(e) : 1; }
-static void mClient(HWND, RECT *r) { r->left = r->top = 0; r->right = 1180 * zoomK(); r->bottom = 742 * zoomK(); }
+static int cliW() { return getenv("OLAAF_START") ? 760 : 1180; }
+static int cliH() { return getenv("OLAAF_START") ? 540 : 742; }
+static void mClient(HWND, RECT *r) { r->left = r->top = 0; r->right = cliW() * zoomK(); r->bottom = cliH() * zoomK(); }
 static BOOL mPt(const RECT *r, POINT p) { return p.x >= r->left && p.x < r->right && p.y >= r->top && p.y < r->bottom; }
 
 int main(int argc, char **argv) {
@@ -78,7 +80,7 @@ int main(int argc, char **argv) {
   if (imp.session().tracks.size() > 2) imp.session().tracks[2].color = 0xD9822B;
   if (imp.session().tracks.size() > 4) imp.session().tracks[4].import = false;
   int pal = argc > 3 ? atoi(argv[3]) : -1;
-  svg = "<svg xmlns='http://www.w3.org/2000/svg' width='" + std::to_string(1180 * zoomK()) + "' height='" + std::to_string(742 * zoomK()) + "'>\n";
+  svg = "<svg xmlns='http://www.w3.org/2000/svg' width='" + std::to_string(cliW() * zoomK()) + "' height='" + std::to_string(cliH() * zoomK()) + "'>\n";
   if (argc > 4) olaaf::setDarkTheme(true); else olaaf::setThemeMode(2); // dark = REAPER 7 default theme
   dialogPaintTest(imp, opt, (HDC)1, pal, nullptr);
   svg += "</svg>\n";
