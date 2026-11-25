@@ -162,7 +162,7 @@ static void loadSettings(ImportOptions &o) {
   o.fades = getFlag("fades", true);
   o.clipGain = getFlag("gain", true);
   o.clipGainToTrack = getFlag("gainToTrack", false);
-  o.showAutomation = getFlag("showAuto", false);
+  o.showAutomation = false; // the automation lanes start hidden on every import (the button shows them)
   o.video = getFlag("video", true);
   o.markers = getFlag("markers", true);
   o.folders = getFlag("folders", true);
@@ -176,7 +176,6 @@ static void saveSettings(const ImportOptions &o, const std::string &defaultDest)
   setFlag("fades", o.fades);
   setFlag("gain", o.clipGain);
   setFlag("gainToTrack", o.clipGainToTrack);
-  setFlag("showAuto", o.showAutomation);
   setFlag("video", o.video);
   setFlag("markers", o.markers);
   setFlag("folders", o.folders);

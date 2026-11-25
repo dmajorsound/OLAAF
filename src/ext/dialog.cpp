@@ -218,6 +218,7 @@ struct State {
   double playFrom = 0;                   // where timeline playback started (stop goes back there)
   bool helpOpen = false;                 // the help and shortcut window
   bool tipVisible = false;               // the tooltip shows after a short hover
+  std::string tipHold;                   // the hovered hint, copied (st->tip points here then)
   double mouseLX = -1, mouseLY = -1;     // mouse, in layout units
   std::string updTag, updUrl;            // a newer OLAAF on GitHub
   int updPolls = 0;
@@ -4306,13 +4307,18 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     int hr = (lx >= kL && lx < kL + kHdr && !st->optsOpen) ? rowAtY(st, my) : -1;
     st->mouseLX = (mx - st->ox) / st->scale;
     st->mouseLY = (my - st->oy) / st->scale;
-    if (tip != st->tip || hr != st->hoverRow) {
-      bool wasShown = st->tipVisible;
-      st->tip = tip;
+    // the hint is copied: the text it points to is rebuilt with every paint (a pointer to it went stale
+    // and showed random characters in the footer)
+    bool same = tip ? (st->tip == st->tipHold.c_str() && st->tipHold == tip) : st->tip == nullptr;
+    if (!same || hr != st->hoverRow) {
+      if (tip) {
+        st->tipHold = tip;
+        st->tip = st->tipHold.c_str();
+      } else
+        st->tip = nullptr;
       st->hoverRow = hr;
       st->tipVisible = false;
       KillTimer(hwnd, kTipTimer);
-      (void)wasShown;
       InvalidateRect(hwnd, NULL, FALSE);
     }
     return 0;
