@@ -13,5 +13,5 @@
     <choice id="default" title="Uninstall OLAAF">
         <pkg-ref id="com.dmajorsound.olaaf.uninstall"/>
     </choice>
-    <pkg-ref id="com.dmajorsound.olaaf.uninstall" version="0.7.9" onConclusion="none">olaaf-uninstall-component.pkg</pkg-ref>
+    <pkg-ref id="com.dmajorsound.olaaf.uninstall" version="0.8.0" onConclusion="none">olaaf-uninstall-component.pkg</pkg-ref>
 </installer-gui-script>
