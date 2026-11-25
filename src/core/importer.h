@@ -130,6 +130,7 @@ public:
   // Folder tracks. Tracks are sorted into DIALOG, FOLEY, FX, ATMO, MUSIC and OTHER by their names
   // (only when that gives at least two folders); the dialog can rename, add and remove folders.
   void assignDefaultFolders();
+  void clearFolders(); // no folders, the tracks in the AAF's order again
   std::string addFolder(const std::string &name); // returns the new key
   void removeFolder(const std::string &key);      // its tracks end up outside any folder
 

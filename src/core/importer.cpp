@@ -168,6 +168,13 @@ void Importer::assignDefaultFolders() {
   for (auto &t : s_.tracks) t.group = trackGroup(t.name);
 }
 
+void Importer::clearFolders() {
+  s_.folders.clear();
+  for (auto &t : s_.tracks) t.group.clear();
+  // back in the AAF's order (uids count up in it; tracks made here come last)
+  std::stable_sort(s_.tracks.begin(), s_.tracks.end(), [](const Track &a, const Track &b) { return a.uid < b.uid; });
+}
+
 std::string Importer::addFolder(const std::string &name) {
   static const uint32_t pal[] = {0x5580d4, 0x1F9A8A, 0x4E8F3A, 0xB8962E, 0xD9822B, 0xC8423B, 0xB0457E, 0x7A5AC8};
   int n = 1;
@@ -202,7 +209,7 @@ bool Importer::load(const std::string &aafPath, const ImportOptions &opt, std::s
     t.aafName = t.name;
     for (auto &c : t.clips) c.id = id++;
   }
-  assignDefaultFolders();
+  // no sorting on its own: the tracks come in as the AAF has them ("Sort" in the dialog sorts them)
   assignUids();
   return true;
 }
