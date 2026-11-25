@@ -123,6 +123,11 @@ public:
   // Combines the track and its partner into one stereo track; returns its index, -1 (and why) if
   // their events don't line up.
   int combineStereo(int track, std::string *why);
+  // Any two mono tracks into one stereo track (left = `left`), for pairs not named .L / .R.
+  // Their events must line up; returns the stereo track's index, -1 (and why) if they can't be combined.
+  int combineTracks(int left, int right, std::string *why);
+  // the name a combined pair gets: what the two names share ("Boom 1" + "Boom 2" -> "Boom")
+  static std::string stereoName(const std::string &left, const std::string &right);
   // Splits a combined stereo track into its two mono tracks again; returns the index of the L half.
   int splitStereo(int track, std::string *why);
   std::vector<int> emptyTracks() const;

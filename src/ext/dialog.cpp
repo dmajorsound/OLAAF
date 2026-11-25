@@ -2476,7 +2476,8 @@ void paintHelp(State *st, const Gfx &g) {
                     {"Shift|S", "Solo the selected event's track"},
                     {"Delete/Backspace", "Remove / restore"},
                     {"Drag names", "Order tracks, put them in folders"},
-                    {"Double-click", "Rename (Tab: the next track\xe2\x80\x99s name)"}};
+                    {"Double-click", "Rename (Tab: the next track\xe2\x80\x99s name)"},
+                    {"C", "Two selected mono tracks into one stereo track"}};
   const KeyRow win[] = {{"Cmd/Ctrl|Z", "Undo (Shift: redo)"},
                      {"Return", "Import"},
                      {"O", "Options"},
@@ -3135,6 +3136,65 @@ void toggleStereo(State *st, int idx) {
   }
 }
 
+// The two selected tracks, upper one first (it becomes the left side): false unless exactly two mono
+// tracks are selected that aren't combined already.
+bool selectedPair(State *st, int *left, int *right) {
+  Session &s = st->imp->session();
+  if (st->selTracks.size() != 2) return false;
+  int a = *st->selTracks.begin(), b = *st->selTracks.rbegin();
+  for (int t : {a, b})
+    if (t < 0 || t >= (int)s.tracks.size() || s.tracks[(size_t)t].channels != 1 || !s.tracks[(size_t)t].mergedFrom.empty())
+      return false;
+  int ra = -1, rb = -1; // the order on screen (folders can change it)
+  for (size_t r = 0; r < st->rows.size(); r++) {
+    if (st->rows[r].kind != 0) continue;
+    if (st->rows[r].track == a) ra = (int)r;
+    if (st->rows[r].track == b) rb = (int)r;
+  }
+  if (rb >= 0 && (ra < 0 || rb < ra)) std::swap(a, b);
+  *left = a;
+  *right = b;
+  return true;
+}
+
+// C: the two selected mono tracks become one stereo track (upper = left); a selected combined track splits again
+void combineSelected(State *st) {
+  Session &s = st->imp->session();
+  static std::string why;
+  int l = -1, r = -1;
+  if (selectedPair(st, &l, &r)) {
+    if (st->playClip || st->playTL) stopPlay(st);
+    pushUndo(st);
+    why.clear();
+    std::string ln = s.tracks[(size_t)l].name, rn = s.tracks[(size_t)r].name;
+    int t = st->imp->combineTracks(l, r, &why);
+    if (t < 0) {
+      st->undo.pop_back(); // nothing changed
+      st->tip = why.c_str();
+      return;
+    }
+    why = "Combined into the stereo track " + s.tracks[(size_t)t].name + ": " + ln + " left, " + rn +
+          " right. Right-click the name to swap the sides, C again splits it.";
+    st->tip = why.c_str();
+    st->sel.clear();
+    st->selTracks.clear();
+    st->selTracks.insert(t);
+    st->edited = true;
+    buildRows(st);
+    return;
+  }
+  if (st->selTracks.size() == 1) { // one track: combine with its .L / .R partner, or split a combined one
+    int t = *st->selTracks.begin();
+    if (t >= 0 && t < (int)s.tracks.size() &&
+        ((s.tracks[(size_t)t].channels == 2 && !s.tracks[(size_t)t].mergedFrom.empty()) || st->imp->stereoPartner(t) >= 0)) {
+      pushUndo(st);
+      toggleStereo(st, t);
+      return;
+    }
+  }
+  st->tip = "Select two mono tracks (click one name, Shift-click the other), then press C to combine them into one stereo track.";
+}
+
 void startEdit(State *st, int kind, RECT r, const std::string &text, const std::string &key);
 
 // Right-click on a track name: swap left and right for the whole track, combine / split .L / .R
@@ -3157,8 +3217,13 @@ void trackMenu(State *st, POINT screen, int idx) {
   if (combined) menuAdd(m, 11, "Split into " + tr.mergedFrom.substr(0, tr.mergedFrom.find(" + ")) + " and " +
                                    tr.mergedFrom.substr(tr.mergedFrom.find(" + ") + 3), true);
   if (partner >= 0) menuAdd(m, 12, "Combine with " + s.tracks[(size_t)partner].name + " into one stereo track", true);
+  int pl = -1, pr = -1;
+  bool pair = st->selTracks.count(idx) && selectedPair(st, &pl, &pr);
+  if (pair)
+    menuAdd(m, 14, "Combine " + s.tracks[(size_t)pl].name + " (left) and " + s.tracks[(size_t)pr].name + " (right) into stereo   C", true);
   menuAdd(m, 13, "Rename\xe2\x80\xa6", true);
-  if (!stereo && !combined && partner < 0) menuAdd(m, 2, "(mono: nothing to swap)", false);
+  if (!stereo && !combined && partner < 0 && !pair)
+    menuAdd(m, 2, "Mono. To make it stereo: select it and its other side, then press C", false);
   int cmd = TrackPopupMenu(m, TPM_NONOTIFY | TPM_RETURNCMD, screen.x, screen.y, 0, st->hwnd, NULL);
   DestroyMenu(m);
   if (cmd == 10) {
@@ -3167,6 +3232,8 @@ void trackMenu(State *st, POINT screen, int idx) {
   } else if (cmd == 11 || cmd == 12) {
     pushUndo(st);
     toggleStereo(st, idx);
+  } else if (cmd == 14) {
+    combineSelected(st);
   } else if (cmd == 13) {
     for (auto &h : st->hits)
       if (h.id == H_TRACK_NAME && h.idx == idx) {
@@ -4553,6 +4620,11 @@ bool handleKey(State *st, int vk) {
     InvalidateRect(st->hwnd, NULL, FALSE);
     return true;
   }
+  if (vk == 'C' && !(GetAsyncKeyState(VK_CONTROL) & 0x8000) && !(GetAsyncKeyState(VK_MENU) & 0x8000)) {
+    combineSelected(st);
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    return true;
+  }
   if (vk == 'A' && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) { // A: volume and pan on every track
     bool &on = st->opt->showAutomation;
     on = !on;
@@ -5275,6 +5347,17 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
     buildRows(&st);
   }
   if (getenv("OLAAF_VOLONLY")) st.laneShow[laneKey(&st, st.imp->session().tracks[0].uid)] = 1;
+  if (getenv("OLAAF_PAIR")) { // two mono tracks not named .L / .R, selected (OLAAF_PAIR=2: combined with C)
+    st.imp->setMergeStereo(false);
+    Session &ps = st.imp->session();
+    if (ps.tracks.size() > 4) {
+      ps.tracks[3].name = ps.tracks[3].aafName = "Boom 1";
+      ps.tracks[4].name = ps.tracks[4].aafName = "Boom 2";
+    }
+    buildRows(&st);
+    st.selTracks = {3, 4};
+    if (atoi(getenv("OLAAF_PAIR")) == 2) combineSelected(&st);
+  }
   if (getenv("OLAAF_PANSEL")) { st.laneShow[laneKey(&st, st.imp->session().tracks[0].uid)] = 2; st.selTracks = {0}; }
   if (getenv("OLAAF_RENAME")) { // the first two tracks renamed
     imp.session().tracks[0].name = "Dialog";

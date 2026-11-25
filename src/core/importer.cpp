@@ -523,7 +523,38 @@ int Importer::combineStereo(int track, std::string *why) {
   std::string base;
   char side;
   splitSide(s_.tracks[(size_t)track].name, &base, &side);
-  size_t i = (size_t)(side == 'L' ? track : p), j = (size_t)(side == 'L' ? p : track);
+  int r = side == 'L' ? combineTracks(track, p, why) : combineTracks(p, track, why);
+  if (r >= 0) s_.tracks[(size_t)r].name = s_.tracks[(size_t)r].aafName = base;
+  return r;
+}
+
+std::string Importer::stereoName(const std::string &left, const std::string &right) {
+  size_t n = 0;
+  while (n < left.size() && n < right.size() && foldCase(left.substr(n, 1)) == foldCase(right.substr(n, 1))) n++;
+  std::string stem = left.substr(0, n);
+  // "Boom 1" / "Boom 2", "OH Left" / "OH Right", "Atmo_L_01": cut what only one side has
+  while (!stem.empty() && strchr(" ._-()[]", stem.back())) stem.pop_back();
+  for (const char *cut : {" L", " R", " Left", " Right", " Lt", " Rt"})
+    if (stem.size() > strlen(cut) && foldCase(stem.substr(stem.size() - strlen(cut))) == foldCase(cut)) {
+      stem.resize(stem.size() - strlen(cut));
+      break;
+    }
+  while (!stem.empty() && strchr(" ._-()[]", stem.back())) stem.pop_back();
+  return stem.size() >= 2 ? stem : left + " + " + right;
+}
+
+int Importer::combineTracks(int left, int right, std::string *why) {
+  int n = (int)s_.tracks.size();
+  if (left < 0 || right < 0 || left >= n || right >= n || left == right) {
+    if (why) *why = "Select two tracks to combine.";
+    return -1;
+  }
+  size_t i = (size_t)left, j = (size_t)right;
+  for (size_t k : {i, j})
+    if (s_.tracks[k].channels != 1 || !s_.tracks[k].mergedFrom.empty()) {
+      if (why) *why = "\"" + s_.tracks[k].name + "\" isn't mono, so it can't be one side of a stereo track.";
+      return -1;
+    }
   if (!sameTimeline(s_.tracks[i], s_.tracks[j])) {
     if (why)
       *why = "\"" + s_.tracks[i].name + "\" and \"" + s_.tracks[j].name +
@@ -540,8 +571,8 @@ int Importer::combineStereo(int track, std::string *why) {
   L.panR = R.pan;
   L.pan = 0.0;
   L.panEnv.clear();
-  L.name = base;
-  L.aafName = base;
+  L.name = stereoName(L.name, R.name);
+  L.aafName = L.name;
   L.channels = 2;
   for (size_t c = 0; c < L.clips.size(); c++) {
     L.clips[c].sources.push_back(R.clips[c].sources[0]);
