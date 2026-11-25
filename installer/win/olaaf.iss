@@ -1,7 +1,7 @@
 ; OLAAF installer for Windows (Inno Setup 6)
 [Setup]
 AppName=OLAAF
-AppVersion=0.7.6
+AppVersion=0.7.7
 AppPublisher=dmajorsound
 AppPublisherURL=https://dmajorsound.com
 DefaultDirName={userappdata}\REAPER\UserPlugins
@@ -9,7 +9,7 @@ DisableDirPage=no
 DirExistsWarning=no
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-OutputBaseFilename=OLAAF-0.7.6-win64
+OutputBaseFilename=OLAAF-0.7.7-win64
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 Uninstallable=yes
