@@ -396,6 +396,43 @@ bool Importer::removeCreatedTrack(int track, bool withAutomation) {
   return true;
 }
 
+bool Importer::trackIsEmpty(int track) const {
+  if (track < 0 || track >= (int)s_.tracks.size()) return false;
+  const Track &t = s_.tracks[(size_t)track];
+  if (!t.clips.empty() || !t.volEnv.empty() || !t.panEnv.empty()) return false;
+  for (auto &o : s_.tracks) // an event moved away from it still belongs to it
+    for (auto &c : o.clips)
+      if (c.home == t.uid) return false;
+  return true;
+}
+
+std::vector<int> Importer::emptyTracks() const {
+  std::vector<int> out;
+  for (size_t i = 0; i < s_.tracks.size(); i++)
+    if (trackIsEmpty((int)i)) out.push_back((int)i);
+  return out;
+}
+
+int Importer::removeEmptyTracks(std::vector<std::string> *names) {
+  std::vector<std::string> own;
+  if (!names) names = &own;
+  int n = 0;
+  for (int i = (int)s_.tracks.size() - 1; i >= 0; i--) // from the end: the indexes stay right
+    if (trackIsEmpty(i)) {
+      if (names) names->insert(names->begin(), s_.tracks[(size_t)i].name);
+      s_.tracks.erase(s_.tracks.begin() + i);
+      n++;
+    }
+  // the copy kept for the .L / .R setting: the same (empty) tracks go there too, by name
+  if (n && haveUnmerged_ && names)
+    for (int i = (int)unmerged_.size() - 1; i >= 0; i--) {
+      const Track &t = unmerged_[(size_t)i];
+      bool gone = std::find(names->begin(), names->end(), t.name) != names->end();
+      if (gone && t.clips.empty() && t.volEnv.empty() && t.panEnv.empty()) unmerged_.erase(unmerged_.begin() + i);
+    }
+  return n;
+}
+
 int Importer::addTrack(int like) {
   Track t;
   int n = 1;

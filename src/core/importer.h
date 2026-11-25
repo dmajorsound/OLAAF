@@ -102,6 +102,12 @@ public:
   // Deletes a track added in the dialog; its events go back to the AAF tracks they came from.
   // AAF tracks cannot be deleted (returns false).
   bool removeCreatedTrack(int track, bool withAutomation);
+  // Empty means nothing can be lost by deleting it: no events on it (not even removed ones), no
+  // events that came from it and go back to it on Reset, no volume or pan automation.
+  bool trackIsEmpty(int track) const;
+  std::vector<int> emptyTracks() const;
+  // deletes the empty tracks (each checked again); their names in `names`; returns how many
+  int removeEmptyTracks(std::vector<std::string> *names);
   // Puts the tracks in a new order: newOrder lists every track index once (new position -> old index).
   void reorderTracks(const std::vector<int> &newOrder);
   // Track color as imported: its own color, otherwise the color of its folder (when folders are on)

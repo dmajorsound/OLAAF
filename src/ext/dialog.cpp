@@ -140,7 +140,7 @@ enum HitId {
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
   H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE,
-  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE, H_TC_RESET
+  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE, H_TC_RESET, H_REMOVE_EMPTY
 };
 
 struct Hit {
@@ -1379,9 +1379,11 @@ void paintArrange(State *st, const Gfx &g) {
   g.fill(kL + kHdr, ry, kL + kHdr + 1, kAB - 1, kLine);
   int mOk = 0, mTotal = 0;
   mediaCount(st, &mOk, &mTotal);
-  if (mTotal > 0 && mOk == 0) { // no audio at all: a red flag in the corner
-    const char *fl = "No audio found";
+  double leftEnd = kL + 12; // where the "· n empty" link goes
+  if (mTotal > 0 && mOk == 0) { // no audio at all: a red flag in the corner (shorter when "· n empty" needs room)
+    const char *fl = st->imp->emptyTracks().empty() ? "No audio found" : "No audio";
     double fw = g.width(st->fSmall, fl) + 34;
+    leftEnd = kL + 16 + fw;
     g.rfill(kL + 8, ry + 5, kL + 8 + fw, ry + kRuler - 5, 9, RGB(0xd2, 0x3c, 0x32));
     double fx = kL + 17, fy = ry + kRuler / 2.0;
     g.fill(fx, fy - 6, fx + 1.4, fy + 7, kWhiteFixed);                      // the pole
@@ -1390,8 +1392,21 @@ void paintArrange(State *st, const Gfx &g) {
     addHit(st, kL + 8, ry + 5, kL + 8 + fw, ry + kRuler - 5, H_MISS_OPEN, 0,
            "None of the audio files this AAF points to was found. Click to locate them (a file or a folder).");
   } else {
-    g.text(st->fSmall, kMute, strprintf("%d of %d tracks", nsel, real), kL + 12, ry, kL + 120, ry + kRuler, DT_LEFT);
-    addHit(st, kL + 4, ry, kL + 110, ry + kRuler, H_NONE, 0, "Tracks that will be imported, of the tracks in the AAF.");
+    std::string cnt = strprintf("%d of %d tracks", nsel, real);
+    g.text(st->fSmall, kMute, cnt, kL + 12, ry, kL + 120, ry + kRuler, DT_LEFT);
+    double cw = g.width(st->fSmall, cnt);
+    addHit(st, kL + 4, ry, kL + 14 + cw, ry + kRuler, H_NONE, 0, "Tracks that will be imported, of the tracks in the AAF.");
+    leftEnd = kL + 18 + cw;
+  }
+  if (size_t ne = st->imp->emptyTracks().size()) { // tracks with nothing at all on them: one click deletes them (undoable)
+    static std::string eTip;
+    std::string el = strprintf("\xc2\xb7 %zu empty \xc3\x97", ne);
+    double ex = leftEnd, ew = g.width(st->fSmall, el);
+    g.text(st->fSmall, kBlue, el, ex, ry, ex + ew + 2, ry + kRuler, DT_LEFT);
+    eTip = strprintf("%zu track%s with nothing on %s: no events (not even removed ones), no automation. Click to delete "
+                     "%s before the import (Cmd/Ctrl+Z brings %s back).",
+                     ne, ne == 1 ? "" : "s", ne == 1 ? "it" : "them", ne == 1 ? "it" : "them", ne == 1 ? "it" : "them");
+    addHit(st, ex - 2, ry + 4, ex + ew + 4, ry + kRuler - 4, H_REMOVE_EMPTY, 0, eTip.c_str());
   }
   {
     const char *fl = "+ Folder";
@@ -1586,6 +1601,7 @@ void paintArrange(State *st, const Gfx &g) {
     // the name: smaller regular type; a long name takes two lines, the full name shows in the footer
     std::string sub = !tr.target.empty() ? "\xe2\x86\x92 " + tr.targetName + (opt.overwriteEnvelopes ? "  (envelopes overwritten)" : "")
                                          : tr.mergedFrom;
+    if (sub.empty() && st->imp->trackIsEmpty(row.track)) sub = "empty";
     bool cutName = false, cutSub = false;
     std::vector<std::string> nl = fitLines(g, st->fName, tr.name, nameR - nx, sub.empty() ? 2 : 1, &cutName);
     if (nl.empty()) nl.push_back(std::string());
@@ -2626,7 +2642,7 @@ bool isEditHit(int id) {
   case H_TRACK_CHECK: case H_PAL: case H_PAL_CUSTOM: case H_PAL_NONE: case H_FOLD_ASSIGN: case H_FOLD_NONE:
   case H_FOLD_DELETE: case H_FOLD_NEW: case H_EV_REMOVE: case H_EV_RESTORE: case H_EV_UP: case H_EV_DOWN:
   case H_EV_RESET: case H_EV_MUTE: case H_NEW_FOLDER: case H_TRACK_DELETE: case H_DEST_NEW: case H_DEST_MATCHALL:
-  case H_DEST_PICK: case H_EV_SWAP: case H_TRACK_SWAP: case H_RULES_SORT:
+  case H_DEST_PICK: case H_EV_SWAP: case H_TRACK_SWAP: case H_RULES_SORT: case H_REMOVE_EMPTY:
     return true;
   }
   return false;
@@ -3677,6 +3693,26 @@ void click(State *st, int x, int y, bool shift) {
     }
     break;
   }
+  case H_REMOVE_EMPTY: { // checked again, track by track, right before deleting
+    static std::string done;
+    std::vector<std::string> names;
+    int n = st->imp->removeEmptyTracks(&names);
+    if (n > 0) {
+      st->selTracks.clear();
+      st->solo.clear();
+      st->folderTrack = st->palTrack = st->destTrack = -1;
+      st->edited = true;
+      std::string list;
+      for (size_t i = 0; i < names.size() && i < 6; i++) list += (i ? ", " : "") + names[i];
+      if (names.size() > 6) list += strprintf(" and %zu more", names.size() - 6);
+      done = strprintf("%d empty track%s deleted: %s. Cmd/Ctrl+Z brings %s back.", n, n == 1 ? "" : "s", list.c_str(),
+                       n == 1 ? "it" : "them");
+    } else
+      done = "No empty tracks: nothing was deleted.";
+    st->tip = done.c_str();
+    buildRows(st);
+    break;
+  }
   case H_TC_RESET: st->tcAbs = 0; st->tcMinus = false; st->tip = "Back at the AAF's own timecode."; break;
   case H_TC_PLUS: st->tcMinus = false; break;
   case H_TC_MINUS: st->tcMinus = true; break;
@@ -4535,6 +4571,14 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
   }
   if (getenv("OLAAF_RULES")) st.rulesOpen = true;
   if (getenv("OLAAF_TCOFF")) st.tcAbs = atof(getenv("OLAAF_TCOFF"));
+  if (getenv("OLAAF_RMEMPTY")) {
+    static std::string done;
+    std::vector<std::string> names;
+    int n = imp.removeEmptyTracks(&names);
+    done = strprintf("%d empty track%s deleted: %s. Cmd/Ctrl+Z brings %s back.", n, n == 1 ? "" : "s",
+                     names.empty() ? "" : names[0].c_str(), n == 1 ? "it" : "them");
+    st.tip = done.c_str();
+  }
   if (getenv("OLAAF_PEAKBUSY")) st.peaks.fakeProgress(atoi(getenv("OLAAF_PEAKBUSY")), 76);
   if (getenv("OLAAF_CHOICES")) st.choicesBack = true;
   if (getenv("OLAAF_TPL")) st.opt->trackTemplate = getenv("OLAAF_TPL");
