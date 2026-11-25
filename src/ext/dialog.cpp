@@ -957,13 +957,26 @@ std::string updateNote(State *st) {
   return v + " is out";
 }
 
+// A newer OLAAF (in the footer, as in every dmajorsound tool): a light red dot that blinks and "0.8.1 is out",
+// right-aligned to `right`; a click opens the download page. Returns its left edge (`right` when there is none).
+double paintUpdateNote(State *st, const Gfx &g, double right, double t, double b) {
+  if (st->updTag.empty()) return right;
+  std::string note = updateNote(st);
+  double tw = g.width(st->fSmall, note), cy = (t + b) / 2, x = right - tw - 13;
+  COLORREF dot = RGB(0xF0, 0x6E, 0x6E);
+  if (st->blinkOn) g.rfill(x, cy - 3.5, x + 7, cy + 3.5, 3.5, dot);
+  else g.rbox(x, cy - 3.5, x + 7, cy + 3.5, 3.5, dot, kFace);
+  g.text(st->fSmall, kRed, note, x + 13, t + 1, right, b, DT_LEFT);
+  static std::string tip;
+  tip = "OLAAF " + st->updTag + " is out. Click to open the download page.";
+  addHit(st, x - 4, t + 4, right + 4, b - 4, H_UPDATE, 0, tip.c_str());
+  return x;
+}
+
 // the brand's width: the name, or the version line with "0.8.1 is out" when there is a newer OLAAF
 double brandRight(State *st, const Gfx &g) {
-  double r = 56 + std::max(60.0, std::min(90.0, g.width(st->fWord, "OLAAF")));
-  if (!st->updTag.empty())
-    r = std::max(r, 57 + g.width(st->fTiny, "V " OLAAF_VERSION_STRING " beta") + 18 +
-                        g.width(st->fTiny, updateNote(st)));
-  return r;
+  (void)st;
+  return 56 + std::max(60.0, std::min(90.0, g.width(st->fWord, "OLAAF")));
 }
 
 void paintBrand(State *st, const Gfx &g, double mid) {
@@ -984,16 +997,6 @@ void paintBrand(State *st, const Gfx &g, double mid) {
   }
   g.textBase(st->fWord, kInk, "OLAAF", 56, mid - 15 + 20 * 0.698);
   g.textBase(st->fTiny, kMute, "V " OLAAF_VERSION_STRING " beta", 57, mid + 15);
-  if (!st->updTag.empty()) { // a newer OLAAF: a light red dot that blinks, and which version
-    double x = 57 + g.width(st->fTiny, "V " OLAAF_VERSION_STRING " beta") + 8;
-    if (st->blinkOn) g.rfill(x, mid + 15 - 7, x + 7, mid + 15, 3.5, RGB(0xF0, 0x6E, 0x6E));
-    else g.rbox(x, mid + 15 - 7, x + 7, mid + 15, 3.5, RGB(0xF0, 0x6E, 0x6E), kFace);
-    std::string note = updateNote(st);
-    g.textBase(st->fTiny, kRed, note, x + 11, mid + 15);
-    static std::string tip;
-    tip = "OLAAF " + st->updTag + " is out. Click to open the download page.";
-    addHit(st, x - 4, mid + 1, x + 11 + g.width(st->fTiny, note) + 4, mid + 19, H_UPDATE, 0, tip.c_str());
-  }
 }
 
 void paintTopBar(State *st, const Gfx &g) {
@@ -2577,12 +2580,14 @@ void paintFooter(State *st, const Gfx &g) {
   const char *hint = st->tip ? st->tip
                              : "Hover over anything for a hint. Space plays from the playhead, Shift + Space the selected event, H "
                                "shows all shortcuts.";
-  double hr = kR - 150;
+  double rr = paintUpdateNote(st, g, kR - 160, t, b); // a newer OLAAF, left of dmajorsound.com
+  if (rr < kR - 160) rr -= 20;
+  double hr = rr;
   // every AAF (tab) can go back to how it came in: after the last import's choices, or after edits here
   if ((st->choicesBack || st->edited || !st->undo.empty()) && !st->freshNow) {
     const char *ll = "Start fresh";
     double lw = g.width(st->fSmall, ll);
-    double lr = kR - 170;
+    double lr = rr;
     g.text(st->fSmall, kBlue, ll, lr - lw, t + 1, lr, b, DT_RIGHT);
     addHit(st, lr - lw - 4, t + 4, lr + 4, b - 4, H_FRESH, 0,
            reelCount(st) > 1 ? "Only this tab: back to its AAF as it is, without the changes and the last import's choices (Cmd/Ctrl+Z brings them back)."
@@ -5878,11 +5883,16 @@ void paintStart(State *st, HDC dc) {
   double cw = g.width(st->fBody, "Cancel") + 24;
   g.text(st->fBody, kMute, "Cancel", R - pw - 8 - cw, bt, R - pw - 8, bb, DT_CENTER);
   addHit(st, R - pw - 8 - cw, bt, R - pw - 8, bb, H_START_CANCEL, 0, "Close OLAAF (Esc).");
+  double hintR = R - pw - 16 - cw;
+  { // a newer OLAAF: right before Cancel, like in the import window's footer
+    double nl = paintUpdateNote(st, g, hintR, bt, bb);
+    if (nl < hintR) hintR = nl - 16;
+  }
   const char *hint = st->tip ? st->tip : "Return opens the file chooser, Esc closes this window.";
-  std::vector<std::string> hl = fitLines(g, st->fSmall, hint, R - pw - 16 - cw - L, 2, &cut);
+  std::vector<std::string> hl = fitLines(g, st->fSmall, hint, hintR - L, 2, &cut);
   double hy = (bt + bb) / 2 - hl.size() * 8.5;
   for (auto &ln : hl) {
-    g.text(st->fSmall, st->tip ? kInk : kMute, ln, L, hy, R - pw - 16 - cw, hy + 17, DT_LEFT);
+    g.text(st->fSmall, st->tip ? kInk : kMute, ln, L, hy, hintR, hy + 17, DT_LEFT);
     hy += 17;
   }
 }
