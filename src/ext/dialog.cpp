@@ -2231,7 +2231,7 @@ void paintOptions(State *st, const Gfx &g) {
   g.text(st->fSmall, ok == total ? theme().green : kRed,
          ok == total ? strprintf("All %d media files found", total) : strprintf("%d of %d media files missing", total - ok, total),
          px + 16, y, px + 220, y + 24, DT_LEFT);
-  const char *ll = "Search another folder\xe2\x80\xa6";
+  const char *ll = "Search for files\xe2\x80\xa6";
   double lw = g.width(st->fSmall, ll);
   g.text(st->fSmall, kBlue, ll, px + kOpW - 22 - lw, y, px + kOpW - 16, y + 24, DT_RIGHT);
   addHit(st, px + kOpW - 20 - lw, y, px + kOpW - 12, y + 24, H_LOCATE, 0,
@@ -2414,7 +2414,7 @@ void paintMissing(State *st, const Gfx &g) {
     y += 22;
   }
   g.fill(l + 16, y + 6, l + w - 16, y + 7, kLine);
-  button(st, g, l + 16, y + 16, l + 196, y + 42, "Search a folder\xe2\x80\xa6", H_LOCATE, 0,
+  button(st, g, l + 16, y + 16, l + 196, y + 42, "Search for files\xe2\x80\xa6", H_LOCATE, 0,
          "Choose a folder that holds media. All its subfolders are searched, and OLAAF remembers it for the next import.");
   g.text(st->fSmall, kMute, "Missing files come in as offline items.", l + 210, y + 16, l + w - 16, y + 42, DT_LEFT);
 }
