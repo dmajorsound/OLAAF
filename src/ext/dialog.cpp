@@ -2220,7 +2220,7 @@ void keyCap(State *st, const Gfx &g, double &x, double y, const std::string &k) 
 
 void paintHelp(State *st, const Gfx &g) {
   // three blocks left, one right; drawn over everything (footer too), always inside the window
-  const double rowH = 26, w = 860, h = 74 + (24 + 3 * rowH + 10) + (24 + 6 * rowH + 10) + (24 + 7 * rowH + 10) + 52;
+  const double rowH = 26, w = 860, h = 74 + (24 + 3 * rowH + 10) + (24 + 6 * rowH + 10) + (24 + 8 * rowH + 10) + 52;
   double l = (W - w) / 2, t = std::max(8.0, std::min(kTopH + 6, H - h - 8));
   g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 16, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
   g.rbox(l, t, l + w, t + h, 16, kLine, kPop);
@@ -2250,13 +2250,14 @@ void paintHelp(State *st, const Gfx &g) {
                     {"Shift|S", "Solo the selected event's track"},
                     {"Delete/Backspace", "Remove / restore"},
                     {"Drag names", "Order tracks, put them in folders"},
-                    {"Double-click", "Rename a track"}};
+                    {"Double-click", "Rename (Tab: the next track\xe2\x80\x99s name)"}};
   const KeyRow win[] = {{"Cmd/Ctrl|Z", "Undo (Shift: redo)"},
                      {"Return", "Import"},
                      {"O", "Options"},
                      {"H", "This help"},
                      {"1/2/3", "Show reel 1, 2, 3\xe2\x80\xa6"},
                      {"Shift|\xe2\x86\x90/\xe2\x86\x92", "Previous / next reel"},
+                     {"Tab", "Next track (Shift + Tab: previous)"},
                      {"Esc", "Close a panel, then the window"}};
   auto block = [&](double x, double &y, const char *head, const KeyRow *rows, int n) {
     g.text(st->fSmall, kMute, head, x, y, x + 380, y + 20, DT_LEFT);
@@ -2285,7 +2286,7 @@ void paintHelp(State *st, const Gfx &g) {
   double y1 = t + 74, y2 = t + 74;
   block(l + 24, y1, "Listening", play, 3);
   block(l + 24, y1, "View", view, 6);
-  block(l + 24, y1, "Window", win, 7);
+  block(l + 24, y1, "Window", win, 8);
   block(l + 424, y2, "Events and tracks", ev, 10);
   double y = std::max(y1, y2) + 2;
   g.fill(l + 24, y, l + w - 24, y + 1, kLine);
@@ -2317,6 +2318,13 @@ void paintFooter(State *st, const Gfx &g) {
     if (!st->tip) hint = "Your choices from the last import of this AAF are back: names, folders, colors, removed and moved events.";
   }
   bool taken = st->tip && strstr(st->tip, " is taken by ") && strstr(st->tip, "nothing mov");
+  if (!st->peaks.busy() && st->peaks.failed() > 0) { // some files found, but no waveform from them
+    int nf = st->peaks.failed();
+    std::string pl = strprintf("%d waveform%s couldn't be read \xc2\xb7 right-click an event for why", nf, nf == 1 ? "" : "s");
+    double pw = g.width(st->fSmall, pl);
+    g.text(st->fSmall, kWarn, pl, hr - pw, t + 1, hr, b, DT_RIGHT);
+    hr -= pw + 20;
+  }
   if (st->peaks.busy() && st->peaks.total() > 0) { // the waveforms are still being read
     int dn = std::min(st->peaks.done(), st->peaks.total()), tot = st->peaks.total();
     std::string pl = strprintf("Creating waveforms\xe2\x80\xa6 %d of %d", dn, tot);
@@ -2702,6 +2710,8 @@ void clipMenu(State *st, POINT screen, int clipId) {
       menuAdd(m, 100 + (int)k, std::string(showIn).replace(0, 4, "Show the AAF"), true);
     } else if (!md.foundPath.empty()) {
       menuAdd(m, idDis++, shortPath(md.foundPath, 90), false);
+      std::string why = st->peaks.why(media[k]);
+      if (!why.empty()) menuAdd(m, idDis++, "No waveform: " + why, false);
       menuAdd(m, 100 + (int)k, showIn, true);
       menuAdd(m, 200 + (int)k, "Copy the file path", true);
     } else {
@@ -2758,6 +2768,46 @@ void zoomToSelection(State *st) {
     int r = rowOfPos(st, posOfTrack(st, firstTrack));
     if (r >= 0 && (r < st->scrollRow || r >= st->scrollRow + kRows)) st->scrollRow = std::max(0, r - kRows / 2);
   }
+}
+
+void endEdit(State *st, bool apply);
+void startEdit(State *st, int kind, RECT r, const std::string &text, const std::string &key);
+
+// Tab / Shift+Tab: the next / previous track (as shown). While a name is being typed it is kept and
+// the next track's name opens, so a whole list can be renamed in one go.
+void trackStep(State *st, int dir) {
+  bool renaming = st->editKind == 4;
+  int from = renaming ? st->editTrack : -1;
+  if (renaming) endEdit(st, true);
+  buildRows(st);
+  int n = (int)st->order.size();
+  if (n == 0) return;
+  if (from < 0) // the selected track furthest in that direction
+    for (int t : st->selTracks) {
+      int p = posOfTrack(st, t);
+      if (p >= 0 && (from < 0 || (dir > 0 ? p > posOfTrack(st, from) : p < posOfTrack(st, from)))) from = t;
+    }
+  int pos = from >= 0 ? posOfTrack(st, from) + dir : (dir > 0 ? 0 : n - 1);
+  if (pos < 0 || pos >= n) {
+    st->tip = dir > 0 ? "That was the last track." : "That was the first track.";
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    return;
+  }
+  int t = st->order[(size_t)pos];
+  st->selTracks.clear();
+  st->selTracks.insert(t);
+  int r = rowOfPos(st, pos); // into view
+  if (r >= 0 && (r < st->scrollRow || r >= st->scrollRow + kRows)) st->scrollRow = std::max(0, r - kRows / 2);
+  InvalidateRect(st->hwnd, NULL, FALSE);
+  if (!renaming) return;
+  UpdateWindow(st->hwnd); // painted now: the name field goes where the name is drawn
+  for (auto &h : st->hits)
+    if (h.id == H_TRACK_NAME && h.idx == t) {
+      st->editTrack = t;
+      st->nameRc = h.r;
+      startEdit(st, 4, h.r, st->imp->session().tracks[(size_t)t].name, std::string());
+      return;
+    }
 }
 
 // Would moving the selection by `delta` tracks put an event on top of one already there?
@@ -3793,6 +3843,10 @@ void togglePlay(State *st) {
 
 bool handleKey(State *st, int vk) {
   if (!st || st->editKind) return false;
+  if (vk == VK_TAB) { // the next / previous track
+    trackStep(st, (GetAsyncKeyState(VK_SHIFT) & 0x8000) ? -1 : 1);
+    return true;
+  }
   if (st->missingOpen && (vk == VK_UP || vk == VK_DOWN || vk == VK_PRIOR || vk == VK_NEXT)) { // the missing files list
     int step = (vk == VK_PRIOR || vk == VK_NEXT) ? (int)kMissRows - 1 : 1;
     st->missScroll = std::max(0, st->missScroll + ((vk == VK_UP || vk == VK_PRIOR) ? -step : step));
@@ -4040,7 +4094,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   }
 #ifdef _WIN32
   case WM_GETDLGCODE: // the dialog wants the arrow keys and letters for the selected events
-    SetWindowLongPtr(hwnd, DWLP_MSGRESULT, DLGC_WANTARROWS | DLGC_WANTCHARS);
+    SetWindowLongPtr(hwnd, DWLP_MSGRESULT, DLGC_WANTARROWS | DLGC_WANTCHARS | DLGC_WANTTAB);
     return TRUE;
 #endif
   case WM_KEYDOWN:
@@ -4066,6 +4120,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     EndPaint(hwnd, &ps);
     return 0;
   }
+  case WM_LBUTTONDBLCLK: // the second click of a double-click (Windows / macOS send it instead of a down)
   case WM_LBUTTONDOWN: {
     POINT p = {(short)LOWORD(lp), (short)HIWORD(lp)};
     if (st->editKind && !PtInRect(&st->editRc, p)) endEdit(st, true); // clicking elsewhere applies what was typed
@@ -4622,7 +4677,11 @@ int dialogTranslateKey(MSG *msg) {
   State *st = g_open;
   if (!st || !st->hwnd || !msg) return 0;
   if (msg->hwnd != st->hwnd && !IsChild(st->hwnd, msg->hwnd)) return 0;
-  if (st->editKind) { // typing in a field: Return applies, Esc cancels
+  if (st->editKind) { // typing in a field: Return applies, Esc cancels, Tab goes on to the next track name
+    if (msg->message == WM_KEYDOWN && msg->wParam == VK_TAB && st->editKind == 4) {
+      trackStep(st, (GetAsyncKeyState(VK_SHIFT) & 0x8000) ? -1 : 1);
+      return 1;
+    }
     if (msg->message == WM_KEYDOWN && (msg->wParam == VK_RETURN || msg->wParam == VK_ESCAPE)) {
       endEdit(st, msg->wParam == VK_RETURN);
       return 1;

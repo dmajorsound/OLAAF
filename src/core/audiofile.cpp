@@ -204,6 +204,7 @@ bool readMxfInfo(const std::string &path, PcmInfo *o) {
   int essCount = 0;
   bool compressed = false;
   bool gaps = false;
+  std::vector<PcmSeg> packets;
 
   auto ulFor = [&](uint16_t tag) -> const unsigned char * {
     for (auto &p : primer)
@@ -264,13 +265,16 @@ bool readMxfInfo(const std::string &path, PcmInfo *o) {
       // anything else (e.g. compressed) is refused
       int type = k.key[14];
       if (type < 0x01 || type > 0x04) compressed = true;
+      if (type == 0x03 || type == 0x04) o->aes3 = true;
       if (essCount == 0) {
         essOffset = k.valueOffset;
         essBytes = k.len;
-      } else {
-        // frame-wrapped: more elements follow, separated by their 17+ byte KLV headers
-        gaps = true;
-      }
+      } else
+        gaps = true; // frame-wrapped: more packets follow, each with its own KLV header
+      PcmSeg sg;
+      sg.offset = k.valueOffset;
+      sg.bytes = k.len;
+      packets.push_back(sg);
       essCount++;
       if (fseek64(f.get(), (int64_t)(k.valueOffset + k.len), SEEK_SET)) break;
       continue;
@@ -280,16 +284,35 @@ bool readMxfInfo(const std::string &path, PcmInfo *o) {
   }
   if (compressed) { o->error = "MXF holds compressed audio"; return false; }
   if (!essCount) { o->error = "no PCM audio found in MXF"; return false; }
-  if (gaps) {
-    // frame-wrapped OP1a: only contiguous single-track essence is handled for now
-    o->error = "frame-wrapped MXF is not supported yet";
-    return false;
-  }
   o->rate = rateDen ? (int)std::lround((double)rateNum / rateDen) : 48000;
   if (!o->channels) o->channels = 1;
   if (!o->bits) o->bits = 24;
   o->dataOffset = essOffset;
   o->dataBytes = essBytes;
+  if (o->aes3) {
+    // SMPTE 331M: per packet a 4 byte header (flags, sample count, valid channels), then per sample
+    // 8 channel slots of 4 bytes with the audio in bits 4..27. Read as 24 bit.
+    o->bits = 24;
+    o->aesChannels = 8;
+    if (o->channels > 8) { o->error = "AES3 MXF with more than 8 channels"; return false; }
+    int64_t at = 0;
+    for (auto &sg : packets) {
+      sg.firstFrame = at;
+      sg.frames = sg.bytes >= 4 ? (int64_t)((sg.bytes - 4) / (uint64_t)(o->aesChannels * 4)) : 0;
+      at += sg.frames;
+    }
+    o->segs = packets;
+  } else if (gaps) { // frame-wrapped PCM: the packets one after the other
+    int fb = o->channels * (o->bits / 8);
+    if (fb <= 0) { o->error = "MXF audio format not understood"; return false; }
+    int64_t at = 0;
+    for (auto &sg : packets) {
+      sg.firstFrame = at;
+      sg.frames = (int64_t)(sg.bytes / (uint64_t)fb);
+      at += sg.frames;
+    }
+    o->segs = packets;
+  }
   // tape timecode + where this file starts on the tape (SourceClip edit rate = audio rate for sound tracks)
   o->timeReference = (tcBase > 0 ? tcFrames * o->rate / tcBase : 0) + srcStart;
   return true;
@@ -522,10 +545,84 @@ static void swapBytes(unsigned char *p, size_t n, int bytesPerSample) {
     for (int a = 0, b = bytesPerSample - 1; a < b; a++, b--) std::swap(p[i + a], p[i + b]);
 }
 
+// ---------------------------------------------------------------- reading sample frames
+
+bool PcmFile::open(const std::string &path, const PcmInfo &info) {
+  close();
+  f_ = openUtf8(path, "rb");
+  if (!f_) return false;
+  in_ = info;
+  seg_ = 0;
+  return true;
+}
+
+void PcmFile::close() {
+  if (f_) fclose(f_);
+  f_ = nullptr;
+}
+
+int64_t PcmFile::read(int64_t frame, int64_t n, unsigned char *out) {
+  if (!f_ || n <= 0 || frame < 0) return 0;
+  const int fb = frameBytes();
+  if (fb <= 0) return 0;
+  if (in_.segs.empty()) { // one block
+    int64_t total = in_.frames();
+    if (frame >= total) return 0;
+    n = std::min(n, total - frame);
+    if (fseek64(f_, (int64_t)in_.dataOffset + frame * fb, SEEK_SET)) return 0;
+    return (int64_t)(fread(out, (size_t)fb, (size_t)n, f_));
+  }
+  // packets: find the one holding `frame` (usually the same or the next one)
+  const auto &sg = in_.segs;
+  if (seg_ >= sg.size() || sg[seg_].firstFrame > frame) {
+    size_t lo = 0, hi = sg.size();
+    while (hi - lo > 1) {
+      size_t mid = (lo + hi) / 2;
+      if (sg[mid].firstFrame <= frame) lo = mid;
+      else hi = mid;
+    }
+    seg_ = lo;
+  }
+  int64_t got = 0;
+  while (got < n && seg_ < sg.size()) {
+    const PcmSeg &p = sg[seg_];
+    int64_t in = frame + got - p.firstFrame;
+    if (in >= p.frames) {
+      seg_++;
+      continue;
+    }
+    int64_t take = std::min(n - got, p.frames - in);
+    if (!in_.aes3) {
+      if (fseek64(f_, (int64_t)p.offset + in * fb, SEEK_SET)) break;
+      size_t r = fread(out + got * fb, (size_t)fb, (size_t)take, f_);
+      got += (int64_t)r;
+      if ((int64_t)r < take) break;
+    } else {
+      const int slot = in_.aesChannels * 4;
+      tmp_.resize((size_t)(take * slot));
+      if (fseek64(f_, (int64_t)p.offset + 4 + in * slot, SEEK_SET)) break;
+      size_t r = fread(tmp_.data(), (size_t)slot, (size_t)take, f_);
+      for (size_t i = 0; i < r; i++)
+        for (int c = 0; c < in_.channels; c++) {
+          const unsigned char *w = &tmp_[i * (size_t)slot + (size_t)c * 4];
+          uint32_t word = (uint32_t)w[0] | (uint32_t)w[1] << 8 | (uint32_t)w[2] << 16 | (uint32_t)w[3] << 24;
+          uint32_t v = (word >> 4) & 0xffffff;
+          unsigned char *d = out + (got + (int64_t)i) * fb + c * 3;
+          d[0] = (unsigned char)v;
+          d[1] = (unsigned char)(v >> 8);
+          d[2] = (unsigned char)(v >> 16);
+        }
+      got += (int64_t)r;
+      if ((int64_t)r < take) break;
+    }
+  }
+  return got;
+}
+
 bool convertToBwf(const std::string &src, const PcmInfo &in, const std::string &dst, int64_t timeRef,
                   const std::string &desc, std::string *error) {
-  FilePtr f(openUtf8(src, "rb"));
-  if (!f || fseek64(f.get(), (int64_t)in.dataOffset, SEEK_SET)) {
+  PcmFile pf;
+  if (!pf.open(src, in)) {
     if (error) *error = "cannot read " + src;
     return false;
   }
@@ -534,19 +631,19 @@ bool convertToBwf(const std::string &src, const PcmInfo &in, const std::string &
     if (error) *error = "cannot write " + dst;
     return false;
   }
-  int bps = in.bits / 8;
-  std::vector<unsigned char> buf(1 << 20);
-  uint64_t left = in.dataBytes - in.dataBytes % (uint64_t)(in.channels * bps);
-  while (left) {
-    size_t n = (size_t)std::min<uint64_t>(left, buf.size() - buf.size() % (size_t)(bps * in.channels));
-    size_t r = fread(buf.data(), 1, n, f.get());
-    if (r == 0) break;
-    if (in.bigEndian) swapBytes(buf.data(), r, bps);
-    if (!w.write(buf.data(), r)) {
+  int bps = in.bits / 8, fb = pf.frameBytes();
+  const int64_t block = 65536;
+  std::vector<unsigned char> buf((size_t)(block * fb));
+  int64_t total = in.frames();
+  for (int64_t at = 0; at < total;) {
+    int64_t r = pf.read(at, std::min(block, total - at), buf.data());
+    if (r <= 0) break;
+    if (in.bigEndian) swapBytes(buf.data(), (size_t)(r * fb), bps);
+    if (!w.write(buf.data(), (size_t)(r * fb))) {
       if (error) *error = "disk full while writing " + dst;
       return false;
     }
-    left -= r;
+    at += r;
   }
   return w.close();
 }
@@ -562,11 +659,11 @@ bool interleaveToBwf(const std::vector<std::string> &srcs, const std::vector<Pcm
       return false;
     }
   int bps = bits / 8;
-  std::vector<FilePtr> fs;
+  std::vector<std::unique_ptr<PcmFile>> fs;
   int64_t frames = 0;
   for (size_t c = 0; c < nch; c++) {
-    fs.emplace_back(openUtf8(srcs[c], "rb"));
-    if (!fs.back() || fseek64(fs.back().get(), (int64_t)ins[c].dataOffset, SEEK_SET)) {
+    fs.emplace_back(new PcmFile);
+    if (!fs.back()->open(srcs[c], ins[c])) {
       if (error) *error = "cannot read " + srcs[c];
       return false;
     }
@@ -586,7 +683,7 @@ bool interleaveToBwf(const std::vector<std::string> &srcs, const std::vector<Pcm
     int64_t n = std::min(block, frames - done);
     for (size_t c = 0; c < nch; c++) {
       int64_t want = std::max<int64_t>(0, std::min(n, left[c]));
-      size_t got = want ? fread(in[c].data(), (size_t)bps, (size_t)want, fs[c].get()) : 0;
+      size_t got = want ? (size_t)fs[c]->read(done, want, in[c].data()) : 0;
       if (ins[c].bigEndian) swapBytes(in[c].data(), got * (size_t)bps, bps);
       memset(in[c].data() + got * (size_t)bps, 0, (size_t)(n - (int64_t)got) * (size_t)bps);
       left[c] -= (int64_t)got;

@@ -2,6 +2,7 @@
 // Copyright (C) 2026 dmajorsound. Licensed under the GNU GPL v2 or later.
 
 #include "peaks.h"
+#include "util.h"
 
 #include <algorithm>
 #include <cctype>
@@ -29,7 +30,10 @@ std::vector<PeakCache::Job> PeakCache::jobsFor(const Session &s) {
     Job j;
     if (!m.foundPath.empty() && (m.kind == MediaKind::Wav || m.kind == MediaKind::Aiff || m.kind == MediaKind::Mxf)) {
       j.path = m.foundPath;
-      j.kind = m.kind == MediaKind::Aiff ? 1 : m.kind == MediaKind::Mxf ? 2 : 0;
+      // the file found decides (a located file can differ from what the AAF named)
+      std::string e = lower(fileExt(m.foundPath));
+      j.kind = e == "mxf" ? 2 : (e == "aif" || e == "aiff" || e == "aifc") ? 1 : e == "wav" || e == "bwf" ? 0
+               : m.kind == MediaKind::Aiff ? 1 : m.kind == MediaKind::Mxf ? 2 : 0;
     }
     jobs.push_back(j);
   }
@@ -42,6 +46,7 @@ void PeakCache::start(const Session &s) {
   {
     std::lock_guard<std::mutex> l(mu_);
     peaks_.assign(jobs.size(), nullptr);
+    why_.assign(jobs.size(), std::string());
   }
   stop_ = false;
   busy_ = true;
@@ -54,6 +59,7 @@ void PeakCache::runNow(const Session &s) {
   {
     std::lock_guard<std::mutex> l(mu_);
     peaks_.assign(jobs.size(), nullptr);
+    why_.assign(jobs.size(), std::string());
   }
   stop_ = false;
   run(jobs);
@@ -81,7 +87,12 @@ void PeakCache::run(std::vector<Job> jobs) {
         p = peaks_[k];
         break;
       }
-    if (!p) p = scan(jobs[i], stop_);
+    std::string why;
+    if (!p) p = scan(jobs[i], stop_, &why);
+    if (!p && !stop_) {
+      std::lock_guard<std::mutex> l(mu_);
+      if (i < why_.size()) why_[i] = why.empty() ? "the file can't be read" : why;
+    }
     done_++;
     if (!p) continue;
     {
@@ -126,17 +137,25 @@ static inline float sampleAbs(const unsigned char *p, int bits, bool fl, bool be
   return 0;
 }
 
-std::shared_ptr<PeakCache::Peaks> PeakCache::scan(const Job &j, const std::atomic<bool> &stop) {
+std::shared_ptr<PeakCache::Peaks> PeakCache::scan(const Job &j, const std::atomic<bool> &stop, std::string *why) {
   PcmInfo in;
   bool ok = j.kind == 1 ? readAiffInfo(j.path, &in) : j.kind == 2 ? readMxfInfo(j.path, &in) : readWavInfo(j.path, &in);
-  if (!ok || in.channels <= 0 || in.channels > 64 || in.rate <= 0) return nullptr;
+  if (!ok) {
+    *why = in.error.empty() ? "the file's audio format isn't understood" : in.error;
+    return nullptr;
+  }
+  if (in.channels <= 0 || in.channels > 64 || in.rate <= 0) {
+    *why = strprintf("%d channels at %d Hz can't be shown", in.channels, in.rate);
+    return nullptr;
+  }
   int bps = in.bits / 8;
-  if (bps < 1 || bps > 8) return nullptr;
-  if (j.kind == 1 && in.bits == 8) in.bits = 8; // AIFF 8 bit is signed: handled below
-  FILE *f = openUtf8(j.path, "rb");
-  if (!f) return nullptr;
-  if (fseek64(f, (int64_t)in.dataOffset, SEEK_SET)) {
-    fclose(f);
+  if (bps < 1 || bps > 8) {
+    *why = strprintf("%d bit audio can't be shown", in.bits);
+    return nullptr;
+  }
+  PcmFile pf; // one block, frame-wrapped packets or AES3: all the same here
+  if (!pf.open(j.path, in)) {
+    *why = "the file can't be opened";
     return nullptr;
   }
   auto p = std::make_shared<Peaks>();
@@ -145,24 +164,23 @@ std::shared_ptr<PeakCache::Peaks> PeakCache::scan(const Job &j, const std::atomi
   int64_t frames = in.frames();
   p->blocks = (size_t)((frames + kBlock - 1) / kBlock);
   p->fine.assign(p->blocks * in.channels, 0);
-  int fb = bps * in.channels;
+  int fb = pf.frameBytes();
   std::vector<unsigned char> buf((size_t)fb * kBlock * 256);
   std::vector<float> mx(in.channels);
   int64_t done = 0;
   size_t blk = 0;
   while (done < frames && !stop) {
     int64_t want = std::min<int64_t>(frames - done, kBlock * 256);
-    size_t r = fread(buf.data(), 1, (size_t)(want * fb), f);
-    int64_t got = (int64_t)r / fb;
+    int64_t got = pf.read(done, want, buf.data());
     if (got <= 0) break;
     for (int64_t a = 0; a < got; a += kBlock) {
       std::fill(mx.begin(), mx.end(), 0.0f);
       int64_t e = std::min<int64_t>(got, a + kBlock);
       for (int64_t fr = a; fr < e; fr++) {
-        const unsigned char *s = buf.data() + fr * fb;
+        const unsigned char *sm = buf.data() + fr * fb;
         for (int c = 0; c < in.channels; c++) {
-          float v = (in.bits == 8 && j.kind == 1) ? std::fabs((int8_t)s[c] / 128.0f)
-                                                  : sampleAbs(s + c * bps, in.bits, in.isFloat, in.bigEndian);
+          float v = (in.bits == 8 && j.kind == 1) ? std::fabs((int8_t)sm[c] / 128.0f)
+                                                  : sampleAbs(sm + c * bps, in.bits, in.isFloat, in.bigEndian);
           if (v > mx[c]) mx[c] = v;
         }
       }
@@ -173,7 +191,6 @@ std::shared_ptr<PeakCache::Peaks> PeakCache::scan(const Job &j, const std::atomi
     }
     done += got;
   }
-  fclose(f);
   if (stop) return nullptr;
   p->coarseBlocks = (p->blocks + kCoarse - 1) / kCoarse;
   p->coarse.assign(p->coarseBlocks * in.channels, 0);
@@ -186,7 +203,7 @@ std::shared_ptr<PeakCache::Peaks> PeakCache::scan(const Job &j, const std::atomi
 }
 
 bool PcmReader::open(const std::string &path) {
-  if (f_ && path == path_) return true;
+  if (file_.isOpen() && path == path_) return true;
   close();
   PcmInfo in;
   std::string ext = path.size() > 4 ? path.substr(path.size() - 4) : "";
@@ -195,9 +212,7 @@ bool PcmReader::open(const std::string &path) {
             : (ext == "aiff" || ext == ".aif" || ext == "aifc") ? readAiffInfo(path, &in)
                                                                  : readWavInfo(path, &in);
   if (!ok || in.channels <= 0 || in.rate <= 0 || in.bits < 8 || in.bits > 64) return false;
-  FILE *f = openUtf8(path, "rb");
-  if (!f) return false;
-  f_ = f;
+  if (!file_.open(path, in)) return false;
   path_ = path;
   channels_ = in.channels;
   rate_ = in.rate;
@@ -205,27 +220,24 @@ bool PcmReader::open(const std::string &path) {
   float_ = in.isFloat;
   big_ = in.bigEndian;
   aiff8_ = in.bigEndian && in.bits == 8;
-  offset_ = in.dataOffset;
   frames_ = in.frames();
   return true;
 }
 
 void PcmReader::close() {
-  if (f_) fclose((FILE *)f_);
-  f_ = nullptr;
+  file_.close();
   path_.clear();
 }
 
 void PcmReader::read(double time, int channel, int n, std::vector<float> &out) {
   out.assign((size_t)std::max(0, n), 0.0f);
-  if (!f_ || n <= 0 || channel < 0 || channel >= channels_) return;
+  if (!file_.isOpen() || n <= 0 || channel < 0 || channel >= channels_) return;
   int bps = bits_ / 8, fb = bps * channels_;
   int64_t a = (int64_t)std::floor(time * rate_);
   int64_t s0 = std::max<int64_t>(0, a), s1 = std::min<int64_t>(frames_, a + n);
   if (s1 <= s0) return;
   buf_.resize((size_t)((s1 - s0) * fb));
-  if (fseek64((FILE *)f_, (int64_t)offset_ + s0 * fb, SEEK_SET)) return;
-  size_t got = fread(buf_.data(), 1, buf_.size(), (FILE *)f_) / (size_t)fb;
+  size_t got = (size_t)file_.read(s0, s1 - s0, buf_.data());
   for (size_t i = 0; i < got; i++) {
     const unsigned char *p = buf_.data() + i * fb + channel * bps;
     unsigned char b[8];
@@ -248,6 +260,18 @@ void PcmReader::read(double time, int channel, int n, std::vector<float> &out) {
       v = (int32_t)((uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24) / 2147483648.0f;
     out[(size_t)(s0 - a) + i] = v;
   }
+}
+
+std::string PeakCache::why(int media) const {
+  std::lock_guard<std::mutex> l(mu_);
+  return media >= 0 && media < (int)why_.size() ? why_[(size_t)media] : std::string();
+}
+
+int PeakCache::failed() const {
+  std::lock_guard<std::mutex> l(mu_);
+  int n = 0;
+  for (auto &w : why_) n += !w.empty();
+  return n;
 }
 
 int PeakCache::channels(int media) const {

@@ -6,6 +6,8 @@
 // of 256 frames, plus a coarser level (x 64) for zoomed-out views.
 
 #pragma once
+#include "audiofile.h"
+
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -27,18 +29,17 @@ public:
   ~PcmReader() { close(); }
   bool open(const std::string &path);
   void close();
-  bool isOpen() const { return f_ != nullptr; }
+  bool isOpen() const { return file_.isOpen(); }
   int channels() const { return channels_; }
   int rate() const { return rate_; }
   // n frames of one channel (0-based) from `time` seconds; silence outside the file
   void read(double time, int channel, int n, std::vector<float> &out);
 
 private:
-  void *f_ = nullptr;
+  PcmFile file_;
   std::string path_;
   int channels_ = 0, rate_ = 0, bits_ = 0;
   bool float_ = false, big_ = false, aiff8_ = false;
-  uint64_t offset_ = 0;
   int64_t frames_ = 0;
   std::vector<unsigned char> buf_;
 };
@@ -57,6 +58,9 @@ public:
   // files read so far / files to read (for "Creating waveforms")
   int done() const { return done_.load(); }
   int total() const { return total_.load(); }
+  // why the waveform of this media can't be shown ("" if it can, or isn't read yet)
+  std::string why(int media) const;
+  int failed() const; // found files that gave no waveform
   void fakeProgress(int done, int total) { busy_ = true; done_ = done; total_ = total; } // for the layout tests
   // Highest absolute level (0..1) of one channel (0-based) of a media file between two
   // source times in seconds; -1 if this file has no overview (yet).
@@ -74,11 +78,12 @@ private:
     size_t blocks = 0, coarseBlocks = 0;
   };
   void run(std::vector<Job> jobs);
-  static std::shared_ptr<Peaks> scan(const Job &j, const std::atomic<bool> &stop);
+  static std::shared_ptr<Peaks> scan(const Job &j, const std::atomic<bool> &stop, std::string *why);
   std::vector<Job> jobsFor(const Session &s);
 
   mutable std::mutex mu_;
   std::vector<std::shared_ptr<Peaks>> peaks_;
+  std::vector<std::string> why_; // why a found file gives no waveform ("" = fine or not read yet)
   std::thread th_;
   std::atomic<bool> stop_{false}, busy_{false};
   std::atomic<int> version_{0}, done_{0}, total_{0};
