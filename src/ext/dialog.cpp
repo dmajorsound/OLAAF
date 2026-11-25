@@ -112,7 +112,7 @@ const int W = 1180, H = 742;
 #define kBlue (theme().blue)
 #define kBlueSoft (theme().blueSoft)
 #define kRed (theme().red)
-const int kPeakTimer = 7, kPlayTimer = 8, kTipTimer = 9, kUpdTimer = 10;
+const int kPeakTimer = 7, kPlayTimer = 8, kTipTimer = 9, kUpdTimer = 10, kBlinkTimer = 11;
 const COLORREF kWhiteFixed = RGB(0xff, 0xff, 0xff);
 // text on the blue accent: white in light mode, near-black on the brighter dark-mode blue
 #define kWhite (olaaf::darkTheme() ? RGB(0x12, 0x1a, 0x26) : kWhiteFixed)
@@ -268,6 +268,8 @@ struct State {
   unsigned menuTick = 0;                 // when a right-click menu last opened
   double mouseLX = -1, mouseLY = -1;     // mouse, in layout units
   std::string updTag, updUrl;            // a newer OLAAF on GitHub
+  bool blinkOn = true;                   // the update dot blinks
+  int updPollsStart = 0;
   int updPolls = 0;
   // the stereo meter while a stereo event plays
   // undo / redo of the edits made here (tracks, folders and the selection as they were)
@@ -949,6 +951,21 @@ int totalTracks(State *st, std::string *tip) {
 
 // One bar on top: the AAF, where it lands in REAPER, options, import.
 // the OLAAF mark, the name and the version, at the top left, centered on `mid`
+std::string updateNote(State *st) {
+  std::string v = st->updTag;
+  if (!v.empty() && (v[0] == 'v' || v[0] == 'V')) v = v.substr(1);
+  return v + " is out";
+}
+
+// the brand's width: the name, or the version line with "0.8.1 is out" when there is a newer OLAAF
+double brandRight(State *st, const Gfx &g) {
+  double r = 56 + std::max(60.0, std::min(90.0, g.width(st->fWord, "OLAAF")));
+  if (!st->updTag.empty())
+    r = std::max(r, 57 + g.width(st->fTiny, "V " OLAAF_VERSION_STRING " beta") + 18 +
+                        g.width(st->fTiny, updateNote(st)));
+  return r;
+}
+
 void paintBrand(State *st, const Gfx &g, double mid) {
   g.rfill(16, mid - 15, 46, mid + 15, 8, kBlue);
   { // the mark: two events of an edit and a paper plane landing (drawn on a 120 grid, 30 units here)
@@ -967,6 +984,16 @@ void paintBrand(State *st, const Gfx &g, double mid) {
   }
   g.textBase(st->fWord, kInk, "OLAAF", 56, mid - 15 + 20 * 0.698);
   g.textBase(st->fTiny, kMute, "V " OLAAF_VERSION_STRING " beta", 57, mid + 15);
+  if (!st->updTag.empty()) { // a newer OLAAF: a light red dot that blinks, and which version
+    double x = 57 + g.width(st->fTiny, "V " OLAAF_VERSION_STRING " beta") + 8;
+    if (st->blinkOn) g.rfill(x, mid + 15 - 7, x + 7, mid + 15, 3.5, RGB(0xF0, 0x6E, 0x6E));
+    else g.rbox(x, mid + 15 - 7, x + 7, mid + 15, 3.5, RGB(0xF0, 0x6E, 0x6E), kFace);
+    std::string note = updateNote(st);
+    g.textBase(st->fTiny, kRed, note, x + 11, mid + 15);
+    static std::string tip;
+    tip = "OLAAF " + st->updTag + " is out. Click to open the download page.";
+    addHit(st, x - 4, mid + 1, x + 11 + g.width(st->fTiny, note) + 4, mid + 19, H_UPDATE, 0, tip.c_str());
+  }
 }
 
 void paintTopBar(State *st, const Gfx &g) {
@@ -976,11 +1003,11 @@ void paintTopBar(State *st, const Gfx &g) {
   double mid = kTopH / 2;
   // the OLAAF mark and name: "OLAAF" from the top of the mark, the version on its bottom line
   // (IBM Plex: capitals are 0.698 of the type size)
-  double wordR = 56 + std::max(60.0, std::min(90.0, g.width(st->fWord, "OLAAF")));
+  double wordR = brandRight(st, g);
   if (st->themeMenu) g.rbox(10, mid - 21, wordR + 6, mid + 21, 8, kBlue, kBlueSoft); // the menu is open
-  paintBrand(st, g, mid);
   addHit(st, 10, mid - 21, wordR + 6, mid + 21, H_THEME, 0,
          "OLAAF " OLAAF_VERSION_STRING " beta, developed with AI assistance. dmajorsound.com");
+  paintBrand(st, g, mid); // (its update note is clicked on its own)
   g.fill(wordR + 14, mid - 16, wordR + 15, mid + 16, kLine);
 
   // right side, right to left: Import, Cancel, Options, | Edit cursor, where it lands
@@ -1044,9 +1071,7 @@ void paintTopBar(State *st, const Gfx &g) {
                 fpsText(s) + "  \xc2\xb7  " + strprintf("%g kHz / %d bit", s.sampleRate / 1000.0, s.bits) + "  \xc2\xb7  AAF starts " +
                 formatTC(s.firstClip(), s.fps) + "  \xc2\xb7  " + media + "  \xc2\xb7  " + s.aafPath;
   // the update button takes room first
-  double updW = 0;
-  std::string u = st->updTag.empty() ? std::string() : "Update " + st->updTag;
-  if (!u.empty()) updW = g.width(st->fSmall, u) + 30;
+  const double updW = 0; // (the update note sits by the OLAAF name)
   const std::vector<int> shown = shownReels(st);
   const int nReels = (int)shown.size();
   const char *plusTip = "Add AAFs (reels) to this import, each at its own timecode. Tracks with the same name share one "
@@ -1172,14 +1197,6 @@ void paintTopBar(State *st, const Gfx &g) {
       addHit(st, px - 2, mid - 21, px + 22, mid + 1, H_REEL_ADD, 0, plusTip);
       nmW += plusW;
     }
-  }
-  if (!u.empty()) { // a newer OLAAF is out
-    double ux = x0 + nmW + 10, uw = updW - 10;
-    g.rfill(ux, mid - 19, ux + uw, mid - 1, 9, kBlue);
-    g.text(st->fSmall, kWhite, u, ux, mid - 19, ux + uw, mid - 1, DT_CENTER);
-    static std::string uTip;
-    uTip = "OLAAF " + st->updTag + " is out. Click to open the download page.";
-    addHit(st, ux, mid - 20, ux + uw, mid, H_UPDATE, 0, uTip.c_str());
   }
   // details: drop the least important ones, then use smaller type, until the line fits
   struct Seg {
@@ -4922,12 +4939,18 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       }
       return 0;
     }
+    if (st && wp == kBlinkTimer) {
+      st->blinkOn = !st->blinkOn;
+      InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
+    }
     if (st && wp == kUpdTimer) { // the update check runs in the background; stop asking after a while
       std::string tag, url;
       int u = st->host && st->host->updateState ? st->host->updateState(&tag, &url) : 2;
       if (u == 1) {
         st->updTag = tag;
         st->updUrl = url;
+        SetTimer(hwnd, kBlinkTimer, 700, NULL);
         InvalidateRect(hwnd, NULL, FALSE);
       }
       if (u != 0 || ++st->updPolls > 20) KillTimer(hwnd, kUpdTimer);
@@ -5367,6 +5390,7 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     KillTimer(hwnd, kPeakTimer);
     KillTimer(hwnd, kTipTimer);
     KillTimer(hwnd, kUpdTimer);
+    KillTimer(hwnd, kBlinkTimer);
     if (st) stopPlay(st);
     if (st) embedCancel(st, nullptr); // waits for the file being unpacked; the import uses the AAF next
     if (st) st->peaks.stop();
@@ -5415,6 +5439,7 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
     ss.hwnd = (HWND)1;
     ss.tip = tip;
     if (getenv("OLAAF_STARTHOVER")) ss.startHover = 0;
+    if (getenv("OLAAF_UPD")) ss.updTag = "v0.8.1";
     relayoutStart(&ss);
     paintStart(&ss, dc);
     freeFonts(&ss);
@@ -5594,7 +5619,7 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
             gonioUpdate(&st);
           }
         }
-  if (getenv("OLAAF_UPD")) st.updTag = "v0.7.0";
+  if (getenv("OLAAF_UPD")) st.updTag = "v0.8.1";
   if (getenv("OLAAF_TIP")) {
     st.tip = "Where the AAF lands in REAPER. In the AAF it starts at 00:00:00:00. Click and type HH:MM:SS:FF or just the digits; Return applies, Esc cancels.";
     st.tipVisible = true;
@@ -5892,9 +5917,26 @@ INT_PTR CALLBACK startProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     olSetText(hwnd, "OLAAF \xe2\x80\x93 AAF Import for Reaper");
     g_startHwnd = hwnd;
     relayoutStart(st);
+    SetTimer(hwnd, kUpdTimer, 1000, NULL); // is there a newer OLAAF?
     SetFocus(hwnd);
     return 0;
   }
+  case WM_TIMER:
+    if (wp == kUpdTimer) {
+      std::string tag, url;
+      int u = updateCheckState(&tag, &url);
+      if (u == 1) {
+        st->updTag = tag;
+        st->updUrl = url;
+        SetTimer(hwnd, kBlinkTimer, 700, NULL);
+        InvalidateRect(hwnd, NULL, FALSE);
+      }
+      if (u != 0 || ++st->updPollsStart > 20) KillTimer(hwnd, kUpdTimer);
+    } else if (wp == kBlinkTimer) {
+      st->blinkOn = !st->blinkOn;
+      InvalidateRect(hwnd, NULL, FALSE);
+    }
+    return 0;
   case WM_ERASEBKGND: return 1;
   case WM_SIZE:
     relayoutStart(st);
@@ -5941,6 +5983,7 @@ INT_PTR CALLBACK startProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     const Hit *h = hitAt(st, (short)LOWORD(lp), (short)HIWORD(lp));
     if (!h) return 0;
     if (h->id == H_START_PICK) startPick(st);
+    else if (h->id == H_UPDATE && !st->updUrl.empty()) openWebPage(st->updUrl);
     else if (h->id == H_START_CANCEL) EndDialog(hwnd, 0);
     else if (h->id == H_START_RECENT && st->start && h->idx >= 0 && h->idx < (int)st->start->recent.size()) {
       st->start->result = {st->start->recent[(size_t)h->idx]};
@@ -5971,6 +6014,8 @@ INT_PTR CALLBACK startProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     EndDialog(hwnd, 0);
     return 0;
   case WM_DESTROY:
+    KillTimer(hwnd, kUpdTimer);
+    KillTimer(hwnd, kBlinkTimer);
     if (g_startHwnd == hwnd) g_startHwnd = nullptr;
     freeFonts(st);
     return 0;

@@ -87,3 +87,8 @@ int main(int argc, char **argv) {
   FILE *f = fopen(argv[2], "wb"); fwrite(svg.data(), 1, svg.size(), f); fclose(f);
   return 0;
 }
+// the update check lives in update.cpp (REAPER side): stand-ins for the test renderer
+namespace olaaf {
+int updateCheckState(std::string *, std::string *) { return 2; }
+void openWebPage(const std::string &) {}
+}
