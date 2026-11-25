@@ -2,7 +2,7 @@
 // Copyright (C) 2026 dmajorsound. Licensed under the GNU GPL v2 or later.
 //
 // A REAPER track template (.RTrackTemplate) added on import: its tracks (stems, buses, routing)
-// come first, and each AAF folder goes into the template track of the same kind ("Dialog" takes DIA).
+// come first, and each AAF folder goes into the template track of the same kind ("Dialog" takes DX).
 
 #pragma once
 #include "importer.h"

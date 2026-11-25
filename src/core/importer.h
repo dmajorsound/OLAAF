@@ -56,13 +56,13 @@ struct TrackChunk {
 };
 
 // Sorting tracks into folders by their names: each rule is a folder with the words that send a
-// track there ("Boom 1" -> DIA, "ATMO Stereo 2" -> ATMO). Editable in the dialog, remembered.
+// track there ("Boom 1" -> DX, "ATMO Stereo 2" -> BG). Editable in the dialog, remembered.
 struct SortRule {
   std::string name;
   uint32_t color;
   std::vector<std::string> words;
 };
-std::vector<SortRule> defaultSortRules(); // DIA, FX, MUS, ATMO
+std::vector<SortRule> defaultSortRules(); // DX, FX, MX, BG
 void setSortRules(const std::vector<SortRule> &rules);
 const std::vector<SortRule> &sortRules();
 std::string sortRulesToText(const std::vector<SortRule> &rules);

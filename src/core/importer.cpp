@@ -32,18 +32,18 @@ static std::vector<SortRule> g_rules = defaultSortRules();
 
 std::vector<SortRule> defaultSortRules() {
   return {
-      {"DIA", 0xE8923A, {"dia", "dx", "dlg", "dial", "dialog", "dialogue", "boom", "lav", "anstecker", "fr", "vo", "adr", "voice",
+      {"DX", 0xE8923A, {"dia", "dx", "dlg", "dial", "dialog", "dialogue", "boom", "lav", "anstecker", "fr", "vo", "adr", "voice",
                          "ot", "o-ton", "oton", "guide", "sprache", "mic"}},
       {"FX", 0xF2A6C8, {"sfx", "fx", "effect", "effects", "hardfx", "design", "sd", "foley", "fol", "ger\xc3\xa4usche",
                         "ger\xc3\xa4usch", "gerausche", "steps", "fs", "spot", "moves", "zs", "prop"}},
-      {"MUS", 0x4A86E8, {"mus", "music", "musik", "mx", "score", "song"}},
+      {"MX", 0x4A86E8, {"mus", "music", "musik", "mx", "score", "song", "source", "temp", "layout"}},
       {"BG", 0x8FD48A, {"atmo", "atmos", "amb", "ambi", "ambience", "bg", "bgs", "roomtone", "rt", "nt", "at", "raum"}},
   };
 }
 void setSortRules(const std::vector<SortRule> &rules) { g_rules = rules.empty() ? defaultSortRules() : rules; }
 const std::vector<SortRule> &sortRules() { return g_rules; }
 
-// "DIA|5580d4|boom,lav,...;FX|d9822b|..." (for REAPER's settings)
+// "DX|e8923a|boom,lav,...;FX|d9822b|..." (for REAPER's settings)
 std::string sortRulesToText(const std::vector<SortRule> &rules) {
   std::string out;
   for (auto &r : rules) {

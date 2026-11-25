@@ -1468,7 +1468,7 @@ void paintArrange(State *st, const Gfx &g) {
   double sortW = g.width(st->fBody, sortL), sortR = kL + kHdr - 24 - folW;
   g.text(st->fBody, kBlue, sortL, sortR - sortW, ry, sortR, ry + kRuler, DT_RIGHT);
   addHit(st, sortR - sortW - 4, ry + 4, sortR + 4, ry + kRuler - 4, H_SORT_NOW, 0,
-         "Sort the tracks into DIA, FX, MUS and BG by their names (Cmd/Ctrl+Z undoes it). The words: Options \xe2\x80\xba Sorting.");
+         "Sort the tracks into DX, FX, MX and BG by their names (Cmd/Ctrl+Z undoes it). The words: Options \xe2\x80\xba Sorting.");
   const double rightEdge = sortR - sortW - 10;
   size_t ne = st->imp->emptyTracks().size();
   std::string el = ne ? strprintf("\xc2\xb7 %zu empty \xc3\x97", ne) : std::string();
@@ -2101,7 +2101,7 @@ void paintOptions(State *st, const Gfx &g) {
     std::string rl = opt.trackTemplate.empty() ? "Sorting\xe2\x80\xa6" : "Sorting + template\xe2\x80\xa6";
     double bw = g.width(st->fBody, rl) + 24;
     button(st, g, px + kOpW - 16 - bw, save + 1, px + kOpW - 16, save + 27, rl, H_RULES, 0,
-           "Which words send a track to DIA, FX, MUS or BG, and a REAPER track template with your stems and routing.");
+           "Which words send a track to DX, FX, MX or BG, and a REAPER track template with your stems and routing.");
   }
   optRow(st, g, px, y, "Show positions in samples too", st->showSamples, true, H_SAMPLES,
          "The selected event's position and length also in samples (at the AAF's sample rate), for checking sync.");
@@ -2278,14 +2278,14 @@ void paintRules(State *st, const Gfx &g) {
   button(st, g, l + 16, y, l + 186, y + 28, "Sort the tracks now", H_RULES_SORT, 0,
          "Puts this AAF's tracks into the folders by these words again (Cmd/Ctrl+Z undoes it).");
   button(st, g, l + 196, y, l + 336, y + 28, "Reset the words", H_RULES_RESET, 0,
-         "Back to OLAAF's own folders, colors and words (DIA, FX, MUS, BG).");
+         "Back to OLAAF's own folders, colors and words (DX, FX, MX, BG).");
   y += 42;
   g.fill(l + 16, y, l + w - 16, y + 1, kLine);
   y += 10;
   g.text(st->fBold, kInk, "Track template", l + 16, y, l + w - 16, y + 20, DT_LEFT);
   g.text(st->fSmall, kMute, "A REAPER track template (.RTrackTemplate) with your stems and routing comes in first.",
          l + 16, y + 20, l + w - 16, y + 38, DT_LEFT);
-  g.text(st->fSmall, kMute, "Each folder goes into its template track: \"Dialog Stem\" takes DIA.", l + 16, y + 36,
+  g.text(st->fSmall, kMute, "Each folder goes into its template track: \"Dialog Stem\" takes DX.", l + 16, y + 36,
          l + w - 16, y + 54, DT_LEFT);
   y += 62;
   const std::string &tp = st->opt->trackTemplate;
@@ -4022,7 +4022,7 @@ void click(State *st, int x, int y, bool shift) {
     st->edited = true;
     buildRows(st);
     st->tip = st->imp->session().folders.empty() ? "The names point to one folder only: the tracks stay as they are."
-                                                  : "The tracks are sorted into DIA, FX, MUS and BG by their names (Cmd/Ctrl+Z undoes it).";
+                                                  : "The tracks are sorted into DX, FX, MX and BG by their names (Cmd/Ctrl+Z undoes it).";
     break;
   case H_TC_RESET: st->tcAbs = 0; st->tcMinus = false; st->tip = "Back at the AAF's own timecode."; break;
   case H_TC_PLUS: st->tcMinus = false; break;

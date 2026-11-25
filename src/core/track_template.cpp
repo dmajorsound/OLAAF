@@ -77,7 +77,7 @@ bool readTrackTemplate(const std::string &path, std::vector<TemplateTrack> *out,
 std::map<std::string, int> matchTemplate(const std::vector<TemplateTrack> &tpl, const std::vector<Folder> &folders) {
   std::map<std::string, int> out;
   std::set<int> used;
-  // the same name first ("FX" -> "FX"), then the same kind ("Dialog" -> DIA), folder tracks first
+  // the same name first ("FX" -> "FX"), then the same kind ("Dialog" -> DX), folder tracks first
   for (auto &f : folders)
     for (size_t i = 0; i < tpl.size(); i++)
       if (!used.count((int)i) && lower(trimmed(tpl[i].name)) == lower(trimmed(f.name))) {
