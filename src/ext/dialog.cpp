@@ -1054,9 +1054,9 @@ void paintTopBar(State *st, const Gfx &g) {
     }
     bool cut = false;
     std::vector<std::string> nl = fitLines(g, nf, name, avail - updW - plusW, 1, &cut);
-    std::string shown = nl.empty() ? name : nl[0];
-    nmW = g.width(nf, shown) + 4;
-    g.text(nf, kInk, shown, x0, mid - 20, x0 + nmW, mid + 1, DT_LEFT);
+    std::string nameShown = nl.empty() ? name : nl[0];
+    nmW = g.width(nf, nameShown) + 4;
+    g.text(nf, kInk, nameShown, x0, mid - 20, x0 + nmW, mid + 1, DT_LEFT);
     addHit(st, x0, mid - 20, x0 + nmW, mid, H_NONE, 0, st->headTip.c_str());
     if (st->host && st->host->addReels) {
       double px = x0 + nmW + 4;
