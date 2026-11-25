@@ -140,7 +140,7 @@ enum HitId {
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
   H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE,
-  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE, H_TC_RESET, H_REMOVE_EMPTY, H_TRACK_STEREO, H_RULE_SWATCH, H_FOLD_TOGGLE, H_SORT_NOW
+  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE, H_TC_RESET, H_REMOVE_EMPTY, H_TRACK_STEREO, H_FOLD_TOGGLE, H_SORT_NOW
 };
 
 struct Hit {
@@ -242,7 +242,6 @@ struct State {
   bool missingOpen = false;              // the list of missing media
   int missScroll = 0;                    // ... scrolled by this many files
   bool rulesOpen = false;                // the folder sorting rules and the track template
-  int ruleColor = -1;                    // ... the rule whose colors show in place of its words
   std::set<std::string> closedFolders;   // folders shown closed in the track list (their tracks still import)
   bool choicesBack = false;              // the last import's choices for this AAF were put back
   struct Fresh { std::vector<Track> tracks; std::vector<Folder> folders; std::vector<VideoClip> video; ImportOptions opt; };
@@ -2197,10 +2196,6 @@ void loadTemplateList(State *st) {
   if (!p.empty()) olaaf::readTrackTemplate(p, &st->tplTracks, nullptr);
 }
 
-// the colors offered in the sorting panel (0xRRGGBB); "More…" opens the system's color picker
-const std::vector<uint32_t> kRuleColors = {0xE8923A, 0xF2A6C8, 0x4A86E8, 0x8FD48A, 0xE0C341, 0xD0574F,
-                                           0x9B7FE0, 0x3FB8C4, 0xB08A5B, 0x9AA0A6};
-
 void saveRules(State *st, const std::vector<SortRule> &rules) {
   setSortRules(rules);
   bool isDefault = sortRulesToText(rules) == sortRulesToText(defaultSortRules());
@@ -2229,7 +2224,7 @@ void paintRules(State *st, const Gfx &g) {
     const SortRule &r = rules[i];
     double cy = y + rowH / 2 - 4;
     g.rfill(l + 16, cy - 8, l + 32, cy + 8, 8, rgbToRef(r.color));
-    addHit(st, l + 12, cy - 12, l + 36, cy + 12, H_RULE_COLOR, (int)i, "The folder's color. Click: the colors show in this row.");
+    addHit(st, l + 12, cy - 12, l + 36, cy + 12, H_RULE_COLOR, (int)i, "The folder's color. Click to choose another one.");
     if (!(st->editKind == 6 && st->editKey == std::to_string(i)))
       g.text(st->fBold, kInk, r.name, l + 42, y, nameR, y + rowH - 8, DT_LEFT);
     addHit(st, l + 40, y + 4, nameR, y + rowH - 12, H_RULE_NAME, (int)i, "The folder's name. Click and type to rename it.");
@@ -2237,33 +2232,16 @@ void paintRules(State *st, const Gfx &g) {
     for (size_t k = 0; k < r.words.size(); k++) words += (k ? ", " : "") + r.words[k];
     if (words.empty()) words = "(no words: nothing goes here by itself)";
     bool cut = false;
-    if (st->ruleColor == (int)i) { // the colors, right here
-      double sx = wordsL + 2, sy = y + rowH / 2 - 4;
-      for (size_t k = 0; k <= kRuleColors.size(); k++) {
-        bool more = k == kRuleColors.size();
-        if (more) {
-          g.text(st->fSmall, kBlue, "More\xe2\x80\xa6", sx, sy - 10, sx + 50, sy + 10, DT_LEFT);
-          addHit(st, sx - 2, sy - 12, sx + 46, sy + 12, H_RULE_SWATCH, (int)(i * 32 + k), "Any color (the system's color picker).");
-        } else {
-          uint32_t c = kRuleColors[k];
-          if (c == r.color) g.rfill(sx - 3, sy - 11, sx + 19, sy + 11, 11, kInk);
-          g.rfill(sx, sy - 8, sx + 16, sy + 8, 8, rgbToRef(c));
-          addHit(st, sx - 2, sy - 10, sx + 18, sy + 10, H_RULE_SWATCH, (int)(i * 32 + k), "Use this color.");
-        }
-        sx += 24;
-      }
-    } else {
-      bool typing = (st->editKind == 5) && st->editKey == std::to_string(i);
-      g.rbox(wordsL, y + 2, wordsR, y + rowH - 10, 8, typing ? kBlue : kLine, kPanel);
-      std::vector<std::string> wl = fitLines(g, st->fSmall, words, wordsR - wordsL - 16, 2, &cut);
-      if (!typing)
-        for (size_t k = 0; k < wl.size(); k++)
-          g.text(st->fSmall, r.words.empty() ? kMute : kInk, wl[k], wordsL + 8, y + 5 + k * 16, wordsR - 8,
-                 y + 21 + k * 16, DT_LEFT);
-      static std::string wTip[16];
-      if (i < 16) wTip[i] = "Click and type the words for " + r.name + ", separated by commas (Return keeps them, Tab: the next folder): " + words;
-      addHit(st, wordsL, y + 2, wordsR, y + rowH - 10, H_RULE_WORDS, (int)i, i < 16 ? wTip[i].c_str() : nullptr);
-    }
+    bool typing = (st->editKind == 5) && st->editKey == std::to_string(i);
+    g.rbox(wordsL, y + 2, wordsR, y + rowH - 10, 8, typing ? kBlue : kLine, kPanel);
+    std::vector<std::string> wl = fitLines(g, st->fSmall, words, wordsR - wordsL - 16, 2, &cut);
+    if (!typing)
+      for (size_t k = 0; k < wl.size(); k++)
+        g.text(st->fSmall, r.words.empty() ? kMute : kInk, wl[k], wordsL + 8, y + 5 + k * 16, wordsR - 8,
+               y + 21 + k * 16, DT_LEFT);
+    static std::string wTip[16];
+    if (i < 16) wTip[i] = "Click and type the words for " + r.name + ", separated by commas (Return keeps them, Tab: the next folder): " + words;
+    addHit(st, wordsL, y + 2, wordsR, y + rowH - 10, H_RULE_WORDS, (int)i, i < 16 ? wTip[i].c_str() : nullptr);
     if (!st->tplTracks.empty()) {
       auto m = match.find(r.name);
       std::string to = m == match.end() ? "own folder" : "\xe2\x86\x92 " + st->tplTracks[(size_t)m->second].name;
@@ -3496,7 +3474,7 @@ void click(State *st, int x, int y, bool shift) {
     InvalidateRect(st->hwnd, NULL, FALSE);
     if (id == H_LANES || id == H_NONE) return;
   }
-  if (st->rulesOpen && !(id >= H_RULES && id <= H_RULES_CLOSE) && id != H_RULE_SWATCH) {
+  if (st->rulesOpen && !(id >= H_RULES && id <= H_RULES_CLOSE)) {
     st->rulesOpen = false;
     InvalidateRect(st->hwnd, NULL, FALSE);
     if (id == H_LANES || id == H_NONE) return;
@@ -3815,30 +3793,22 @@ void click(State *st, int x, int y, bool shift) {
   case H_RULES: st->rulesOpen = true; st->optsOpen = false; break;
   case H_RULES_BG: return;
   case H_RULES_CLOSE: st->rulesOpen = false; break;
-  case H_RULE_COLOR: { // the colors show in the row, in place of the words (click again: words)
-    int i = h ? h->idx : -1;
-    st->ruleColor = st->ruleColor == i ? -1 : i;
-    break;
-  }
-  case H_RULE_SWATCH: {
+  case H_RULE_COLOR: { // the system's color picker
     std::vector<SortRule> rules = sortRules();
-    int i = h ? h->idx / 32 : -1, k = h ? h->idx % 32 : -1;
-    if (i < 0 || i >= (int)rules.size()) break;
+    int i = h ? h->idx : -1;
+    if (i < 0 || i >= (int)rules.size() || !st->host || !st->host->pickColor) break;
     uint32_t c = rules[(size_t)i].color;
-    if (k < (int)kRuleColors.size()) c = kRuleColors[(size_t)k];
-    else if (!st->host || !st->host->pickColor || !st->host->pickColor(st->hwnd, &c)) break; // "More…"
+    if (!st->host->pickColor(st->hwnd, &c)) break;
     rules[(size_t)i].color = c ? c : 1;
     saveRules(st, rules);
     for (auto &f : st->imp->session().folders) // the folder in this AAF takes the color right away
       if (f.key == rules[(size_t)i].name) f.color = rules[(size_t)i].color;
-    st->ruleColor = -1;
     break;
   }
   case H_RULE_NAME: case H_RULE_WORDS: { // typed right in the field
     std::vector<SortRule> rules = sortRules();
     int i = h ? h->idx : -1;
     if (i < 0 || i >= (int)rules.size() || !h) break;
-    st->ruleColor = -1;
     std::string v = rules[(size_t)i].name;
     if (id == H_RULE_WORDS) {
       v.clear();
@@ -4929,7 +4899,6 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
     st.missScroll = atoi(getenv("OLAAF_MISSING"));
   }
   if (getenv("OLAAF_RULES")) st.rulesOpen = true;
-  if (getenv("OLAAF_RULECOLOR")) st.ruleColor = atoi(getenv("OLAAF_RULECOLOR"));
   if (getenv("OLAAF_CLOSEFX")) {
     st.closedFolders.insert("FX");
     buildRows(&st);

@@ -44,7 +44,7 @@ static std::vector<SortRule> g_rules = defaultSortRules();
 std::vector<SortRule> defaultSortRules() {
   return {
       {"DX", 0xE8923A, {"dia", "dx", "dlg", "dial", "dialog", "dialogue", "boom", "lav", "anstecker", "fr", "vo", "adr", "voice",
-                         "ot", "o-ton", "oton", "guide", "sprache", "mic"}},
+                         "ot", "o-ton", "oton", "guide", "sprache", "mic", "off", "narration", "narr", "voice over"}},
       {"FX", 0xF2A6C8, {"sfx", "fx", "effect", "effects", "hardfx", "design", "sd", "foley", "fol", "ger\xc3\xa4usche",
                         "ger\xc3\xa4usch", "gerausche", "steps", "fs", "spot", "moves", "zs", "prop", "nt", "wildtrack"}},
       {"MX", 0x4A86E8, {"mus", "music", "musik", "mx", "score", "song", "source", "temp", "layout"}},
