@@ -133,7 +133,10 @@ std::string trackGroup(const std::string &trackName) {
       for (auto &t : tk)
         for (auto &k : row.words) {
           std::string kl = foldCase(k);
-          if (pass == 0 ? t == kl : (kl.size() >= 4 && t.compare(0, kl.size(), kl) == 0)) return row.name;
+          // a number right after the word still counts: "dx1", "FX12", "BG_2"
+          bool whole = t == kl || (t.size() > kl.size() && t.compare(0, kl.size(), kl) == 0 &&
+                                   t.find_first_not_of("0123456789", kl.size()) == std::string::npos);
+          if (pass == 0 ? whole : (kl.size() >= 4 && t.compare(0, kl.size(), kl) == 0)) return row.name;
         }
   return "OTHER";
 }
