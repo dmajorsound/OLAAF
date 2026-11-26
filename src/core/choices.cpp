@@ -66,7 +66,8 @@ std::string choicesToText(const Session &s, const ImportOptions &opt) {
   out += "subdir\t" + field(opt.subdir) + "\n";
   if (!s.video.empty() && !s.video[0].foundPath.empty())
     out += strprintf("video\t%d\t%.6f\t", s.video[0].manual, s.video[0].pos) + field(s.video[0].foundPath) + "\n";
-  for (auto &f : s.folders) out += "folder\t" + field(f.key) + strprintf("\t%06x\t", f.color) + field(f.name) + "\n";
+  for (auto &f : s.folders)
+    out += "folder\t" + field(f.key) + strprintf("\t%06x\t", f.color) + field(f.name) + "\t" + field(f.parent) + "\n";
   for (auto &t : s.tracks) {
     out += strprintf("track\t%d\t%d\t%d\t%d\t%06x\t", t.uid, t.created, t.import, t.channels, t.color) + field(t.group) + "\t" +
            field(t.target) + "\t" + field(t.targetName) + "\t" + field(t.name) + "\n";
@@ -127,7 +128,7 @@ bool applyChoices(const std::string &text, Importer &imp, ImportOptions &opt, st
   for (size_t i = 0; i < rows.size() && !bad; i++) {
     const auto &r = rows[i];
     if (r[0] == "folder" && r.size() >= 4) {
-      Folder f{r[1], r[3], (uint32_t)strtoul(r[2].c_str(), nullptr, 16)};
+      Folder f{r[1], r[3], (uint32_t)strtoul(r[2].c_str(), nullptr, 16), r.size() >= 5 ? r[4] : std::string()};
       std::string key = f.key;
       uint32_t c = f.color;
       if (migrateFolder(key, c)) { // a folder saved by an older version

@@ -104,6 +104,7 @@ struct Folder {
   std::string key;   // DIALOG, FOLEY, FX, ATMO, MUSIC, OTHER or F1, F2 ... for folders the user added
   std::string name;  // shown and written as the folder track's name
   uint32_t color = 0;
+  std::string parent; // key of the folder it sits in ("FX A" inside FX), "" = a top-level folder
 };
 
 struct Session {

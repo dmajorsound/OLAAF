@@ -29,6 +29,7 @@ struct ImportOptions {
   bool video = true;            // video reference from the AAF on its own track
   bool markers = true;          // AAF markers as REAPER markers
   bool folders = true;          // create the folder tracks in Session::folders
+  bool subFolders = false;      // Sort: numbered groups get a folder inside DX, FX, MX ... ("FX A 1", "FX A 2" -> FX > FX A)
   bool copyToSubdir = false;    // copy WAVs into <dest>/<subdir>; no = reference in place
   std::string destDir;          // usually the REAPER project folder
   std::string subdir;           // default: AAF name + "_Audio"
@@ -77,6 +78,9 @@ std::vector<SortRule> sortRulesFromText(const std::string &text);
 std::vector<std::string> splitWords(const std::string &text);
 // folder a track belongs in, from its name; "OTHER" when no rule matches
 std::string trackGroup(const std::string &trackName);
+// the name of a numbered group: "FX_A_01", "fx-a 2", "FXA3.L", "(01) FX A" -> key "fxa", shown as "FX A"
+// (a name without a number is its own group); false when nothing is left
+bool numberedGroup(const std::string &trackName, std::string *key, std::string *shown);
 uint32_t groupColor(const std::string &group);
 
 using Progress = std::function<bool(double fraction, const std::string &what)>; // return false to cancel
@@ -147,10 +151,12 @@ public:
 
   // Folder tracks. Tracks are sorted into DIALOG, FOLEY, FX, ATMO, MUSIC and OTHER by their names
   // (only when that gives at least two folders); the dialog can rename, add and remove folders.
-  void assignDefaultFolders();
+  // subFolders: numbered groups get their own folder inside DX, FX, MX ... ("FX A 1", "FX A 2" -> FX > FX A)
+  void assignDefaultFolders(bool subFolders = false);
+  std::string groupFor(const Track &t) const; // the folder a track goes back to by its name ("" = none there)
   void clearFolders(); // no folders, the tracks in the AAF's order again
   std::string addFolder(const std::string &name); // returns the new key
-  void removeFolder(const std::string &key);      // its tracks end up outside any folder
+  void removeFolder(const std::string &key);      // its tracks end up outside any folder (its sub-folders go too)
 
   // Copies / converts / extracts media into the destination and assigns each clip its file.
   bool prepareMedia(const ImportOptions &opt, MediaReport *rep, const Progress &progress);

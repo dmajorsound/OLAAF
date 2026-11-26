@@ -74,8 +74,11 @@ bool readTrackTemplate(const std::string &path, std::vector<TemplateTrack> *out,
   return true;
 }
 
-std::map<std::string, int> matchTemplate(const std::vector<TemplateTrack> &tpl, const std::vector<Folder> &folders) {
+std::map<std::string, int> matchTemplate(const std::vector<TemplateTrack> &tpl, const std::vector<Folder> &all) {
   std::map<std::string, int> out;
+  std::vector<Folder> folders; // the top-level folders: a sub-folder's tracks go with the folder around it
+  for (auto &f : all)
+    if (f.parent.empty()) folders.push_back(f);
   std::set<int> used;
   // the same name first ("FX" -> "FX"), then the same kind ("Dialog" -> DX), folder tracks first
   for (auto &f : folders)
@@ -104,6 +107,9 @@ std::map<std::string, int> matchTemplate(const std::vector<TemplateTrack> &tpl, 
 std::vector<TrackChunk> applyTrackTemplate(const std::vector<TrackChunk> &chunks, const std::vector<TemplateTrack> &tpl,
                                            const std::vector<Folder> &folders, int base) {
   std::map<std::string, int> match = matchTemplate(tpl, folders);
+  // a sub-folder counts as the folder around it: its tracks go into that folder's template track
+  for (auto &f : folders)
+    if (!f.parent.empty() && match.count(f.parent)) match[f.key] = match[f.parent];
   std::map<int, std::vector<const TrackChunk *>> into; // template index -> AAF tracks going in
   for (auto &c : chunks)
     if (c.targetGuid.empty() && !c.isFolder && match.count(c.folderKey)) into[match[c.folderKey]].push_back(&c);

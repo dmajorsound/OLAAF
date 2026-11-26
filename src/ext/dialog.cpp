@@ -151,7 +151,7 @@ enum HitId {
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
   H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE,
-  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE, H_TC_RESET, H_REMOVE_EMPTY, H_TRACK_STEREO, H_FOLD_TOGGLE, H_SORT_NOW, H_REEL_SHARE, H_REEL_OWN, H_REEL_ASK_BG, H_REEL_MODE, H_SORT_RESET, H_EMBED_LOAD, H_EMBED_SKIP, H_EMBED_BG,
+  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE, H_TC_RESET, H_REMOVE_EMPTY, H_TRACK_STEREO, H_FOLD_TOGGLE, H_SORT_NOW, H_REEL_SHARE, H_REEL_OWN, H_REEL_ASK_BG, H_REEL_MODE, H_SORT_RESET, H_EMBED_LOAD, H_EMBED_SKIP, H_EMBED_BG, H_SORT_SUBS,
   H_START_PICK, H_START_RECENT, H_START_CANCEL, H_START_FMT
 };
 
@@ -704,18 +704,23 @@ void buildRows(State *st) {
   st->order.clear();
   std::vector<bool> placed(s.tracks.size(), false);
   if (st->opt->folders && !s.folders.empty()) {
-    for (auto &f : s.folders) {
-      Row fr;
-      fr.kind = 1;
-      fr.folder = f.key;
-      st->rows.push_back(fr);
-      bool closed = st->closedFolders.count(f.key) > 0; // closed: its tracks keep their place, without a row
+    // a folder's row and its tracks; hidden: inside a closed folder (its tracks keep their place, without a row)
+    auto add = [&](const Folder &f, bool hidden) {
+      if (!hidden) st->rows.push_back({1, -1, f.key});
+      bool closed = hidden || st->closedFolders.count(f.key) > 0;
       for (size_t i = 0; i < s.tracks.size(); i++)
         if (s.tracks[i].group == f.key) {
           if (!closed) st->rows.push_back({0, (int)i, std::string()});
           st->order.push_back((int)i);
           placed[i] = true;
         }
+      return closed;
+    };
+    for (auto &f : s.folders) {
+      if (!f.parent.empty() && s.folder(f.parent)) continue; // comes with the folder around it
+      bool closed = add(f, false);
+      for (auto &sub : s.folders)
+        if (sub.parent == f.key) add(sub, closed);
     }
   }
   for (size_t i = 0; i < s.tracks.size(); i++)
@@ -749,9 +754,15 @@ int rowOfPos(const State *st, int pos) {
     int t = st->order[(size_t)pos];
     for (size_t i = 0; i < st->rows.size(); i++)
       if (st->rows[i].kind == 0 && st->rows[i].track == t) return (int)i;
-    const std::string &grp = st->imp->session().tracks[(size_t)t].group;
-    for (size_t i = 0; i < st->rows.size(); i++)
-      if (st->rows[i].kind == 1 && st->rows[i].folder == grp) return (int)i;
+    Session &s = st->imp->session();
+    std::string grp = s.tracks[(size_t)t].group;
+    for (int up = 0; up < 2; up++) {
+      for (size_t i = 0; i < st->rows.size(); i++)
+        if (st->rows[i].kind == 1 && st->rows[i].folder == grp) return (int)i;
+      const Folder *f = s.folder(grp); // its sub-folder has no row: the folder around it
+      if (!f) break;
+      grp = f->parent;
+    }
   }
   return (int)st->rows.size() - 1 + (pos - (int)st->order.size());
 }
@@ -759,7 +770,12 @@ int rowOfPos(const State *st, int pos) {
 // a closed folder opens when one of its tracks is needed (events moved there, Tab)
 void openFolderOf(State *st, int track) {
   Session &s = st->imp->session();
-  if (track >= 0 && track < (int)s.tracks.size() && st->closedFolders.erase(s.tracks[(size_t)track].group)) buildRows(st);
+  if (track < 0 || track >= (int)s.tracks.size()) return;
+  const std::string &grp = s.tracks[(size_t)track].group;
+  const Folder *f = s.folder(grp);
+  bool opened = st->closedFolders.erase(grp) > 0;
+  if (f && !f->parent.empty()) opened = st->closedFolders.erase(f->parent) > 0 || opened;
+  if (opened) buildRows(st);
 }
 
 int folderIndex(const Session &s, const std::string &key) {
@@ -1580,26 +1596,46 @@ void paintArrange(State *st, const Gfx &g) {
   g.fill(kL + kHdr, ry, kL + kHdr + 1, kAB - 1, kLine);
   int mOk = 0, mTotal = 0;
   mediaCount(st, &mOk, &mTotal);
-  // right: Sort and + Folder; left: the count (or the red flag) and "· n empty"; each gets shorter if needed
+  // right: Sort, Groups and + Folder; left: the count (or the red flag) and "· n empty"; each gets shorter if needed
+  size_t ne = st->imp->emptyTracks().size();
+  std::string el = ne ? strprintf("\xc2\xb7 %zu empty \xc3\x97", ne) : std::string();
+  double ew = ne ? g.width(st->fSmall, el) + 6 : 0;
+  bool sorted = opt.folders && !s.folders.empty();
+  const char *sortL = sorted ? "Unsort" : "Sort";
+  const char *grpL = "Sub groups";
+  double sortW = g.width(st->fBody, sortL), grpW = g.width(st->fSmall, grpL);
+  // no room for "n empty" next to the rest: "+ Folder" becomes "+" (its hint says what it does)
   const char *fol = "+ Folder";
   double folW = g.width(st->fBody, fol);
+  if (ne && kL + 12 + g.width(st->fSmall, strprintf("%zu empty \xc3\x97", ne)) + 10 > kL + kHdr - 24 - folW - sortW - 18 - grpW - 20 - 10) {
+    fol = "+";
+    folW = g.width(st->fBody, fol);
+  }
   g.text(st->fBody, kBlue, fol, kL + kHdr - 12 - folW, ry, kL + kHdr - 10, ry + kRuler, DT_RIGHT);
   addHit(st, kL + kHdr - 18 - folW, ry + 4, kL + kHdr - 6, ry + kRuler - 4, H_NEW_FOLDER, 0,
          "Add a folder (with the selected tracks in it). Drag track names onto a folder to put them in.");
   // Sort: into DX, FX, MX, BG by name. Once there are folders the same spot says Unsort: the AAF's order again.
-  bool sorted = opt.folders && !s.folders.empty();
-  const char *sortL = sorted ? "Unsort" : "Sort";
-  double sortW = g.width(st->fBody, sortL), sortR = kL + kHdr - 24 - folW;
+  double sortR = kL + kHdr - 24 - folW;
   g.text(st->fBody, kBlue, sortL, sortR - sortW, ry, sortR, ry + kRuler, DT_RIGHT);
   addHit(st, sortR - sortW - 4, ry + 4, sortR + 4, ry + kRuler - 4, sorted ? H_SORT_RESET : H_SORT_NOW, 0,
          sorted ? "Take the tracks out of all folders and put them back in the AAF's order (Cmd/Ctrl+Z undoes it)."
                 : "Sort the tracks into DX, FX, MX and BG by their names (Cmd/Ctrl+Z undoes it). The words: Options \xe2\x80\xba Sorting.");
-  const double rightEdge = sortR - sortW - 10;
-  size_t ne = st->imp->emptyTracks().size();
-  std::string el = ne ? strprintf("\xc2\xb7 %zu empty \xc3\x97", ne) : std::string();
-  double ew = ne ? g.width(st->fSmall, el) + 6 : 0;
+  // Sub groups (foodgroups): numbered tracks get a folder of their own inside DX, FX, MX ... ("FX A 1", "FX A 2" -> FX > FX A)
+  double gx = sortR - sortW - 18 - grpW - 20, gcy = ry + kRuler / 2.0;
+  if (opt.subFolders) {
+    g.rfill(gx, gcy - 7, gx + 14, gcy + 7, 4, kBlue);
+    g.check(gx - 1, gcy - 8, kWhite);
+  } else
+    g.rbox(gx, gcy - 7, gx + 14, gcy + 7, 4, theme().empty, kPanel);
+  g.text(st->fSmall, kInk, grpL, gx + 20, ry, gx + 24 + grpW, ry + kRuler, DT_LEFT);
+  addHit(st, gx - 4, ry + 4, gx + 24 + grpW, ry + kRuler - 4, H_SORT_SUBS, 0,
+         "Sub groups (foodgroups): Sort also puts numbered groups into folders of their own inside DX, FX, MX and BG: FX A 1, FX_A_2, fx-a3 "
+         "go to FX \xe2\x80\xba FX A, FX B 1, FX B 2 to FX \xe2\x80\xba FX B. Spaces, dashes and underscores count as the same.");
+  const double rightEdge = gx - 10;
   double leftEnd = kL + 12; // where "· n empty" goes
-  if (mTotal > 0 && mOk == 0) { // no audio at all: a red flag in the corner (only the flag when space is short)
+  // no audio at all: a red flag in the corner (only the flag when space is short; none without room, the
+  // header says it too)
+  if (mTotal > 0 && mOk == 0 && kL + 42 + ew <= rightEdge) {
     const char *fl = "No audio found";
     double fw = g.width(st->fSmall, fl) + 34;
     if (kL + 16 + fw + ew > rightEdge) {
@@ -1622,11 +1658,13 @@ void paintArrange(State *st, const Gfx &g) {
     std::string cnt = strprintf("%d of %d tracks", nsel, real);
     if (kL + 18 + g.width(st->fSmall, cnt) + ew > rightEdge) cnt = strprintf("%d / %d", nsel, real);
     double cw = g.width(st->fSmall, cnt);
-    g.text(st->fSmall, kMute, cnt, kL + 12, ry, kL + 14 + cw, ry + kRuler, DT_LEFT);
-    addHit(st, kL + 4, ry, kL + 14 + cw, ry + kRuler, H_NONE, 0, "Tracks that will be imported, of the tracks in the AAF.");
-    leftEnd = kL + 18 + cw;
+    if (kL + 18 + cw + ew <= rightEdge) { // no room: left out (the Import button says how many)
+      g.text(st->fSmall, kMute, cnt, kL + 12, ry, kL + 14 + cw, ry + kRuler, DT_LEFT);
+      addHit(st, kL + 4, ry, kL + 14 + cw, ry + kRuler, H_NONE, 0, "Tracks that will be imported, of the tracks in the AAF.");
+      leftEnd = kL + 18 + cw;
+    }
   }
-  if (ne) { // tracks with nothing at all on them: one click deletes them (undoable)
+  if (ne && leftEnd + g.width(st->fSmall, strprintf("%zu empty \xc3\x97", ne)) <= rightEdge) { // tracks with nothing at all on them: one click deletes them (undoable)
     static std::string eTip;
     if (leftEnd + ew > rightEdge) el = strprintf("%zu empty \xc3\x97", ne);
     double ex = leftEnd, ewd = g.width(st->fSmall, el);
@@ -1722,27 +1760,39 @@ void paintArrange(State *st, const Gfx &g) {
       int fi = folderIndex(s, row.folder);
       if (fi < 0) continue;
       Folder &f = s.folders[(size_t)fi];
+      // a sub-folder sits indented under its folder; a folder counts the tracks of its sub-folders too
+      bool sub = !f.parent.empty();
+      const double fx = kL + (sub ? 16 : 0);
+      auto inside = [&](const Track &t) {
+        if (t.group == f.key) return true;
+        const Folder *tf = s.folder(t.group);
+        return tf && tf->parent == f.key;
+      };
       int n = 0;
-      for (auto &t : s.tracks) n += t.group == f.key;
+      for (auto &t : s.tracks) n += inside(t);
       g.fill(kL + 1, y, kR - 1, y + kRowH, theme().track);
       g.fill(kL + 1, y + kRowH - 1, kR - 1, y + kRowH, kLine);
       if (st->drag == 4 && st->dragMoved && dropKey(st, st->dropRow) == f.key && st->dropRow <= (int)st->rows.size() - 1)
         g.fill(kL + 1, y, kL + kHdr, y + kRowH - 1, kBlueSoft); // the folder they go into
-      g.fill(kL + 1, y, kL + 7, y + kRowH - 1, f.color ? rgbToRef(f.color) : kMute);
-      addHit(st, kL + 1, y, kL + 14, y + kRowH, H_FROW_COLOR, fi, "Set the folder color.");
+      if (sub) { // the folder around it runs down on the left
+        const Folder *pf = s.folder(f.parent);
+        g.fill(kL + 1, y, kL + 4, y + kRowH, pf && pf->color ? rgbToRef(pf->color) : kMute);
+      }
+      g.fill(fx + 1, y, fx + 7, y + kRowH - 1, f.color ? rgbToRef(f.color) : kMute);
+      addHit(st, fx + 1, y, fx + 14, y + kRowH, H_FROW_COLOR, fi, "Set the folder color.");
       bool closed = st->closedFolders.count(f.key) > 0;
       { // the arrow: pointing right when closed, down when open
-        double ax = kL + 19, ay = y + kRowH / 2.0;
+        double ax = fx + 19, ay = y + kRowH / 2.0;
         if (closed) g.polyAA({{ax - 2.5, ay - 4.5}, {ax + 3.5, ay}, {ax - 2.5, ay + 4.5}}, kInk);
         else g.polyAA({{ax - 4.5, ay - 2.5}, {ax + 4.5, ay - 2.5}, {ax, ay + 3.5}}, kMute);
       }
-      addHit(st, kL + 10, y + 4, kL + 28, y + kRowH - 4, H_FOLD_TOGGLE, fi,
+      addHit(st, fx + 10, y + 4, fx + 28, y + kRowH - 4, H_FOLD_TOGGLE, fi,
              closed ? "Open the folder (Alt / Option-click: all folders)." : "Close the folder (Alt / Option-click: all folders). Its tracks still import.");
       if (closed) { // its events, small, so the folder's content stays readable
         COLORREF fc = f.color ? rgbToRef(f.color) : kMute;
         double spp2 = st->viewLen / (kTlr - kTlx);
         for (auto &t : s.tracks)
-          if (t.group == f.key && t.import)
+          if (inside(t) && t.import)
             for (auto &c : t.clips) {
               if (c.excluded) continue;
               double x0 = std::max((double)kTlx, kTlx + (c.pos - st->viewStart) / spp2);
@@ -1751,12 +1801,17 @@ void paintArrange(State *st, const Gfx &g) {
             }
       }
       bool renaming = st->editKind == 2 && st->editKey == f.key;
-      double nw = std::min(120.0, g.width(st->fBold, f.name) + 12);
-      if (!renaming) g.text(st->fBold, kInk, f.name, kL + 28, y, kL + 28 + nw, y + kRowH, DT_LEFT);
-      g.text(st->fSmall, kMute, strprintf("folder \xc2\xb7 %d track%s", n, n == 1 ? "" : "s"), kL + 34 + nw, y,
-             kL + kHdr - 30, y + kRowH, DT_LEFT);
+      double nw = std::min(sub ? 104.0 : 120.0, g.width(st->fBold, f.name) + 12);
+      if (!renaming) g.text(st->fBold, kInk, f.name, fx + 28, y, fx + 28 + nw, y + kRowH, DT_LEFT);
+      { // "folder · 12 tracks", shorter when the row is narrow
+        double room = kL + kHdr - 30 - (fx + 34 + nw);
+        std::string what = strprintf("folder \xc2\xb7 %d track%s", n, n == 1 ? "" : "s");
+        if (g.width(st->fSmall, what) > room) what = strprintf("%d track%s", n, n == 1 ? "" : "s");
+        if (g.width(st->fSmall, what) > room) what = std::to_string(n);
+        g.text(st->fSmall, kMute, what, fx + 34 + nw, y, kL + kHdr - 30, y + kRowH, DT_LEFT);
+      }
       if (!renaming) // a click on the name renames the folder, like the pencil
-        addHit(st, kL + 28, y + 4, kL + kHdr - 30, y + kRowH - 4, H_FROW_RENAME, fi, "Click to rename this folder.");
+        addHit(st, fx + 28, y + 4, kL + kHdr - 30, y + kRowH - 4, H_FROW_RENAME, fi, "Click to rename this folder.");
       g.icon("\xe2\x9c\x8e", kL + kHdr - 17, y + kRowH / 2.0 - 1, kMute, kSoft);
       addHit(st, kL + kHdr - 28, y + 4, kL + kHdr - 4, y + kRowH - 4, H_FROW_RENAME, fi, "Rename this folder.");
       continue;
@@ -1777,9 +1832,11 @@ void paintArrange(State *st, const Gfx &g) {
     COLORREF tc = eff ? rgbToRef(eff) : RGB(0x7f, 0x9c, 0xd8);
     // tracks inside a folder are indented, with the folder's color running down on the left
     const Folder *inF = (opt.folders && !tr.group.empty()) ? s.folder(tr.group) : nullptr;
-    double ind = inF ? 16 : 0, hx = kL + ind;
+    const Folder *outF = inF && !inF->parent.empty() ? s.folder(inF->parent) : nullptr; // the folder around a sub-folder
+    double ind = inF ? (outF ? 32 : 16) : 0, hx = kL + ind;
     if (!on) g.fill(kL + 1, y, kR - 1, y + kRowH - 1, theme().track);
-    if (inF) g.fill(kL + 1, y, kL + 4, y + kRowH, inF->color ? rgbToRef(inF->color) : kMute);
+    if (outF) g.fill(kL + 1, y, kL + 4, y + kRowH, outF->color ? rgbToRef(outF->color) : kMute);
+    if (inF) g.fill(kL + (outF ? 17 : 1), y, kL + (outF ? 20 : 4), y + kRowH, inF->color ? rgbToRef(inF->color) : kMute);
     bool trSel = st->selTracks.count(row.track) > 0;
     bool grabbed = trSel && st->drag == 4 && st->dragMoved;
     if (trSel) g.fill(hx + 7, y, kL + kHdr, y + kRowH - 1, kBlueSoft);
@@ -2021,7 +2078,8 @@ void paintArrange(State *st, const Gfx &g) {
     double ly = kLT + (slot - st->scrollRow) * kRowH;
     if (ly >= kLT - 1 && ly <= kLB + 1) {
       std::string key = dropKey(st, st->dropRow);
-      double ix = kL + ((opt.folders && !key.empty()) ? 16 : 0);
+      const Folder *kf = opt.folders && !key.empty() ? s.folder(key) : nullptr;
+      double ix = kL + (kf ? (kf->parent.empty() ? 16 : 32) : 0);
       g.fill(ix + 1, ly - 1, kTlr, ly + 2, kBlue);
       g.fill(ix + 1, ly - 4, ix + 4, ly + 5, kBlue);
     }
@@ -2338,7 +2396,7 @@ void paintRules(State *st, const Gfx &g) {
   loadTemplateList(st);
   const std::vector<SortRule> &rules = sortRules();
   std::vector<Folder> asFolders;
-  for (auto &r : rules) asFolders.push_back({r.name, r.name, r.color});
+  for (auto &r : rules) asFolders.push_back({r.name, r.name, r.color, ""});
   std::map<std::string, int> match = olaaf::matchTemplate(st->tplTracks, asFolders);
   const double w = 520, rowH = 50;
   double h = 60 + rules.size() * rowH + 16 + 52 + 62 + 32 + 18;
@@ -2910,18 +2968,20 @@ void paintFolderPopover(State *st, const Gfx &g) {
   for (int i = 0; i < n; i++, y += rowH) {
     const Folder &f = s.folders[(size_t)i];
     bool cur = tr.group == f.key;
+    const double ix = f.parent.empty() ? 0 : 14; // a sub-folder: indented under its folder
     if (cur) g.fill(px + 1, y, px + pw - 1, y + rowH, kBlueSoft);
-    g.box(px + 9, y + 5, px + 25, y + 21, theme().empty, f.color ? rgbToRef(f.color) : kPanel);
-    addHit(st, px + 7, y + 3, px + 27, y + 23, H_FOLD_COLOR, i, "Set the folder color.");
+    g.box(px + 9 + ix, y + 5, px + 25 + ix, y + 21, theme().empty, f.color ? rgbToRef(f.color) : kPanel);
+    addHit(st, px + 7 + ix, y + 3, px + 27 + ix, y + 23, H_FOLD_COLOR, i, "Set the folder color.");
     bool renaming = st->editKind == 2 && st->editKey == f.key;
-    if (!renaming) g.text(cur ? st->fBold : st->fBody, kInk, f.name, px + 30, y, px + pw - 64, y + rowH, DT_LEFT);
+    if (!renaming) g.text(cur ? st->fBold : st->fBody, kInk, f.name, px + 30 + ix, y, px + pw - 64, y + rowH, DT_LEFT);
     int nTr = 0;
     for (auto &t : s.tracks) nTr += t.group == f.key;
     g.text(st->fClip, kMute, std::to_string(nTr), px + pw - 84, y, px + pw - 62, y + rowH, DT_RIGHT);
     addHit(st, px + 28, y, px + pw - 60, y + rowH, H_FOLD_ASSIGN, i, "Put the track into this folder.");
     button(st, g, px + pw - 56, y + 3, px + pw - 34, y + rowH - 3, "\xe2\x9c\x8e", H_FOLD_RENAME, i, "Rename this folder.");
     button(st, g, px + pw - 30, y + 3, px + pw - 8, y + rowH - 3, "\xc3\x97", H_FOLD_DELETE, i,
-           "Don't create this folder. Its tracks are imported outside any folder.");
+           f.parent.empty() ? "Don't create this folder. Its tracks are imported outside any folder."
+                            : "Don't create this sub-folder. Its tracks go into the folder around it.");
   }
   bool none = tr.group.empty() || !s.folder(tr.group);
   if (none) g.fill(px + 1, y, px + pw - 1, y + rowH, kBlueSoft);
@@ -3121,7 +3181,7 @@ bool isEditHit(int id) {
   case H_TRACK_CHECK: case H_PAL: case H_PAL_CUSTOM: case H_PAL_NONE: case H_FOLD_ASSIGN: case H_FOLD_NONE:
   case H_FOLD_DELETE: case H_FOLD_NEW: case H_EV_REMOVE: case H_EV_RESTORE: case H_EV_UP: case H_EV_DOWN:
   case H_EV_RESET: case H_EV_MUTE: case H_NEW_FOLDER: case H_TRACK_DELETE: case H_DEST_NEW: case H_DEST_MATCHALL:
-  case H_DEST_PICK: case H_EV_SWAP: case H_TRACK_SWAP: case H_RULES_SORT: case H_REMOVE_EMPTY: case H_TRACK_STEREO: case H_SORT_NOW: case H_SORT_RESET:
+  case H_DEST_PICK: case H_EV_SWAP: case H_TRACK_SWAP: case H_RULES_SORT: case H_REMOVE_EMPTY: case H_TRACK_STEREO: case H_SORT_NOW: case H_SORT_RESET: case H_SORT_SUBS:
     return true;
   }
   return false;
@@ -4317,7 +4377,7 @@ void click(State *st, int x, int y, bool shift) {
   }
   case H_RULES_RESET: saveRules(st, defaultSortRules()); st->tip = "OLAAF's own folders and words are back."; break;
   case H_RULES_SORT:
-    st->imp->assignDefaultFolders();
+    st->imp->assignDefaultFolders(st->opt->subFolders);
     if (!st->opt->folders) st->opt->folders = true;
     st->edited = true;
     buildRows(st);
@@ -4486,7 +4546,7 @@ void click(State *st, int x, int y, bool shift) {
     break;
   }
   case H_SORT_NOW: // the same as "Sort the tracks now" in the sorting panel
-    st->imp->assignDefaultFolders();
+    st->imp->assignDefaultFolders(st->opt->subFolders);
     st->opt->folders = true;
     st->closedFolders.clear();
     st->edited = true;
@@ -4494,6 +4554,26 @@ void click(State *st, int x, int y, bool shift) {
     st->tip = st->imp->session().folders.empty() ? "The names point to one folder only: the tracks stay as they are."
                                                   : "The tracks are sorted into DX, FX, MX and BG by their names (Cmd/Ctrl+Z undoes it).";
     break;
+  case H_SORT_SUBS: { // groups on / off; already sorted: sort again right away
+    st->opt->subFolders = !st->opt->subFolders;
+    Session &ss = st->imp->session();
+    if (st->opt->folders && !ss.folders.empty()) {
+      st->imp->assignDefaultFolders(st->opt->subFolders);
+      st->closedFolders.clear();
+      st->edited = true;
+      buildRows(st);
+      int subs = 0;
+      for (auto &f : ss.folders) subs += !f.parent.empty();
+      static std::string msg; // the tip points here
+      msg = !st->opt->subFolders ? "Sub groups off: sorted into DX, FX, MX and BG only (Cmd/Ctrl+Z undoes it)."
+            : subs ? strprintf("Sorted again: %d group%s got a folder of their own (Cmd/Ctrl+Z undoes it).", subs, subs == 1 ? "" : "s")
+                   : std::string("No numbered groups found (like FX A 1, FX A 2): the folders stay as they are.");
+      st->tip = msg.c_str();
+    } else
+      st->tip = st->opt->subFolders ? "Sub groups on: Sort also makes folders for numbered groups like FX A 1, FX A 2."
+                                    : "Sub groups off: Sort makes DX, FX, MX and BG only.";
+    break;
+  }
   case H_SORT_RESET: // no folders, the AAF's track order
     st->imp->clearFolders();
     st->closedFolders.clear();
@@ -5486,7 +5566,20 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
     st.missScroll = atoi(getenv("OLAAF_MISSING"));
   }
   if (getenv("OLAAF_RULESTEXT")) setSortRules(sortRulesFromText(getenv("OLAAF_RULESTEXT")));
-  if (getenv("OLAAF_SORTED")) st.imp->assignDefaultFolders();
+  if (const char *gn = getenv("OLAAF_NAMES")) { // test: other track names, "|" between them
+    std::string all = gn;
+    size_t i = 0, a = 0;
+    while (i < st.imp->session().tracks.size() && a <= all.size()) {
+      size_t e = all.find('|', a);
+      if (e == std::string::npos) e = all.size();
+      st.imp->session().tracks[i++].name = all.substr(a, e - a);
+      a = e + 1;
+    }
+  }
+  if (const char *so = getenv("OLAAF_SORTED")) {
+    opt.subFolders = atoi(so) == 2;
+    st.imp->assignDefaultFolders(opt.subFolders);
+  }
   if (getenv("OLAAF_EMBEDASK")) st.embedAsk = true;
   if (getenv("OLAAF_RULES")) st.rulesOpen = true;
   if (getenv("OLAAF_CLOSEFX")) {

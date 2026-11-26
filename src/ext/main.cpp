@@ -173,6 +173,7 @@ static void loadSettings(ImportOptions &o) {
   o.video = getFlag("video", true);
   o.markers = getFlag("markers", true);
   o.folders = getFlag("folders", true);
+  o.subFolders = getFlag("subFolders", false);
   const char *d = GetExtState("olAAF", "dest");
   if (d && *d && getFlag("destCustom", false)) o.destDir = d;
 }
@@ -186,6 +187,7 @@ static void saveSettings(const ImportOptions &o, const std::string &defaultDest)
   setFlag("video", o.video);
   setFlag("markers", o.markers);
   setFlag("folders", o.folders);
+  setFlag("subFolders", o.subFolders);
   // remember a destination only when the user chose one (not the project folder)
   bool custom = o.destDir != defaultDest;
   setFlag("destCustom", custom);

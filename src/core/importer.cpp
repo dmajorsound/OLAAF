@@ -141,6 +141,73 @@ std::string trackGroup(const std::string &trackName) {
   return "OTHER";
 }
 
+static bool splitSide(const std::string &name, std::string *base, char *side);
+
+// lower case, letters and digits only: "FX_A", "fx-a", "FX A" -> "fxa"
+static std::string squash(const std::string &in) {
+  std::string out;
+  for (unsigned char c : foldCase(in))
+    if (std::isalnum(c) || c >= 0x80) out += (char)c;
+  return out;
+}
+
+bool numberedGroup(const std::string &trackName, std::string *key, std::string *shown) {
+  std::string n = trackName, b;
+  char side;
+  if (splitSide(n, &b, &side)) n = b; // "FX A 1.L" -> "FX A 1"
+  auto sep = [](unsigned char c) { return !(std::isalnum(c) || c >= 0x80); };
+  auto digit = [](unsigned char c) { return c >= '0' && c <= '9'; };
+  // a note in brackets at the end: "Boom 1 (D)", "FX A 2 [M]", "Atmo 3 (Stereo)" -> "Boom 1"
+  // (a number alone in brackets, "FX A (6)", is the number itself)
+  for (int pass = 0; pass < 2; pass++) {
+    size_t z = n.find_last_not_of(" \t");
+    if (z == std::string::npos || (n[z] != ')' && n[z] != ']')) break;
+    size_t o = n.find_last_of(n[z] == ')' ? '(' : '[', z);
+    if (o == std::string::npos || o == 0) break;
+    std::string inner = n.substr(o + 1, z - o - 1);
+    if (inner.find_first_not_of("0123456789 ") == std::string::npos) break;
+    n.erase(o);
+  }
+  // the number at the end, with whatever stands around it: "FX_A_01", "FX-A (2)", "FXA3", "FX A #4"
+  size_t e = n.size();
+  while (e > 0 && sep((unsigned char)n[e - 1])) e--;
+  size_t d = e;
+  while (d > 0 && digit((unsigned char)n[d - 1])) d--;
+  if (d < e && d > 0) {
+    e = d;
+    while (e > 0 && sep((unsigned char)n[e - 1])) e--;
+  }
+  // a number in front: "01 FX A", "(2)_FX_A" (only when a word follows: "5.1 Mix" stays)
+  size_t a = 0;
+  while (a < e && sep((unsigned char)n[a])) a++;
+  size_t a2 = a;
+  while (a2 < e && digit((unsigned char)n[a2])) a2++;
+  if (a2 > a && a2 < e && sep((unsigned char)n[a2])) {
+    size_t a3 = a2;
+    while (a3 < e && sep((unsigned char)n[a3])) a3++;
+    if (a3 < e && !digit((unsigned char)n[a3])) a = a3;
+  }
+  // shown with single spaces between the words
+  std::string sh;
+  bool gap = false;
+  for (size_t i = a; i < e; i++) {
+    unsigned char c = (unsigned char)n[i];
+    if (c == '.' && i > a && i + 1 < e && digit((unsigned char)n[i - 1]) && digit((unsigned char)n[i + 1])) {
+      sh += '.'; // "5.1 Mix" stays "5.1"
+      continue;
+    }
+    if (sep(c)) { gap = true; continue; }
+    if (gap && !sh.empty()) sh += ' ';
+    gap = false;
+    sh += (char)c;
+  }
+  std::string k = squash(sh);
+  if (k.empty()) return false;
+  if (key) *key = k;
+  if (shown) *shown = sh;
+  return true;
+}
+
 uint32_t groupColor(const std::string &g) {
   for (auto &r : g_rules)
     if (r.name == g) return r.color;
@@ -154,18 +221,64 @@ Folder *Session::folder(const std::string &key) {
 }
 
 
-void Importer::assignDefaultFolders() {
+void Importer::assignDefaultFolders(bool subFolders) {
   std::set<std::string> present;
   for (auto &t : s_.tracks) present.insert(trackGroup(t.name));
   s_.folders.clear();
-  if (present.size() < 2) { // one folder for everything does not help
-    for (auto &t : s_.tracks) t.group.clear();
-    return;
-  }
   for (auto &r : g_rules)
-    if (present.count(r.name)) s_.folders.push_back({r.name, r.name, r.color});
-  if (present.count("OTHER")) s_.folders.push_back({"OTHER", "OTHER", groupColor("OTHER")});
+    if (present.count(r.name)) s_.folders.push_back({r.name, r.name, r.color, ""});
+  if (present.count("OTHER")) s_.folders.push_back({"OTHER", "OTHER", groupColor("OTHER"), ""});
   for (auto &t : s_.tracks) t.group = trackGroup(t.name);
+  int subs = 0;
+  if (subFolders) {
+    // numbered groups inside each folder: "FX A 1", "FX_A_2", "fx-a3" -> FX > FX A. A group needs two tracks and
+    // must not be the whole folder; names like the folder's own ("FX 1", "FX 2") stay in the folder itself.
+    std::vector<Folder> all;
+    for (auto &f : s_.folders) {
+      all.push_back(f);
+      std::set<std::string> plain{squash(f.name), squash(f.key)};
+      std::vector<std::string> keys;
+      std::map<std::string, std::string> shownOf;
+      std::map<std::string, int> count;
+      int total = 0;
+      for (auto &t : s_.tracks) {
+        if (t.group != f.key) continue;
+        total++;
+        std::string k, sh;
+        if (!numberedGroup(t.name, &k, &sh) || plain.count(k)) continue;
+        if (!count[k]++) {
+          keys.push_back(k);
+          shownOf[k] = sh;
+        }
+      }
+      for (auto &k : keys) {
+        if (count[k] < 2 || count[k] == total) continue;
+        std::string sk = f.key + "/" + k;
+        all.push_back({sk, shownOf[k], f.color, f.key});
+        subs++;
+        for (auto &t : s_.tracks) {
+          std::string tk;
+          if (t.group == f.key && numberedGroup(t.name, &tk, nullptr) && tk == k) t.group = sk;
+        }
+      }
+    }
+    s_.folders = std::move(all);
+  }
+  if (present.size() < 2 && subs == 0) { // one folder for everything does not help
+    s_.folders.clear();
+    for (auto &t : s_.tracks) t.group.clear();
+  }
+}
+
+std::string Importer::groupFor(const Track &t) const {
+  auto has = [&](const std::string &key) {
+    for (auto &f : s_.folders)
+      if (f.key == key) return true;
+    return false;
+  };
+  std::string top = trackGroup(t.name), k;
+  if (numberedGroup(t.name, &k, nullptr) && has(top + "/" + k)) return top + "/" + k;
+  return has(top) ? top : std::string();
 }
 
 void Importer::clearFolders() {
@@ -180,18 +293,21 @@ std::string Importer::addFolder(const std::string &name) {
   int n = 1;
   while (s_.folder("F" + std::to_string(n))) n++;
   std::string key = "F" + std::to_string(n);
-  s_.folders.push_back({key, name, pal[(s_.folders.size()) % 8]});
+  s_.folders.push_back({key, name, pal[(s_.folders.size()) % 8], ""});
   return key;
 }
 
 void Importer::removeFolder(const std::string &key) {
-  for (size_t i = 0; i < s_.folders.size(); i++)
-    if (s_.folders[i].key == key) {
-      s_.folders.erase(s_.folders.begin() + (long)i);
-      break;
-    }
+  std::string parent;
+  for (auto &f : s_.folders)
+    if (f.key == key) parent = f.parent;
+  std::set<std::string> gone{key};
+  for (auto &f : s_.folders)
+    if (f.parent == key) gone.insert(f.key);
+  s_.folders.erase(std::remove_if(s_.folders.begin(), s_.folders.end(), [&](const Folder &f) { return gone.count(f.key) > 0; }),
+                   s_.folders.end());
   for (auto &t : s_.tracks)
-    if (t.group == key) t.group.clear();
+    if (gone.count(t.group)) t.group = parent; // out of a sub-folder: into the folder around it
 }
 
 std::string embeddedCacheName(const std::string &aafPath) {
@@ -756,7 +872,7 @@ int Importer::setMergeStereo(bool on) {
   int n = on ? mergeStereoTracks() : 0;
   assignUids();
   // keep the folders as the user set them up; tracks go back to their folder by name
-  for (auto &t : s_.tracks) t.group = s_.folder(trackGroup(t.name)) ? trackGroup(t.name) : std::string();
+  for (auto &t : s_.tracks) t.group = groupFor(t);
   return n;
 }
 
@@ -1075,33 +1191,64 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
     out.push_back(v);
   }
 
-  // the order tracks are written in: folder by folder (as listed), then the tracks outside any folder
-  std::vector<std::pair<std::string, const Track *>> order;
+  // the order tracks are written in: folder by folder (as listed, each with its sub-folders), then the tracks
+  // outside any folder. Each entry knows the folders that open right before it and how many close after it.
+  struct Entry {
+    std::vector<std::string> open;
+    const Track *t;
+    int closes;
+    std::string grp;
+  };
+  std::vector<Entry> order;
   if (opt.folders && !s_.folders.empty()) {
-    for (auto &f : s_.folders)
+    auto in = [&](const Track &t, const std::string &key) {
+      return t.import && t.target.empty() && t.group == key && !emptyCreated(t);
+    };
+    for (auto &f : s_.folders) {
+      if (!f.parent.empty()) continue;
+      size_t first = order.size();
+      std::vector<std::string> pending{f.key}; // opened with the next track written
       for (auto &t : s_.tracks)
-        if (t.import && t.target.empty() && t.group == f.key && !emptyCreated(t)) order.push_back({f.key, &t});
+        if (in(t, f.key)) {
+          order.push_back({pending, &t, 0, f.key});
+          pending.clear();
+        }
+      for (auto &sub : s_.folders) {
+        if (sub.parent != f.key) continue;
+        size_t subFirst = order.size();
+        std::vector<std::string> op = pending;
+        op.push_back(sub.key);
+        for (auto &t : s_.tracks)
+          if (in(t, sub.key)) {
+            order.push_back({op, &t, 0, sub.key});
+            op.clear();
+          }
+        if (order.size() > subFirst) {
+          order.back().closes++;
+          pending.clear();
+        }
+      }
+      if (order.size() > first) order.back().closes++;
+    }
     for (auto &t : s_.tracks)
       if (t.import && !emptyCreated(t) &&
           (!t.target.empty() || t.group.empty() || !const_cast<Session &>(s_).folder(t.group)))
-        order.push_back({"", &t});
+        order.push_back({{}, &t, 0, ""});
   } else
     for (auto &t : s_.tracks)
-      if (t.import && !emptyCreated(t)) order.push_back({"", &t});
+      if (t.import && !emptyCreated(t)) order.push_back({{}, &t, 0, ""});
   for (size_t oi = 0; oi < order.size(); oi++) {
-    const Track &t = *order[oi].second;
-    const std::string &grp = order[oi].first;
-    bool inFolder = !grp.empty();
-    bool firstInGroup = inFolder && (oi == 0 || order[oi - 1].first != grp);
-    bool lastInGroup = inFolder && (oi + 1 == order.size() || order[oi + 1].first != grp);
-    if (firstInGroup) {
-      const Folder *fd = const_cast<Session &>(s_).folder(grp);
+    const Track &t = *order[oi].t;
+    const std::string &grp = order[oi].grp;
+    int closes = order[oi].closes;
+    for (auto &key : order[oi].open) {
+      const Folder *fd = const_cast<Session &>(s_).folder(key);
       TrackChunk f;
       f.text = "<TRACK\nNAME " + q(fd->name) + "\n" + (fd->color ? strprintf("PEAKCOL %u\n", nativeColor(fd->color, opt)) : std::string()) +
                "ISBUS 1 1\nNCHAN 2\n>\n";
       f.folderDepth = 1;
       f.color = fd->color;
-      f.folderKey = grp;
+      f.folderKey = key;
       f.isFolder = true;
       out.push_back(f);
     }
@@ -1168,14 +1315,14 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
       items.push_back(c.substr(itemStart));
     }
     c += ">\n";
-    if (lastInGroup) {
-      // ISBUS 2 -1 closes the folder
+    if (closes) {
+      // ISBUS 2 -1 closes the folder (-2: a sub-folder and the folder around it)
       size_t pos = c.find("\nNCHAN");
-      c.insert(pos, "\nISBUS 2 -1");
+      c.insert(pos, strprintf("\nISBUS 2 -%d", closes));
     }
     TrackChunk tc;
     tc.text = c;
-    tc.folderDepth = lastInGroup ? -1 : 0;
+    tc.folderDepth = -closes;
     tc.folderKey = grp;
     tc.color = tcol;
     tc.targetGuid = t.target;
