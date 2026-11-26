@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: "Publish a release with this version tag, e.g. v0.8.1 (empty = just build)"
+        description: "Publish a release with this version tag, e.g. v0.8.2 (empty = just build)"
         required: false
         default: ""
 
@@ -30,24 +30,24 @@ jobs:
           chmod +x installer/mac/postinstall
           pkgbuild --root payload --install-location /tmp/olaaf-install \
             --scripts installer/mac --identifier com.dmajorsound.olaaf \
-            --version 0.8.1 olaaf-component.pkg
+            --version 0.8.2 olaaf-component.pkg
           cp installer/mac_ui/welcome.html installer/mac_ui/logo.png installer/mac_ui/logo-dark.png ui/
           cp LICENSE ui/LICENSE.txt
           tiffutil -cathidpicheck installer/mac_ui/background.png installer/mac_ui/background@2x.png -out ui/background.tiff
           tiffutil -cathidpicheck installer/mac_ui/background-darkAqua.png installer/mac_ui/background-darkAqua@2x.png -out ui/background-darkAqua.tiff
           productbuild --distribution installer/mac_ui/distribution.xml --resources ui \
-            --package-path . OLAAF-0.8.1-mac.pkg
+            --package-path . OLAAF-0.8.2-mac.pkg
           # uninstaller: an empty package whose script removes the extension
           pkgbuild --nopayload --scripts installer/mac_uninstall --identifier com.dmajorsound.olaaf.uninstall \
-            --version 0.8.1 olaaf-uninstall-component.pkg
+            --version 0.8.2 olaaf-uninstall-component.pkg
           cp installer/mac_ui/uninstall.html ui/
           productbuild --distribution installer/mac_ui/uninstall.xml --resources ui \
-            --package-path . OLAAF-0.8.1-mac-uninstall.pkg
+            --package-path . OLAAF-0.8.2-mac-uninstall.pkg
       - name: Disk image (.dmg) with the installer and the Privacy & Security helper
         run: |
           # macOS blocks the unsigned installer before it runs, so it can't help itself: next to it lies a
           # web location that opens System Settings > Privacy & Security, where "Open Anyway" lifts the block
-          V=0.8.1
+          V=0.8.2
           mkdir -p dmg/.background
           cp OLAAF-$V-mac.pkg "dmg/Install OLAAF.pkg"
           cp OLAAF-$V-mac-uninstall.pkg "dmg/Uninstall OLAAF.pkg"
@@ -91,9 +91,9 @@ jobs:
         with:
           name: OLAAF-mac
           path: |
-            OLAAF-0.8.1-mac.dmg
-            OLAAF-0.8.1-mac.pkg
-            OLAAF-0.8.1-mac-uninstall.pkg
+            OLAAF-0.8.2-mac.dmg
+            OLAAF-0.8.2-mac.pkg
+            OLAAF-0.8.2-mac-uninstall.pkg
             build/src/ext/reaper_olaaf.dylib
             build/olaaf-cli
 
@@ -115,8 +115,8 @@ jobs:
         with:
           name: OLAAF-windows
           path: |
-            installer/win/Output/OLAAF-0.8.1-win64.exe
-            installer/win/Output/OLAAF-0.8.1-win64-uninstall.exe
+            installer/win/Output/OLAAF-0.8.2-win64.exe
+            installer/win/Output/OLAAF-0.8.2-win64-uninstall.exe
             build/src/ext/Release/reaper_olaaf.dll
             build/Release/olaaf-cli.exe
 
@@ -135,7 +135,7 @@ jobs:
             build/src/ext/reaper_olaaf.so
             build/olaaf-cli
 
-  # "Run workflow" with a version (e.g. v0.8.1) publishes the installers as a GitHub release
+  # "Run workflow" with a version (e.g. v0.8.2) publishes the installers as a GitHub release
   release:
     if: github.event_name == 'workflow_dispatch' && inputs.release != ''
     needs: [macos, windows]
