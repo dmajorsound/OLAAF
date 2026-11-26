@@ -8,7 +8,7 @@
 #include <string>
 
 namespace olaaf {
-#define OLAAF_VERSION_STRING "0.8.3"
+#define OLAAF_VERSION_STRING "0.8.4"
 
 void updateCheckStart();
 // 0 still asking, 1 a newer release (tag and page filled in), 2 nothing newer or no answer

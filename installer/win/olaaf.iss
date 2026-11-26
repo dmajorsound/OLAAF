@@ -1,7 +1,7 @@
 ; OLAAF installer for Windows (Inno Setup 6)
 [Setup]
 AppName=OLAAF
-AppVersion=0.8.3
+AppVersion=0.8.4
 AppPublisher=dmajorsound
 AppPublisherURL=https://dmajorsound.com
 DefaultDirName={userappdata}\REAPER\UserPlugins
@@ -9,7 +9,7 @@ DisableDirPage=no
 DirExistsWarning=no
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-OutputBaseFilename=OLAAF-0.8.3-win64
+OutputBaseFilename=OLAAF-0.8.4-win64
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 Uninstallable=yes
@@ -25,7 +25,23 @@ WizardImageStretch=no
 DisableWelcomePage=no
 
 [Files]
+Source: "welcome-icon-100.bmp"; DestDir: "{tmp}"; Flags: dontcopy
+Source: "welcome-icon-200.bmp"; DestDir: "{tmp}"; Flags: dontcopy
+Source: "welcome-brand-100.bmp"; DestDir: "{tmp}"; Flags: dontcopy
+Source: "welcome-brand-200.bmp"; DestDir: "{tmp}"; Flags: dontcopy
 Source: "..\..\build\src\ext\Release\reaper_olaaf.dll"; DestDir: "{app}"; Flags: ignoreversion
 
 [Messages]
+WelcomeLabel1=OLAAF - AAF Import for Reaper
+WelcomeLabel2=This installs the OLAAF extension into your REAPER UserPlugins folder.%n%nQuit REAPER first. Afterwards, start REAPER and open Extensions > OLAAF.
 SelectDirLabel3=OLAAF goes into the REAPER UserPlugins folder. Change it only if you use a portable REAPER install.
+
+[Code]
+#include "branding.iss"
+
+procedure InitializeWizard();
+begin
+  BrandWelcome('OLAAF - AAF Import for Reaper',
+    'This installs the OLAAF extension into your REAPER UserPlugins folder.' + #13#10 + #13#10 +
+    'Quit REAPER first. Afterwards, start REAPER and open Extensions > OLAAF.');
+end;

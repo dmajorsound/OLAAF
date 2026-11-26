@@ -980,7 +980,9 @@ double brandRight(State *st, const Gfx &g) {
 }
 
 void paintBrand(State *st, const Gfx &g, double mid) {
-  g.rfill(16, mid - 15, 46, mid + 15, 8, kBlue);
+  // dark tile like the Ahh! and Alfred icons, in light and dark mode alike
+  const COLORREF tile = RGB(0x20, 0x21, 0x25);
+  g.rbox(16, mid - 15, 46, mid + 15, 7, RGB(0x3A, 0x3B, 0x41), tile);
   { // the mark: two events of an edit and a paper plane landing (drawn on a 120 grid, 30 units here)
     auto clip = [&](double x, double y, double w, double h, double fi, double fo) {
       const double k = 0.25, ox0 = 16, oy0 = mid - 15;
@@ -990,10 +992,15 @@ void paintBrand(State *st, const Gfx &g, double mid) {
     };
     // a paper plane coming in to land on the tracks (the AAFUGO mark has one taking off)
     auto pt = [&](double x, double y) { return std::make_pair(16 + x * 0.25, mid - 15 + y * 0.25); };
+    // the touchdown point: a blue ring under the plane's nose and a mint dot on it, as on the Ahh! icon
+    auto [tx, ty] = pt(80, 46);
+    g.rfill(tx - 2.7, ty - 2.7, tx + 2.7, ty + 2.7, 2.7, RGB(0x63, 0x8F, 0xBE));
+    g.rfill(tx - 1.8, ty - 1.8, tx + 1.8, ty + 1.8, 1.8, tile);
     g.polyAA({pt(80, 46), pt(32, 22), pt(54, 24)}, kWhiteFixed);
-    g.polyAA({pt(80, 46), pt(54, 24), pt(53, 9)}, RGB(0xD6, 0xE6, 0xF7));
+    g.polyAA({pt(80, 46), pt(54, 24), pt(53, 9)}, RGB(0xC9, 0xCC, 0xD3));
     clip(46, 52, 52, 16, 12, 12);
     clip(22, 74, 40, 16, 0, 10);
+    g.rfill(tx - 1.1, ty - 1.1, tx + 1.1, ty + 1.1, 1.1, RGB(0x9D, 0xEB, 0xC0)); // touchdown: the mint dot
   }
   g.textBase(st->fWord, kInk, "OLAAF", 56, mid - 15 + 20 * 0.698);
   g.textBase(st->fTiny, kMute, "V " OLAAF_VERSION_STRING " beta", 57, mid + 15);

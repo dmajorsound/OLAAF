@@ -2,7 +2,7 @@
 [Setup]
 AppId=OLAAF_Uninstaller
 AppName=OLAAF Uninstaller
-AppVersion=0.8.3
+AppVersion=0.8.4
 AppPublisher=dmajorsound
 AppPublisherURL=https://dmajorsound.com
 DefaultDirName={userappdata}\REAPER\UserPlugins
@@ -11,7 +11,7 @@ DirExistsWarning=no
 DisableProgramGroupPage=yes
 DisableReadyPage=no
 PrivilegesRequired=lowest
-OutputBaseFilename=OLAAF-0.8.3-win64-uninstall
+OutputBaseFilename=OLAAF-0.8.4-win64-uninstall
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 Uninstallable=no
@@ -22,10 +22,16 @@ WizardSmallImageFile=small-100.bmp,small-200.bmp
 WizardImageStretch=no
 DisableWelcomePage=no
 
+[Files]
+Source: "welcome-icon-100.bmp"; DestDir: "{tmp}"; Flags: dontcopy
+Source: "welcome-icon-200.bmp"; DestDir: "{tmp}"; Flags: dontcopy
+Source: "welcome-brand-100.bmp"; DestDir: "{tmp}"; Flags: dontcopy
+Source: "welcome-brand-200.bmp"; DestDir: "{tmp}"; Flags: dontcopy
+
 [Messages]
 SetupWindowTitle=Uninstall OLAAF
 WelcomeLabel1=Uninstall OLAAF
-WelcomeLabel2=This removes the OLAAF extension from REAPER.%n%nYour REAPER projects and imported audio stay untouched.%n%nPlease quit REAPER before you continue.
+WelcomeLabel2=This removes the OLAAF extension from REAPER.%n%nYour REAPER projects and imported audio stay untouched.%n%nQuit REAPER first.
 SelectDirLabel3=OLAAF is removed from this REAPER UserPlugins folder. Change it only if you use a portable REAPER install.
 SelectDirBrowseLabel=To continue, click Next.
 WizardReady=Ready to uninstall
@@ -39,6 +45,15 @@ FinishedLabelNoIcons=OLAAF has been removed from REAPER. Restart REAPER if it wa
 FinishedLabel=OLAAF has been removed from REAPER. Restart REAPER if it was open.
 
 [Code]
+#include "branding.iss"
+
+procedure InitializeWizard();
+begin
+  BrandWelcome('Uninstall OLAAF',
+    'This removes the OLAAF extension from REAPER. Your REAPER projects and imported audio stay untouched.' + #13#10 + #13#10 +
+    'Quit REAPER first.');
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Unins, Dll: String;
