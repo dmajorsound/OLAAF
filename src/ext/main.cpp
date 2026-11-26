@@ -547,6 +547,9 @@ static DialogHost makeHost() {
 }
 
 // the look chosen under the OLAAF logo (system = REAPER's colors, dark or light), and the update check
+// colors in project files the way REAPER keeps them on this system (ColorToNative)
+static uint32_t toNativeColor(uint32_t rgb) { return (uint32_t)ColorToNative((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255); }
+
 static void applyLook() {
   updateCheckStart(); // is there a newer OLAAF? (once per session, in the background)
   const char *v = GetExtState("olAAF", "theme");
@@ -584,6 +587,7 @@ static void addRecent(const std::string &path) {
 // step 1: read the AAF and find its media (progress window), then the remembered settings
 static bool loadForImport(const std::string &aaf, ImportOptions &opt, Importer &imp, std::string &err,
                           std::string &defaultDest) {
+  opt.toNative = toNativeColor; // colors in the project file in this system's order
   applyLook();
   { // the folder sort rules (edited in the dialog)
     const char *r = GetExtState("olAAF", "rules");
@@ -997,6 +1001,7 @@ static const char *enumFileExtensions(int i, char **desc) {
 
 static int loadProject(const char *fn, ProjectStateContext *ctx) {
   ImportOptions opt;
+  opt.toNative = toNativeColor;
   opt.destDir = dirName(fn);
   Importer imp;
   MediaReport rep;

@@ -1036,9 +1036,11 @@ static std::string q(const std::string &s) {
 
 static std::string num(double v) { return strprintf("%.10f", v); }
 
-static uint32_t nativeColor(uint32_t rgb) {
-  // REAPER project files store colors as 0x01BBGGRR
+// a color for the project file: 0x01000000 ("a color of its own") plus the color in the system's order
+static uint32_t nativeColor(uint32_t rgb, const ImportOptions &opt) {
   if (!rgb) return 0;
+  rgb &= 0xffffff;
+  if (opt.toNative) return 0x1000000u | (opt.toNative(rgb) & 0xffffff);
   uint32_t r = (rgb >> 16) & 0xff, g = (rgb >> 8) & 0xff, b = rgb & 0xff;
   return 0x1000000u | (b << 16) | (g << 8) | r;
 }
@@ -1095,7 +1097,7 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
     if (firstInGroup) {
       const Folder *fd = const_cast<Session &>(s_).folder(grp);
       TrackChunk f;
-      f.text = "<TRACK\nNAME " + q(fd->name) + "\n" + (fd->color ? strprintf("PEAKCOL %u\n", nativeColor(fd->color)) : std::string()) +
+      f.text = "<TRACK\nNAME " + q(fd->name) + "\n" + (fd->color ? strprintf("PEAKCOL %u\n", nativeColor(fd->color, opt)) : std::string()) +
                "ISBUS 1 1\nNCHAN 2\n>\n";
       f.folderDepth = 1;
       f.color = fd->color;
@@ -1107,7 +1109,7 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
     c += "<TRACK\n";
     c += "NAME " + q(t.name) + "\n";
     uint32_t tcol = trackColor(t, opt);
-    if (tcol) c += strprintf("PEAKCOL %u\n", nativeColor(tcol));
+    if (tcol) c += strprintf("PEAKCOL %u\n", nativeColor(tcol, opt));
     c += "VOLPAN " + num(t.volume) + " " + num(t.pan) + " -1 -1 1\n";
     int nch = t.channels <= 2 ? 2 : (t.channels + 1) / 2 * 2;
     c += strprintf("NCHAN %d\n", nch);
