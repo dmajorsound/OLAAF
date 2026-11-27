@@ -2,7 +2,7 @@
 [Setup]
 AppId=OLAAF_Uninstaller
 AppName=OLAAF Uninstaller
-AppVersion=0.8.5
+AppVersion=0.8.6
 AppPublisher=dmajorsound
 AppPublisherURL=https://dmajorsound.com
 DefaultDirName={userappdata}\REAPER\UserPlugins
@@ -11,7 +11,7 @@ DirExistsWarning=no
 DisableProgramGroupPage=yes
 DisableReadyPage=no
 PrivilegesRequired=lowest
-OutputBaseFilename=OLAAF-0.8.5-win64-uninstall
+OutputBaseFilename=OLAAF-0.8.6-win64-uninstall
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 Uninstallable=no

@@ -151,7 +151,7 @@ enum HitId {
   H_LANES, H_TRACK_NAME, H_FOLD_ASSIGN, H_FOLD_NONE, H_FOLD_RENAME, H_FOLD_DELETE, H_FOLD_NEW, H_FOLD_POP,
   H_FOLD_COLOR, H_PAL_BG, H_FROW_RENAME, H_FROW_COLOR, H_EV_REMOVE, H_EV_RESTORE, H_EV_UP, H_EV_DOWN,
   H_EV_AUTOMATION, H_EV_RESET, H_EV_MUTE, H_NEW_FOLDER, H_TRACK_FOLDERMENU, H_TRACK_DELETE, H_VIDEO_CHOOSE, H_SHOW_AUTO, H_TRACK_DEST, H_DEST_NEW, H_DEST_MATCHALL, H_DEST_PICK, H_DEST_POP, H_DEST_OVERWRITE,
-  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE, H_TC_RESET, H_REMOVE_EMPTY, H_TRACK_STEREO, H_FOLD_TOGGLE, H_SORT_NOW, H_REEL_SHARE, H_REEL_OWN, H_REEL_ASK_BG, H_REEL_MODE, H_SORT_RESET, H_EMBED_LOAD, H_EMBED_SKIP, H_EMBED_BG, H_SORT_SUBS,
+  H_OPTS, H_OPTS_BG, H_GAIN_ITEMS, H_GAIN_TRACK, H_GAIN_OFF, H_FPS_OK, H_FPS_SHOW, H_EV_PLAY, H_TL_PLAY, H_RULER, H_HELP, H_HELP_CLOSE, H_HELP_BG, H_UPDATE, H_EV_SWAP, H_TRACK_SWAP, H_GONIO_CLOSE, H_GONIO_BG, H_GONIO_TOGGLE, H_TRACK_SOLO, H_SAMPLES, H_MISS_OPEN, H_MISS_BG, H_MISS_PICK, H_THEME_PICK, H_THEME_BG, H_RULES, H_RULES_BG, H_RULE_COLOR, H_RULE_NAME, H_RULE_WORDS, H_RULES_SORT, H_RULES_RESET, H_TPL_CHOOSE, H_TPL_CLEAR, H_RULES_CLOSE, H_FRESH, H_REEL, H_REEL_ADD, H_REEL_REMOVE, H_MISS_PAGE, H_MISS_CLOSE, H_TC_RESET, H_REMOVE_EMPTY, H_TRACK_STEREO, H_FOLD_TOGGLE, H_SORT_NOW, H_REEL_SHARE, H_REEL_OWN, H_REEL_ASK_BG, H_REEL_MODE, H_SORT_RESET, H_EMBED_LOAD, H_EMBED_SKIP, H_EMBED_BG, H_SORT_SUBS, H_HELP_MANUAL,
   H_START_PICK, H_START_RECENT, H_START_CANCEL, H_START_FMT
 };
 
@@ -2559,10 +2559,16 @@ void paintHelp(State *st, const Gfx &g) {
   g.rfill(l - 1, t + 2, l + w + 3, t + h + 6, 16, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
   g.rbox(l, t, l + w, t + h, 16, kLine, kPop);
   addHit(st, l, t, l + w, t + h, H_HELP_BG, 0, nullptr);
-  g.text(st->fHead, kInk, "Help and keyboard shortcuts", l + 24, t + 16, l + w - 60, t + 40, DT_LEFT);
+  g.text(st->fHead, kInk, "Help and keyboard shortcuts", l + 24, t + 16, l + w - 200, t + 40, DT_LEFT);
   g.text(st->fSmall, kMute, "The same keys on Mac and Windows. Hover over anything in OLAAF for a short hint.", l + 24, t + 40,
          l + w - 60, t + 58, DT_LEFT);
   button(st, g, l + w - 44, t + 14, l + w - 16, t + 42, "\xc3\x97", H_HELP_CLOSE, 0, "Close (Esc).");
+  { // the manual on dmajorsound.com, in the browser
+    const char *ml = "Read manual";
+    double mw = g.width(st->fBody, ml) + 28;
+    button(st, g, l + w - 52 - mw, t + 14, l + w - 52, t + 42, ml, H_HELP_MANUAL, 0,
+           "Open the OLAAF manual on dmajorsound.com in your browser.");
+  }
 
   struct KeyRow { const char *keys; const char *what; };
   // keys separated by '|', several ways by '/'
@@ -4445,6 +4451,9 @@ void click(State *st, int x, int y, bool shift) {
   case H_TRACK_SWAP: swapTrack(st, h ? h->idx : -1); break;
   case H_TRACK_STEREO: toggleStereo(st, h ? h->idx : -1); break;
   case H_HELP_CLOSE: st->helpOpen = false; break;
+  case H_HELP_MANUAL:
+    if (st->host && st->host->openUrl) st->host->openUrl("https://dmajorsound.com/software/olaaf/manual.html");
+    return;
   case H_UPDATE:
     if (st->host && st->host->openUrl && !st->updUrl.empty()) st->host->openUrl(st->updUrl);
     return;
