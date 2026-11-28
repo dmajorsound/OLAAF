@@ -351,7 +351,7 @@ struct State {
 };
 
 HFONT makeFont(double px, bool bold, double scale, bool mono = false) {
-  const char *face = uiFontFace(mono); // IBM Plex, embedded
+  const char *face = uiFontFace(mono); // Mulish / Red Hat Mono, embedded
   return CreateFont(-(int)std::lround(px * scale), 0, 0, 0, bold ? FW_BOLD : FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
                     OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH, face);
 }
@@ -374,7 +374,7 @@ void makeFonts(State *st) {
   st->fHead = makeFont(15, true, s);
   st->fWord = makeFont(20, true, s);
   st->fHero = makeFont(28, true, s);
-  st->fKey = makeFont(11.5, true, s, true);
+  st->fKey = makeFont(11.5, true, s); // key caps: the text face, quieter than mono
   st->fName = makeFont(11.5, false, s);
   st->fTiny = makeFont(9.5, false, s);
   st->fMicro = makeFont(8.5, false, s);
@@ -517,7 +517,7 @@ struct Gfx {
     for (int i = 0; i < 24; i++) p.push_back({cx + r * std::cos(i * kPi / 12), cy + r * std::sin(i * kPi / 12)});
     poly(p, c);
   }
-  // The few symbols IBM Plex has no glyph for, drawn so they look the same everywhere.
+  // The few symbols the UI font has no glyph for, drawn so they look the same everywhere.
   // Returns false for anything else (then it is plain text).
   bool icon(const std::string &glyph, double cx, double cy, COLORREF c, COLORREF bg) const {
     if (glyph == "\xe2\x96\xbe") { // small caret down
@@ -1109,7 +1109,7 @@ void paintBrand(State *st, const Gfx &g, double mid) {
     clip(22, 74, 40, 16, 0, 10);
     g.rfill(tx - 1.1, ty - 1.1, tx + 1.1, ty + 1.1, 1.1, RGB(0x9D, 0xEB, 0xC0)); // touchdown: the mint dot
   }
-  g.textBase(st->fWord, kInk, "OLAAF", 56, mid - 15 + 20 * 0.698);
+  g.textBase(st->fWord, kInk, "OLAAF", 56, mid - 15 + 20 * 0.705);
   g.textBase(st->fTiny, kMute, "V " OLAAF_VERSION_STRING " beta", 57, mid + 15);
 }
 
@@ -1119,7 +1119,7 @@ void paintTopBar(State *st, const Gfx &g) {
   g.fill(0, kTopH - 1, W, kTopH, kLine);
   double mid = kTopH / 2;
   // the OLAAF mark and name: "OLAAF" from the top of the mark, the version on its bottom line
-  // (IBM Plex: capitals are 0.698 of the type size)
+  // (Mulish: capitals are 0.705 of the type size)
   double wordR = brandRight(st, g);
   if (st->themeMenu) g.rbox(10, mid - 21, wordR + 6, mid + 21, 8, kBlue, kBlueSoft); // the menu is open
   addHit(st, 10, mid - 21, wordR + 6, mid + 21, H_THEME, 0,
@@ -1780,9 +1780,11 @@ void paintArrange(State *st, const Gfx &g) {
   for (double tt = std::floor((st->viewStart + off) / step) * step; tt <= st->viewStart + off + st->viewLen; tt += step) {
     double px = kTlx + (tt - off - st->viewStart) / spp;
     if (px < kTlx || px > kTlr) continue;
-    g.fill(px, ry, px + 1, kLT, kLine);
-    g.fill(px, kLT, px + 1, kLB, kSoft);
-    g.text(st->fMonoSmall, kMute, formatTC(tt, s.fps), px + 4, ry, std::min(px + 110, kTlr), ry + 18, DT_LEFT);
+    // a short tick under the time and a faint line through the tracks; the time itself in the text face
+    // (Mulish's figures are all the same width), lighter than a block of mono
+    g.fill(px, kLT - 7, px + 1, kLT, kLine);
+    g.fill(px, kLT, px + 1, kLB, mixColor(theme().track, kSoft, 0.55));
+    g.text(st->fTag, kMute, formatTC(tt, s.fps), px + 4, ry + 1, std::min(px + 110, kTlr), ry + 18, DT_LEFT);
   }
   if (opt.markers)
     for (auto &m : s.markers) {

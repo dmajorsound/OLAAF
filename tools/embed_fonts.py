@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-# Writes src/ext/fonts_data.cpp from the subset IBM Plex fonts in third_party/ibm-plex.
-# The fonts are the unmodified IBM Plex TTFs (OFL 1.1 with Reserved Font Name "Plex", so no subsetting).
+# Writes src/ext/fonts_data.cpp from OLAAF's UI fonts in third_party/olaaf-fonts (built from Mulish and
+# Red Hat Mono by tools/make_fonts.py; SIL Open Font License 1.1).
 import os
 root = os.path.join(os.path.dirname(__file__), '..')
-d = os.path.join(root, 'third_party/ibm-plex')
-out = ['// Generated from third_party/ibm-plex (IBM Plex, SIL Open Font License 1.1), unmodified.',
+d = os.path.join(root, 'third_party/olaaf-fonts')
+out = ['// Generated from third_party/olaaf-fonts (Mulish OLAAF, Red Hat Mono OLAAF; SIL Open Font License 1.1).',
        '// Do not edit: regenerate with tools/embed_fonts.py.', '#include <cstddef>', 'namespace olaaf {']
 names = []
-for f in ['IBMPlexSans-Regular', 'IBMPlexSans-Bold', 'IBMPlexMono-Regular', 'IBMPlexMono-Bold']:
+for f in ['MulishOLAAF-Regular', 'MulishOLAAF-Bold', 'RedHatMonoOLAAF-Regular', 'RedHatMonoOLAAF-Bold']:
     b = open(os.path.join(d, f + '.ttf'), 'rb').read()
     v = f.replace('-', '_')
     names.append((v, len(b)))

@@ -51,7 +51,7 @@ static bool registerFonts() {
 const char *uiFontFace(bool mono) {
 #if defined(_WIN32) || defined(__APPLE__)
   static const bool embedded = registerFonts();
-  if (embedded) return mono ? "IBM Plex Mono" : "IBM Plex Sans";
+  if (embedded) return mono ? "Red Hat Mono OLAAF" : "Mulish OLAAF";
 #endif
 #ifdef _WIN32
   return mono ? "Consolas" : "Segoe UI";

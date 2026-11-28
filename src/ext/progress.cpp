@@ -100,7 +100,7 @@ const char *funLine(const std::string &detail, double t) {
 }
 
 HFONT makeFont(double px, bool bold, double scale) {
-  const char *face = uiFontFace(false); // IBM Plex, embedded
+  const char *face = uiFontFace(false); // Mulish, embedded
   return CreateFont(-(int)std::lround(px * scale), 0, 0, 0, bold ? FW_BOLD : FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
                     OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH, face);
 }

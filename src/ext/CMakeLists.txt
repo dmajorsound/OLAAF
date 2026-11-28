@@ -2,7 +2,7 @@
 
 set(EXT_SRC main.cpp progress.cpp dialog.cpp theme.cpp logo.cpp fonts.cpp round.cpp update.cpp)
 if(WIN32 OR APPLE)
-  list(APPEND EXT_SRC fonts_data.cpp) # IBM Plex, embedded
+  list(APPEND EXT_SRC fonts_data.cpp) # Mulish and Red Hat Mono, embedded
 endif()
 set(SWELL ${PROJECT_SOURCE_DIR}/third_party/reaper-sdk/WDL/swell)
 if(APPLE)
