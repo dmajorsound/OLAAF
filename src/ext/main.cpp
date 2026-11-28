@@ -194,7 +194,19 @@ static void saveSettings(const ImportOptions &o, const std::string &defaultDest)
   if (custom) SetExtState("olAAF", "dest", o.destDir.c_str(), true);
 }
 
-// the whole timeline as one source: every event read from its file and mixed to stereo
+// a value of automation at time t (absolute), straight lines between the points; none: def
+static double envAt(const std::vector<std::pair<double, double>> *env, double t, double def) {
+  if (!env || env->empty()) return def;
+  if (t <= env->front().first) return env->front().second;
+  if (t >= env->back().first) return env->back().second;
+  auto it = std::upper_bound(env->begin(), env->end(), t, [](double x, const std::pair<double, double> &p) { return x < p.first; });
+  const auto &b = *it, &a = *(it - 1);
+  double f = b.first > a.first ? (t - a.first) / (b.first - a.first) : 0.0;
+  return a.second + (b.second - a.second) * f;
+}
+
+// the whole timeline as one source: every event read from its file, placed with the track's level and pan,
+// mixed to stereo
 class TimelineSource : public PCM_source {
 public:
   struct Ev {
@@ -259,18 +271,30 @@ public:
       tr.length = z - a;
       tr.samples = m_buf.data();
       src->GetSamples(&tr);
+      // the track's level and pan at both ends of this stretch (automation), in between in a straight line
+      double ta = t0 + a / sr, tz = t0 + z / sr;
+      // (the volume automation holds the level itself, as OLAAF reads it from the AAF)
+      double va = envAt(e.volEnv.get(), ta, e.vol), vz = envAt(e.volEnv.get(), tz, e.vol);
+      double pa = envAt(e.panEnv.get(), ta, e.pan), pz = envAt(e.panEnv.get(), tz, e.pan);
       for (int f = 0; f < tr.samples_out && f < z - a; f++) {
         double t = t0 + (a + f) / sr - e.pos; // into the event
-        double g = e.gain;
+        double k = z > a ? (double)f / (double)(z - a) : 0.0;
+        double g = e.gain * (va + (vz - va) * k);
+        double pan = std::max(-1.0, std::min(1.0, pa + (pz - pa) * k));
         if (e.fadeIn > 0 && t < e.fadeIn) g *= t / e.fadeIn;
         if (e.fadeOut > 0 && e.len - t < e.fadeOut) g *= std::max(0.0, (e.len - t) / e.fadeOut);
         const ReaSample *in = m_buf.data() + (size_t)f * cn;
+        // one channel of the file, as the AAF says (channel 2 of a stereo file: its right side)
+        double one = e.chan >= 0 && e.chan < cn ? in[e.chan] : in[0];
+        bool single = e.chan >= 0 && e.chan < cn;
         double l, r;
-        if (e.side == 1) l = in[0], r = 0;
-        else if (e.side == 2) l = 0, r = in[0];
+        if (e.side == 1) l = one, r = 0;
+        else if (e.side == 2) l = 0, r = one;
+        else if (single || cn == 1) l = r = one;
         else if (e.side == 3 && cn >= 2) l = in[1], r = in[0]; // left and right exchanged
-        else if (cn == 1) l = r = in[0];
         else l = in[0], r = in[1];
+        if (pan < 0) r *= 1.0 + pan; // balance, as REAPER's default pan: the other side goes down
+        else if (pan > 0) l *= 1.0 - pan;
         ReaSample *out = b->samples + (size_t)(a + f) * nch;
         out[0] += l * g;
         if (nch > 1) out[1] += r * g;
@@ -354,6 +378,7 @@ static bool play(const std::vector<PreviewPart> &parts) {
     e.offset = p.offset;
     e.gain = p.gain;
     e.side = p.side;
+    e.chan = p.chan;
     evs.push_back(e);
   }
   g_start = 0;
@@ -927,7 +952,9 @@ static void importIntoProject() {
   }
   // the start window first: what OLAAF does, the AAFs opened before, the button to choose one
   applyLook();
-  std::vector<std::string> files = showStartWindow(GetMainHwnd(), loadRecent(), [](HWND parent) { return pickAafs(parent, true); });
+  std::vector<std::string> files =
+      showStartWindow(GetMainHwnd(), loadRecent(), [](HWND parent) { return pickAafs(parent, true); },
+                      [](const char *key) { SetExtState("olAAF", "theme", key, true); });
   if (files.empty()) return;
   const std::string fn = files[0];
 

@@ -240,6 +240,11 @@ bool AafFile::load(const std::string &path, const ReadOptions &opt, Session *s, 
         src.channel = (int)ep->essenceChannel;
         k.sources.push_back(src);
       }
+      // a stereo (or multichannel) clip that points once at a file with that many channels means the whole
+      // file, not its first channel (some editors write it so)
+      if (k.sources.size() == 1 && c->channels > 1 && k.sources[0].media >= 0 &&
+          s->media[(size_t)k.sources[0].media].channels == c->channels && k.sources[0].channel <= 1)
+        k.sources[0].channel = 0;
       if (c->subClipName) k.name = c->subClipName;
       else if (!k.sources.empty() && k.sources[0].media >= 0) k.name = s->media[k.sources[0].media].name;
 

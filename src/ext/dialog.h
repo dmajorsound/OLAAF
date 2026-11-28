@@ -7,7 +7,9 @@
 #include "../core/importer.h"
 
 #include <functional>
+#include <memory>
 #include <string>
+#include <utility>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -26,6 +28,7 @@ struct PreviewPart {
   double offset = 0, length = 0; // seconds in the file
   double gain = 1.0;
   int side = 0;                  // 0 both, 1 left only, 2 right only (mono file of an L / R pair), 3 stereo reversed
+  int chan = -1;                 // one channel of the file (0 = its first), -1 = all, as the AAF says
 };
 
 // one event for listening to the whole timeline
@@ -34,6 +37,11 @@ struct MixEvent {
   double pos = 0, len = 0, offset = 0; // on the timeline, and where in the file
   double gain = 1.0, fadeIn = 0, fadeOut = 0;
   int side = 0;                        // as PreviewPart
+  int chan = -1;                       // as PreviewPart
+  // the track's fader and pan as they come into REAPER (pan -1 left .. +1 right, balance as REAPER's default),
+  // and their automation (absolute time, value); none = the constant value
+  double vol = 1.0, pan = 0.0;
+  std::shared_ptr<const std::vector<std::pair<double, double>>> volEnv, panEnv;
 };
 
 struct DialogHost {
@@ -84,8 +92,10 @@ HWND openDialogHwnd();
 
 // The start window: what OLAAF does, the AAFs opened before and the button to choose one.
 // Returns the AAFs to open (several = reels), empty when it was closed.
+// saveTheme keeps the look picked with a click on the OLAAF logo ("system", "dark", "light").
 std::vector<std::string> showStartWindow(HWND parent, const std::vector<std::string> &recent,
-                                         std::function<std::vector<std::string>(HWND parent)> pick);
+                                         std::function<std::vector<std::string>(HWND parent)> pick,
+                                         std::function<void(const char *key)> saveTheme = nullptr);
 
 bool showImportDialog(HWND parent, Importer &imp, ImportOptions &opt, const DialogHost &host);
 // The same window without blocking REAPER: returns at once; onClose runs after the window is closed

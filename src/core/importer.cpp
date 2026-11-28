@@ -671,12 +671,10 @@ int Importer::combineTracks(int left, int right, std::string *why) {
       if (why) *why = "\"" + s_.tracks[k].name + "\" isn't mono, so it can't be one side of a stereo track.";
       return -1;
     }
-  if (!sameTimeline(s_.tracks[i], s_.tracks[j])) {
-    if (why)
-      *why = "\"" + s_.tracks[i].name + "\" and \"" + s_.tracks[j].name +
-             "\" can't be combined: their events don't line up (one has events the other hasn't, or they were moved).";
-    return -1;
-  }
+  // events that line up (an L / R pair) become stereo events; otherwise every event stays as it is and plays
+  // on its side: the left track's events on the left, the right track's on the right
+  bool aligned = sameTimeline(s_.tracks[i], s_.tracks[j]);
+  if (why) *why = aligned ? "" : "sides";
   Track &L = s_.tracks[i];
   Track &R = s_.tracks[j];
   for (auto &o : s_.tracks) // events that came from R now belong to the stereo track
@@ -690,9 +688,19 @@ int Importer::combineTracks(int left, int right, std::string *why) {
   L.name = stereoName(L.name, R.name);
   L.aafName = L.name;
   L.channels = 2;
-  for (size_t c = 0; c < L.clips.size(); c++) {
-    L.clips[c].sources.push_back(R.clips[c].sources[0]);
-    L.clips[c].excluded = L.clips[c].excluded && R.clips[c].excluded; // removed only if both halves were
+  if (aligned)
+    for (size_t c = 0; c < L.clips.size(); c++) {
+      L.clips[c].sources.push_back(R.clips[c].sources[0]);
+      L.clips[c].excluded = L.clips[c].excluded && R.clips[c].excluded; // removed only if both halves were
+      L.clips[c].side = 0;
+    }
+  else {
+    for (auto &c : L.clips) c.side = 1;
+    for (Clip c : R.clips) {
+      c.side = 2;
+      L.clips.push_back(c);
+    }
+    std::stable_sort(L.clips.begin(), L.clips.end(), [](const Clip &a, const Clip &b) { return a.pos < b.pos; });
   }
   s_.tracks.erase(s_.tracks.begin() + (long)j);
   return (int)(j < i ? i - 1 : i);
@@ -703,7 +711,7 @@ int Importer::splitStereo(int track, std::string *why) {
   Track &M = s_.tracks[(size_t)track];
   size_t plus = M.mergedFrom.find(" + ");
   if (M.channels != 2 || plus == std::string::npos) {
-    if (why) *why = "Only a track combined from .L / .R can be split.";
+    if (why) *why = "Only a combined stereo track can be split.";
     return -1;
   }
   int maxId = 0, maxUid = 0;
@@ -726,7 +734,12 @@ int Importer::splitStereo(int track, std::string *why) {
   M.mergedFrom.clear();
   std::vector<Clip> keepL;
   for (auto &c : M.clips) {
-    if (c.sources.size() == 2) { // left half stays, right half goes to R (exchanged: the other way round)
+    if (c.side == 2 && c.sources.size() == 1) { // its own event on the right side goes back to R
+      Clip r = c;
+      r.side = 0;
+      if (r.home == M.uid) r.home = R.uid;
+      R.clips.push_back(r);
+    } else if (c.sources.size() == 2) { // left half stays, right half goes to R (exchanged: the other way round)
       Clip r = c;
       r.id = ++maxId;
       r.home = c.home == M.uid ? R.uid : c.home;
@@ -737,8 +750,10 @@ int Importer::splitStereo(int track, std::string *why) {
       l.sources = {c.sources[c.swapLR ? 1 : 0]};
       l.swapLR = false;
       keepL.push_back(l);
-    } else
-      keepL.push_back(c); // an event moved here that was not a pair stays on the L track
+    } else {
+      keepL.push_back(c); // a left-side event, or one moved here that was not a pair, stays on the L track
+      keepL.back().side = 0;
+    }
   }
   M.clips = keepL;
   s_.tracks.insert(s_.tracks.begin() + track + 1, R);
@@ -876,8 +891,38 @@ int Importer::setMergeStereo(bool on) {
   return n;
 }
 
+// a and b use channel 1 and channel 2 of the same stereo files, event for event (one stereo file the AAF
+// splits into two mono tracks, whatever their names)
+static bool channelPair(const Session &s, const Track &a, const Track &b) {
+  if (a.channels != 1 || b.channels != 1 || !a.mergedFrom.empty() || !b.mergedFrom.empty() || !sameTimeline(a, b)) return false;
+  auto fileOf = [&](int m) -> std::string {
+    if (m < 0 || m >= (int)s.media.size()) return std::string();
+    const Media &md = s.media[(size_t)m];
+    if (md.channels != 2) return std::string();
+    return !md.originalUri.empty() ? md.originalUri : !md.foundPath.empty() ? md.foundPath : md.name;
+  };
+  for (size_t i = 0; i < a.clips.size(); i++) {
+    const Source &x = a.clips[i].sources[0], &y = b.clips[i].sources[0];
+    if (x.channel != 1 || y.channel != 2) return false;
+    std::string fx = fileOf(x.media);
+    if (fx.empty() || fx != fileOf(y.media)) return false;
+  }
+  return true;
+}
+
 int Importer::mergeStereoTracks() {
   int merged = 0;
+  // neighbors that are the two channels of the same stereo files: one stereo track
+  for (size_t i = 0; i + 1 < s_.tracks.size(); i++) {
+    if (!channelPair(s_, s_.tracks[i], s_.tracks[i + 1])) continue;
+    std::string ln = s_.tracks[i].name, rn = s_.tracks[i + 1].name;
+    std::string base, b2;
+    char sd, sd2;
+    std::string name = splitSide(ln, &base, &sd) && splitSide(rn, &b2, &sd2) && base == b2 ? base : stereoName(ln, rn);
+    if (combineTracks((int)i, (int)i + 1, nullptr) < 0) continue;
+    s_.tracks[i].name = s_.tracks[i].aafName = name;
+    merged++;
+  }
   for (size_t i = 0; i < s_.tracks.size(); i++) {
     std::string bl;
     char sl;
@@ -1292,7 +1337,9 @@ std::vector<TrackChunk> Importer::trackChunks(const ImportOptions &opt) const {
       c += "NAME " + q(k.name) + "\n";
       // clip gain on the item, or folded into the track envelope (not when that envelope is not written)
       bool onItem = opt.clipGain && (!opt.clipGainToTrack || !envToTrack);
-      c += "VOLPAN " + num(onItem ? k.gain : 1.0) + " 0 1 -1\n";
+      // an event of one side of a combined stereo track: panned hard to its side
+      double itemPan = (t.channels == 2 && !t.mergedFrom.empty() && k.sources.size() == 1) ? (k.side == 1 ? -1.0 : k.side == 2 ? 1.0 : 0.0) : 0.0;
+      c += "VOLPAN " + num(onItem ? k.gain : 1.0) + " " + num(itemPan) + " 1 -1\n";
       c += "SOFFS " + num(k.srcOffset) + "\n";
       if (k.chanMode) c += strprintf("CHANMODE %d\n", k.chanMode);
       std::string f = k.outPath;

@@ -63,6 +63,9 @@ struct Clip {
   int home = 0;            // uid of the AAF track it came from (to send it back from a deleted new track)
   bool excluded = false;   // removed from the import in the dialog
   bool swapLR = false;     // stereo: left and right channels exchanged on import
+  // on a stereo track combined from two mono tracks whose events don't line up (Importer::combineTracks):
+  // 1 = this event plays on the left only, 2 = on the right only (written as the take's pan)
+  int side = 0;
 };
 
 struct VideoClip {

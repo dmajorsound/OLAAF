@@ -186,6 +186,7 @@ struct StartData {
   std::vector<std::string> recent;                              // AAFs opened before, newest first
   std::function<std::vector<std::string>(HWND parent)> pick;    // the file chooser (several at once)
   std::vector<std::string> result;
+  std::function<void(const char *key)> saveTheme; // keeps the look picked here ("system", "dark", "light")
 };
 
 struct State {
@@ -982,6 +983,36 @@ std::string updateNote(State *st) {
 
 // A newer OLAAF (in the footer, as in every dmajorsound tool): a light red dot that blinks and "0.8.1 is out",
 // right-aligned to `right`; a click opens the download page. Returns its left edge (`right` when there is none).
+// System / Dark / Light, under the OLAAF logo (import and start window); a click on the logo opens it
+void paintThemeMenu(State *st, const Gfx &g) {
+  static const char *names[3] = {"System", "Dark", "Light"};
+  static const char *tips[3] = {"Follows the colors of your REAPER theme.", "OLAAF's own dark look.", "A white interface."};
+  double w = 190, rh = 30, h = 3 * rh + 40;
+  double l = 10, r = l + w, t = kTopH - 8, b = t + h;
+  g.rfill(l - 1, t + 2, r + 3, b + 5, 10, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
+  g.rbox(l, t, r, b, 10, kLine, kPop);
+  addHit(st, l, t, r, b, H_THEME_BG, 0, nullptr);
+  g.text(st->fSmall, kMute, "Interface", l + 14, t + 8, r - 10, t + 30, DT_LEFT);
+  for (int i = 0; i < 3; i++) {
+    double y = t + 32 + i * rh;
+    bool cur = olaaf::themeMode() == i;
+    if (cur) g.rfill(l + 6, y, r - 6, y + rh, 6, kBlueSoft);
+    if (cur) g.check(l + 12, y + 7, kBlue);
+    g.text(st->fBody, kInk, names[i], l + 36, y, r - 10, y + rh, DT_LEFT);
+    addHit(st, l + 6, y, r - 6, y + rh, H_THEME_PICK, i, tips[i]);
+  }
+}
+
+// a pick from that menu: the look changes at once and is kept (both windows)
+void pickTheme(State *st, int m) {
+  m = m < 0 || m > 2 ? 0 : m;
+  olaaf::setThemeMode(m);
+  static const char *keys[3] = {"system", "dark", "light"};
+  if (st->host && st->host->setSetting) st->host->setSetting("theme", keys[m]);
+  else if (st->start && st->start->saveTheme) st->start->saveTheme(keys[m]);
+  st->themeMenu = false;
+}
+
 double paintUpdateNote(State *st, const Gfx &g, double right, double t, double b) {
   if (st->updTag.empty()) return right;
   double prog = 0;
@@ -2100,9 +2131,15 @@ void paintArrange(State *st, const Gfx &g) {
         double k = std::min(12.0, std::max(2.0, x1 - x0)); // never wider than the event itself
         g.polyAA({{x1 - k, y0}, {x1, y0}, {x1, y0 + k}}, kRed);
       }
-      if (x1 - x0 > 30 && !c.name.empty())
-        g.text(st->fClip, (c.excluded || c.mute || !on) ? kMute : kInk, c.mute ? "M  " + c.name : c.name, x0 + 4, y0,
-               x1 - (missingFile ? 13 : 3), y0 + 12, DT_LEFT);
+      if (x1 - x0 > 30 && !c.name.empty()) {
+        // on a stereo track combined from two mono tracks: which side this event plays on
+        std::string label = c.name;
+        if (tr.channels == 2 && !tr.mergedFrom.empty() && c.sources.size() == 1 && (c.side == 1 || c.side == 2))
+          label = std::string(c.side == 1 ? "L  " : "R  ") + label;
+        if (c.mute) label = "M  " + label;
+        g.text(st->fClip, (c.excluded || c.mute || !on) ? kMute : kInk, label, x0 + 4, y0, x1 - (missingFile ? 13 : 3),
+               y0 + 12, DT_LEFT);
+      }
       ClipHit h;
       h.r = devRect(st, x0, y0, x1, y1);
       h.id = c.id;
@@ -3200,24 +3237,7 @@ void paint(State *st, HDC dc) {
   if (st->rulesOpen) paintRules(st, g);
   paintFooter(st, g);
   if (st->helpOpen) paintHelp(st, g); // over the footer too
-  if (st->themeMenu) { // System / Dark / Light, under the OLAAF logo
-    static const char *names[3] = {"System", "Dark", "Light"};
-    static const char *tips[3] = {"Follows the colors of your REAPER theme.", "OLAAF's own dark look.", "A white interface."};
-    double w = 190, rh = 30, h = 3 * rh + 40;
-    double l = 10, r = l + w, t = kTopH - 8, b = t + h;
-    g.rfill(l - 1, t + 2, r + 3, b + 5, 10, mixColor(kFace, RGB(0, 0, 0), olaaf::darkTheme() ? 0.35 : 0.10));
-    g.rbox(l, t, r, b, 10, kLine, kPop);
-    addHit(st, l, t, r, b, H_THEME_BG, 0, nullptr);
-    g.text(st->fSmall, kMute, "Interface", l + 14, t + 8, r - 10, t + 30, DT_LEFT);
-    for (int i = 0; i < 3; i++) {
-      double y = t + 32 + i * rh;
-      bool cur = olaaf::themeMode() == i;
-      if (cur) g.rfill(l + 6, y, r - 6, y + rh, 6, kBlueSoft);
-      if (cur) g.check(l + 12, y + 7, kBlue);
-      g.text(st->fBody, kInk, names[i], l + 36, y, r - 10, y + rh, DT_LEFT);
-      addHit(st, l + 6, y, r - 6, y + rh, H_THEME_PICK, i, tips[i]);
-    }
-  }
+  if (st->themeMenu) paintThemeMenu(st, g);
   paintGonio(st, g);
 }
 
@@ -3411,8 +3431,10 @@ void combineSelected(State *st) {
       st->tip = why.c_str();
       return;
     }
-    why = "Combined into the stereo track " + s.tracks[(size_t)t].name + ": " + ln + " left, " + rn +
-          " right. Right-click the name to swap the sides, C again splits it.";
+    bool sides = why == "sides";
+    why = "Combined into the stereo track " + s.tracks[(size_t)t].name + ": " + ln + " left, " + rn + " right." +
+          (sides ? " Their events don't line up, so each keeps its own events, on its side." : "") +
+          " C again splits it.";
     st->tip = why.c_str();
     st->sel.clear();
     st->selTracks.clear();
@@ -4132,6 +4154,11 @@ void click(State *st, int x, int y, bool shift) {
     InvalidateRect(st->hwnd, NULL, FALSE);
     if (id == H_LANES || id == H_NONE) return;
   }
+  if (id == H_NONE && !shift && !st->selTracks.empty()) { // a click on nothing: the selected tracks are let go
+    st->selTracks.clear();
+    InvalidateRect(st->hwnd, NULL, FALSE);
+    return;
+  }
   switch (id) {
   case H_LANES: {
     const ClipHit *c = clipAt(st, x, y);
@@ -4141,7 +4168,10 @@ void click(State *st, int x, int y, bool shift) {
       st->playhead = std::max(0.0, st->viewStart + ((x - st->ox) / st->scale - kTlx) * spp);
     }
     if (!c) {
-      if (!shift) st->sel.clear();
+      if (!shift) { // a click into empty space: nothing selected any more, events and tracks
+        st->sel.clear();
+        st->selTracks.clear();
+      }
     } else if (shift) {
       if (st->sel.count(c->id)) st->sel.erase(c->id);
       else st->sel.insert(c->id);
@@ -4352,14 +4382,7 @@ void click(State *st, int x, int y, bool shift) {
   case H_OPTS_BG: return;
   case H_THEME: st->themeMenu = !st->themeMenu; break;
   case H_THEME_BG: return;
-  case H_THEME_PICK: {
-    int m = h ? h->idx : 0;
-    olaaf::setThemeMode(m);
-    static const char *keys[3] = {"system", "dark", "light"};
-    if (st->host && st->host->setSetting) st->host->setSetting("theme", keys[m < 0 || m > 2 ? 0 : m]);
-    st->themeMenu = false;
-    break;
-  }
+  case H_THEME_PICK: pickTheme(st, h ? h->idx : 0); break;
   case H_MISS_BG: return;
   case H_MISS_CLOSE: st->missingOpen = false; break;
   case H_MISS_PAGE: st->missScroll += (h ? h->idx : 1) * ((int)kMissRows - 1); break;
@@ -4765,6 +4788,17 @@ void toggleTimeline(State *st) {
   for (auto &tr : s.tracks) {
     if (!tr.import) continue;
     if (!st->solo.empty() && !st->solo.count(tr.uid)) continue; // solo
+    // the track's level and pan as they come into REAPER, with their automation
+    auto envOf = [](const std::vector<GainPoint> &env) {
+      std::shared_ptr<const std::vector<std::pair<double, double>>> out;
+      if (env.empty()) return out;
+      auto v = std::make_shared<std::vector<std::pair<double, double>>>();
+      for (auto &p : env) v->push_back({p.time, p.gain});
+      out = v;
+      return out;
+    };
+    auto volEnv = envOf(tr.volEnv), panEnv = envOf(tr.panEnv);
+    bool combined = tr.channels == 2 && !tr.mergedFrom.empty();
     for (auto &c : tr.clips) {
       if (c.excluded || c.mute) continue;
       bool pair = c.sources.size() == 2;
@@ -4786,6 +4820,12 @@ void toggleTimeline(State *st) {
         e.side = pair ? (int)i + 1 : (c.chanMode == 3 ? 1 : c.chanMode == 4 ? 2 : 0);
         if (pair && c.swapLR) e.side = 3 - e.side;
         if (!pair && c.swapLR) e.side = 3;
+        if (combined && !pair && (c.side == 1 || c.side == 2)) e.side = c.side; // one side of a combined track
+        if (src.channel > 0 && m.channels > 1) e.chan = src.channel - 1; // one channel of a stereo / multichannel file
+        e.vol = tr.volume;
+        e.pan = tr.pan;
+        e.volEnv = volEnv;
+        e.panEnv = panEnv;
         evs.push_back(e);
         end = std::max(end, c.pos + c.len);
       }
@@ -4827,6 +4867,7 @@ void togglePlay(State *st) {
     p.side = pair ? (int)i + 1 : (c->chanMode == 3 ? 1 : c->chanMode == 4 ? 2 : 0);
     if (pair && c->swapLR) p.side = 3 - p.side;
     if (!pair && c->swapLR) p.side = 3; // one stereo file, reversed
+    if (src.channel > 0 && m.channels > 1) p.chan = src.channel - 1; // one channel of the file, as the AAF says
     parts.push_back(p);
   }
   if (parts.empty()) {
@@ -5637,6 +5678,7 @@ void dialogPaintTest(Importer &imp, ImportOptions &opt, HDC dc, int palTrack, co
     ss.hwnd = (HWND)1;
     ss.tip = tip;
     if (getenv("OLAAF_STARTHOVER")) ss.startHover = 0;
+    if (getenv("OLAAF_THEMEMENU")) ss.themeMenu = true;
     if (getenv("OLAAF_UPD")) ss.updTag = "v0.8.1";
     relayoutStart(&ss);
     paintStart(&ss, dc);
@@ -5993,6 +6035,11 @@ void paintStart(State *st, HDC dc) {
   const double L = 32, R = SW - 32, colR = 484;
   // top: the OLAAF mark, and dmajorsound on the right
   g.fill(0, kTopH - 1, SW, kTopH, kLine);
+  { // a click on the OLAAF logo: System / Dark / Light, as in the import window
+    double mid = kTopH / 2, wordR = brandRight(st, g);
+    if (st->themeMenu) g.rbox(10, mid - 21, wordR + 6, mid + 21, 8, kBlue, kBlueSoft);
+    addHit(st, 10, mid - 21, wordR + 6, mid + 21, H_THEME, 0, "The look: System, Dark or Light.");
+  }
   paintBrand(st, g, kTopH / 2);
   drawDmajorLogo(g.dc, g.X(R), g.Y(kTopH / 2), g.S(16), kMute, kMute, st->fSmall);
 
@@ -6101,6 +6148,7 @@ void paintStart(State *st, HDC dc) {
     g.text(st->fSmall, st->tip ? kInk : kMute, ln, L, hy, hintR, hy + 17, DT_LEFT);
     hy += 17;
   }
+  if (st->themeMenu) paintThemeMenu(st, g); // over everything
 }
 
 static void startPick(State *st) {
@@ -6213,7 +6261,18 @@ INT_PTR CALLBACK startProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   }
   case WM_LBUTTONUP: {
     const Hit *h = hitAt(st, (short)LOWORD(lp), (short)HIWORD(lp));
+    if (st->themeMenu && (!h || (h->id != H_THEME && h->id != H_THEME_BG && h->id != H_THEME_PICK))) {
+      st->themeMenu = false; // a click elsewhere closes the look menu first
+      InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
+    }
     if (!h) return 0;
+    if (h->id == H_THEME || h->id == H_THEME_PICK) {
+      if (h->id == H_THEME) st->themeMenu = !st->themeMenu;
+      else pickTheme(st, h->idx);
+      InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
+    }
     if (h->id == H_START_PICK) startPick(st);
     else if (h->id == H_UPDATE) updateClick(st);
     else if (h->id == H_START_CANCEL) EndDialog(hwnd, 0);
@@ -6234,7 +6293,11 @@ INT_PTR CALLBACK startProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 1;
     }
     if (wp == VK_ESCAPE) {
-      EndDialog(hwnd, 0);
+      if (st->themeMenu) { // Esc closes the look menu first
+        st->themeMenu = false;
+        InvalidateRect(hwnd, NULL, FALSE);
+      } else
+        EndDialog(hwnd, 0);
       return 1;
     }
     return 0;
@@ -6256,10 +6319,12 @@ INT_PTR CALLBACK startProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 std::vector<std::string> showStartWindow(HWND parent, const std::vector<std::string> &recent,
-                                         std::function<std::vector<std::string>(HWND parent)> pick) {
+                                         std::function<std::vector<std::string>(HWND parent)> pick,
+                                         std::function<void(const char *key)> saveTheme) {
   StartData sd;
   sd.recent = recent;
   sd.pick = std::move(pick);
+  sd.saveTheme = std::move(saveTheme);
   State st;
   st.start = &sd;
 #ifdef _WIN32
