@@ -553,6 +553,9 @@ static DialogHost makeHost() {
 static uint32_t toNativeColor(uint32_t rgb) { return (uint32_t)ColorToNative((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255); }
 
 static void applyLook() {
+  // where a newer OLAAF is downloaded to: the folder chosen once (Downloads until then)
+  if (const char *d = GetExtState("olAAF", "updateDir")) setUpdateFolder(d);
+  setUpdateFolderSaver([](const std::string &dir) { SetExtState("olAAF", "updateDir", dir.c_str(), true); });
   updateCheckStart(); // is there a newer OLAAF? (once per session, in the background)
   const char *v = GetExtState("olAAF", "theme");
   setThemeMode(v && !strcmp(v, "light") ? 2 : v && !strcmp(v, "dark") ? 1 : 0);

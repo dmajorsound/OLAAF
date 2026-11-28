@@ -112,7 +112,14 @@ const int W = 1180, H = 742;
 #define kBlue (theme().blue)
 #define kBlueSoft (theme().blueSoft)
 #define kRed (theme().red)
-const int kPeakTimer = 7, kPlayTimer = 8, kTipTimer = 9, kUpdTimer = 10, kBlinkTimer = 11;
+#ifdef _WIN32
+const char *const kShowIn = "Show in Explorer";
+#elif defined(__APPLE__)
+const char *const kShowIn = "Show in Finder";
+#else
+const char *const kShowIn = "Show in the file manager";
+#endif
+const int kPeakTimer = 7, kPlayTimer = 8, kTipTimer = 9, kUpdTimer = 10, kBlinkTimer = 11, kDlTimer = 12;
 const COLORREF kWhiteFixed = RGB(0xff, 0xff, 0xff);
 // text on the blue accent: white in light mode, near-black on the brighter dark-mode blue
 #define kWhite (olaaf::darkTheme() ? RGB(0x12, 0x1a, 0x26) : kWhiteFixed)
@@ -977,16 +984,100 @@ std::string updateNote(State *st) {
 // right-aligned to `right`; a click opens the download page. Returns its left edge (`right` when there is none).
 double paintUpdateNote(State *st, const Gfx &g, double right, double t, double b) {
   if (st->updTag.empty()) return right;
+  double prog = 0;
+  std::string path, err;
+  int dl = updateDownloadState(&prog, &path, &err);
+  bool direct = !updateAssetUrl().empty(); // an installer for this system on GitHub
+  std::string v = updateNote(st);
+  v = v.substr(0, v.size() - 7); // "0.8.7"
   std::string note = updateNote(st);
+  static std::string tip;
+  if (dl == 1) {
+    note = prog >= 0 ? strprintf("Downloading %s \xe2\x80\xa6 %d%%", v.c_str(), (int)(prog * 100 + 0.5))
+                     : "Downloading " + v + " \xe2\x80\xa6";
+    tip = "OLAAF " + v + " is coming from GitHub into " + updateFolder() + ".";
+  } else if (dl == 2) {
+    note = v + " downloaded";
+    tip = "OLAAF " + v + " is in " + updateFolder() + ". Click to install it (quit REAPER before you click Install). "
+          "Right-click for more.";
+  } else if (dl == 3) {
+    note = "Download failed";
+    tip = "OLAAF " + v + " could not be downloaded (" + err + "). Click to try again, right-click to open the page instead.";
+  } else
+    tip = direct ? "OLAAF " + v + " is out. Click to download and install it. Right-click: download only, the download folder, "
+                   "what's new."
+                 : "OLAAF " + v + " is out. Click to open the download page.";
   double tw = g.width(st->fSmall, note), cy = (t + b) / 2, x = right - tw - 13;
   COLORREF dot = RGB(0xF0, 0x6E, 0x6E);
-  if (st->blinkOn) g.rfill(x, cy - 3.5, x + 7, cy + 3.5, 3.5, dot);
+  if (dl == 1 || dl == 2) // downloading: a ring that fills up; there: a full dot, no more blinking
+    g.rbox(x, cy - 3.5, x + 7, cy + 3.5, 3.5, dot, dl == 2 || prog >= 0.5 ? dot : kFace);
+  else if (st->blinkOn) g.rfill(x, cy - 3.5, x + 7, cy + 3.5, 3.5, dot);
   else g.rbox(x, cy - 3.5, x + 7, cy + 3.5, 3.5, dot, kFace);
-  g.text(st->fSmall, kRed, note, x + 13, t + 1, right, b, DT_LEFT);
-  static std::string tip;
-  tip = "OLAAF " + st->updTag + " is out. Click to open the download page.";
+  g.text(st->fSmall, kRed, note, x + 13, t + 1, right + 8, b, DT_LEFT); // a little room: "…" and "%" measure short
   addHit(st, x - 4, t + 4, right + 4, b - 4, H_UPDATE, 0, tip.c_str());
   return x;
+}
+
+// a click on the note: download and install (or install what is there, or try again); without an installer
+// for this system the release page
+void updateClick(State *st) {
+  if (st->updTag.empty()) return;
+  std::string path;
+  int dl = updateDownloadState(nullptr, &path, nullptr);
+  if (updateAssetUrl().empty()) openWebPage(st->updUrl);
+  else if (dl == 2) openInstaller(path);
+  else if (dl != 1) {
+    updateDownloadStart(true);
+    SetTimer(st->hwnd, kDlTimer, 300, NULL);
+  }
+  InvalidateRect(st->hwnd, NULL, FALSE);
+}
+
+void menuAdd(HMENU m, int id, const std::string &text, bool enabled);
+void menuSep(HMENU m);
+
+// a right-click on the note: download and install, download only, where to, what's new
+void updateMenu(State *st, POINT screen) {
+  if (st->updTag.empty()) return;
+  std::string path;
+  int dl = updateDownloadState(nullptr, &path, nullptr);
+  bool direct = !updateAssetUrl().empty();
+  std::string dir = updateFolder(), shortDir = dir.substr(dir.find_last_of("/\\") + 1);
+  HMENU m = CreatePopupMenu();
+  if (dl == 2) {
+    menuAdd(m, 3, "Install now", true);
+    menuAdd(m, 4, kShowIn, true);
+  } else {
+    menuAdd(m, 1, "Download and install", direct && dl != 1);
+    menuAdd(m, 2, "Download only (install later)", direct && dl != 1);
+  }
+  menuSep(m);
+  menuAdd(m, 5, "Download to: " + (shortDir.empty() ? dir : shortDir) + " \xe2\x80\xa6", dl != 1);
+  menuAdd(m, 6, "What's new (release page)", true);
+  int cmd = TrackPopupMenu(m, TPM_NONOTIFY | TPM_RETURNCMD, screen.x, screen.y, 0, st->hwnd, NULL);
+  DestroyMenu(m);
+  st->menuTick = GetTickCount();
+  if (cmd == 1 || cmd == 2) {
+    updateDownloadStart(cmd == 1);
+    SetTimer(st->hwnd, kDlTimer, 300, NULL);
+  } else if (cmd == 3) openInstaller(path);
+  else if (cmd == 4) revealInFileBrowser(path);
+  else if (cmd == 5) {
+    std::string p;
+    if (pickFolder(st->hwnd, "OLAAF: choose where updates are downloaded to", dir, &p)) setUpdateFolder(p, true);
+  } else if (cmd == 6) openWebPage(st->updUrl);
+  InvalidateRect(st->hwnd, NULL, FALSE);
+}
+
+// while downloading: the percentage in the footer; when it is there, the installer opens on its own (if asked)
+void updatePoll(State *st) {
+  std::string path;
+  if (updateDownloadState(nullptr, &path, nullptr) != 1) {
+    KillTimer(st->hwnd, kDlTimer);
+    KillTimer(st->hwnd, kBlinkTimer); // no more blinking once it is there or failed
+    st->blinkOn = true;
+  }
+  InvalidateRect(st->hwnd, NULL, FALSE);
 }
 
 // the brand's width: the name, or the version line with "0.8.1 is out" when there is a newer OLAAF
@@ -3458,13 +3549,7 @@ void clipMenu(State *st, POINT screen, int clipId) {
   Session &s = st->imp->session();
   Clip *c = st->imp->findClip(clipId);
   if (!c || !st->host) return;
-#ifdef _WIN32
-  const char *showIn = "Show in Explorer";
-#elif defined(__APPLE__)
-  const char *showIn = "Show in Finder";
-#else
-  const char *showIn = "Show in the file manager";
-#endif
+  const char *showIn = kShowIn;
   std::vector<int> media; // each file once (a stereo pair: two)
   for (auto &src : c->sources)
     if (src.media >= 0 && src.media < (int)s.media.size() &&
@@ -4455,7 +4540,7 @@ void click(State *st, int x, int y, bool shift) {
     if (st->host && st->host->openUrl) st->host->openUrl("https://dmajorsound.com/software/olaaf/manual.html");
     return;
   case H_UPDATE:
-    if (st->host && st->host->openUrl && !st->updUrl.empty()) st->host->openUrl(st->updUrl);
+    updateClick(st);
     return;
   case H_SAMPLES:
     st->showSamples = !st->showSamples;
@@ -4960,6 +5045,12 @@ void rightClick(State *st, POINT p) {
   if (st->drag) return;
   st->menuTick = GetTickCount();
   HWND hwnd = st->hwnd;
+  if (const Hit *hu = hitAt(st, p.x, p.y))
+    if (hu->id == H_UPDATE) { // the update note: download and install, download only, ...
+      ClientToScreen(hwnd, &p);
+      updateMenu(st, p);
+      return;
+    }
   if (const Hit *hn = hitAt(st, p.x, p.y))
     if (hn->id == H_TRACK_NAME || hn->id == H_TRACK_STEREO) {
       int ti = hn->idx;
@@ -5043,6 +5134,10 @@ INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (st && wp == kBlinkTimer) {
       st->blinkOn = !st->blinkOn;
       InvalidateRect(hwnd, NULL, FALSE);
+      return 0;
+    }
+    if (st && wp == kDlTimer) {
+      updatePoll(st);
       return 0;
     }
     if (st && wp == kUpdTimer) { // the update check runs in the background; stop asking after a while
@@ -6051,7 +6146,8 @@ INT_PTR CALLBACK startProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         InvalidateRect(hwnd, NULL, FALSE);
       }
       if (u != 0 || ++st->updPollsStart > 20) KillTimer(hwnd, kUpdTimer);
-    } else if (wp == kBlinkTimer) {
+    } else if (wp == kDlTimer) updatePoll(st);
+    else if (wp == kBlinkTimer) {
       st->blinkOn = !st->blinkOn;
       InvalidateRect(hwnd, NULL, FALSE);
     }
@@ -6098,11 +6194,26 @@ INT_PTR CALLBACK startProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     return 0;
   }
+  case WM_RBUTTONUP: // the update note's menu
+  case WM_CONTEXTMENU: {
+    if (GetTickCount() - st->menuTick < 600) return 0;
+    POINT p = {(short)LOWORD(lp), (short)HIWORD(lp)};
+    if (msg == WM_CONTEXTMENU) {
+      if (p.x == -1 && p.y == -1) return 0;
+      ScreenToClient(hwnd, &p);
+    }
+    const Hit *h = hitAt(st, p.x, p.y);
+    if (h && h->id == H_UPDATE) {
+      ClientToScreen(hwnd, &p);
+      updateMenu(st, p);
+    }
+    return 0;
+  }
   case WM_LBUTTONUP: {
     const Hit *h = hitAt(st, (short)LOWORD(lp), (short)HIWORD(lp));
     if (!h) return 0;
     if (h->id == H_START_PICK) startPick(st);
-    else if (h->id == H_UPDATE && !st->updUrl.empty()) openWebPage(st->updUrl);
+    else if (h->id == H_UPDATE) updateClick(st);
     else if (h->id == H_START_CANCEL) EndDialog(hwnd, 0);
     else if (h->id == H_START_RECENT && st->start && h->idx >= 0 && h->idx < (int)st->start->recent.size()) {
       st->start->result = {st->start->recent[(size_t)h->idx]};

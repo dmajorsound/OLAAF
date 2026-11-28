@@ -91,4 +91,18 @@ int main(int argc, char **argv) {
 namespace olaaf {
 int updateCheckState(std::string *, std::string *) { return 2; }
 void openWebPage(const std::string &) {}
+std::string updateAssetUrl() { return getenv("OLAAF_NOASSET") ? "" : "https://github.com/dmajorsound/OLAAF/releases/download/v0.8.7/OLAAF-0.8.7-mac.dmg"; }
+std::string updateFolder() { return "/Users/bernd/Downloads"; }
+void setUpdateFolder(const std::string &, bool) {}
+void setUpdateFolderSaver(void (*)(const std::string &)) {}
+void updateDownloadStart(bool) {}
+int updateDownloadState(double *progress, std::string *path, std::string *error) { // OLAAF_DL=1 (42 %), 2, 3
+  const char *d = getenv("OLAAF_DL");
+  if (progress) *progress = 0.42;
+  if (path) *path = "/Users/bernd/Downloads/OLAAF-0.8.7-mac.dmg";
+  if (error) *error = "no connection to GitHub";
+  return d ? atoi(d) : 0;
+}
+void openInstaller(const std::string &) {}
+void revealInFileBrowser(const std::string &) {}
 }
